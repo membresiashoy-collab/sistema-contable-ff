@@ -1,68 +1,73 @@
 import streamlit as st
 import pandas as pd
-import database
+import sys
+import os
+
+# Asegurar rutas para importación
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from database import ejecutar_query, registrar_carga
+
+def limpiar_num(v):
+    if pd.isna(v) or v == "": return 0.0
+    try: return round(float(str(v).replace('.', '').replace(',', '.')), 2)
+    except: return 0.0
 
 def mostrar_ventas():
-    st.title("📤 Módulo de Ventas")
-    
-    # Botón para limpiar la base si hay datos residuales
-    if st.sidebar.button("Resetear Base de Datos"):
-        database.init_db()
-        st.sidebar.success("Base de datos limpia.")
-
-    archivo = st.file_uploader("Subir CSV de AFIP", type=["csv"])
+    st.title("📂 Procesamiento de Ventas")
+    archivo = st.file_uploader("Subir CSV de ARCA", type=["csv"])
     
     if archivo:
-        try:
-            # Lectura del CSV
-            df = pd.read_csv(archivo, sep=None, engine='python', encoding='latin-1')
-            df.columns = [c.strip().upper() for c in df.columns]
+        pdc_df = ejecutar_query("SELECT nombre FROM plan_cuentas", fetch=True)
+        pdc = pdc_df['nombre'].tolist() if not pdc_df.empty else ["VENTAS", "DEUDORES POR VENTAS"]
+        tipos = ejecutar_query("SELECT * FROM tipos_comprobantes", fetch=True)
+        df_csv = pd.read_csv(archivo, sep=';', encoding='latin-1')
+
+        if st.button("🔍 Analizar Archivo"):
+            auto, revision = [], []
+            for _, f in df_csv.iterrows():
+                t, i, n = limpiar_num(f.iloc[27]), limpiar_num(f.iloc[26]), limpiar_num(f.iloc[22])
+                
+                # Forzamos DD/MM/YYYY y cuenta VENTAS
+                datos = {
+                    "fecha": str(f.iloc[0]), "comprobante": str(f.iloc[2]), "cliente": str(f.iloc[8]), 
+                    "cod_arca": int(f.iloc[1]), "neto": n if i > 0 else t, "iva": i, "total": t,
+                    "cta_d": "DEUDORES POR VENTAS", "cta_v": "VENTAS"
+                }
+                if i == 0: revision.append(datos)
+                else: auto.append(datos)
+            st.session_state['v_auto'], st.session_state['v_rev'] = auto, revision
+            st.session_state['analizado'] = True
+
+        if st.session_state.get('analizado'):
+            if st.session_state.get('v_rev'):
+                st.warning("⚠️ Validar cuentas para operaciones SIN IVA:")
+                for idx, asis in enumerate(st.session_state['v_rev']):
+                    with st.expander(f"Revisar: {asis['comprobante']}"):
+                        c1, c2 = st.columns(2)
+                        asis['cta_d'] = c1.selectbox("Debe", pdc, key=f"d_{idx}")
+                        asis['cta_v'] = c2.selectbox("Haber", pdc, key=f"v_{idx}")
             
-            # Buscador de columnas
-            c_f = next(c for c in df.columns if "FECHA" in c)
-            c_t = next(c for c in df.columns if "TIPO" in c and "COMPROBANTE" in c)
-            c_tot = next(c for c in df.columns if "TOTAL" in c and "IVA" not in c)
-            c_iva = next((c for c in df.columns if "IVA" in c), None)
-
-            if st.button("Generar Asientos Contables"):
-                # Obtener el número de asiento inicial
-                res = database.ejecutar_query("SELECT MAX(id_asiento) FROM libro_diario", fetch=True)
-                n_asiento = 1 if res.empty or res.iloc[0,0] is None else int(res.iloc[0,0]) + 1
+            if st.button("💾 Grabar en Libro Diario"):
+                res_u = ejecutar_query("SELECT MAX(id_asiento) as u FROM libro_diario", fetch=True)
+                prox_id = (int(res_u.iloc[0]['u']) if not res_u.empty and pd.notna(res_u.iloc[0]['u']) else 0) + 1
+                todo = st.session_state['v_auto'] + st.session_state['v_rev']
                 
-                exitos = 0
-                for _, r in df.iterrows():
-                    try:
-                        f, t = r[c_f], str(r[c_t])
-                        total = float(str(r[c_tot]).replace(',', '.'))
-                        iva = 0
-                        if c_iva and pd.notnull(r[c_iva]):
-                            try: iva = float(str(r[c_iva]).replace(',', '.'))
-                            except: iva = 0
-                        
-                        neto = total - iva
-
-                        # 1. DEUDORES AL DEBE
-                        database.ejecutar_query(
-                            "INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)",
-                            (n_asiento, f, "DEUDORES POR VENTAS", total, 0, f"Venta {t}", "VENTAS")
-                        )
-                        # 2. VENTAS AL HABER (Corregido: neto va a la columna haber)
-                        database.ejecutar_query(
-                            "INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)",
-                            (n_asiento, f, "VENTAS", 0, neto, f"Venta {t}", "VENTAS")
-                        )
-                        # 3. IVA AL HABER (Si existe)
-                        if iva > 0:
-                            database.ejecutar_query(
-                                "INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)",
-                                (n_asiento, f, "IVA DEBITO FISCAL", 0, iva, f"Venta {t}", "VENTAS")
-                            )
-                        
-                        n_asiento += 1
-                        exitos += 1
-                    except: continue
+                for a in todo:
+                    t_info = tipos[tipos['codigo'] == a['cod_arca']] if not tipos.empty else pd.DataFrame()
+                    s = t_info['signo'].values[0] if not t_info.empty else 1
+                    glo = f"Venta {a['comprobante']} - {a['cliente']}"
+                    
+                    if s == 1:
+                        ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], a['cta_d'], a['total'], 0, glo))
+                        if a['neto']>0: ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], a['cta_v'], 0, a['neto'], glo))
+                        if a['iva']>0: ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], "IVA DF", 0, a['iva'], glo))
+                    else:
+                        ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], a['cta_v'], a['neto'], 0, glo))
+                        if a['iva']>0: ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], "IVA DF", a['iva'], 0, glo))
+                        ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], a['cta_d'], 0, a['total'], glo))
+                    prox_id += 1
                 
-                if exitos > 0:
-                    st.success(f"Se procesaron {exitos} asientos. Ya podés verlos en el Libro Diario.")
-        except Exception as e:
-            st.error(f"Error técnico: {e}")
+                registrar_carga("Ventas", archivo.name, len(todo))
+                st.success("Grabado con éxito.")
+                st.session_state.clear()
+                st.rerun()
