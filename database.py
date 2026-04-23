@@ -15,16 +15,21 @@ def ejecutar_query(query, params=(), fetch=False):
         conn.commit()
 
 def init_db():
-    # Tabla de Comprobantes
+    # 1. Creamos las tablas base
     ejecutar_query("CREATE TABLE IF NOT EXISTS tabla_comprobantes (codigo INTEGER PRIMARY KEY, descripcion TEXT, es_reverso INTEGER)")
-    # Libro Diario
     ejecutar_query("CREATE TABLE IF NOT EXISTS libro_diario (id INTEGER PRIMARY KEY AUTOINCREMENT, id_asiento INTEGER, fecha TEXT, cuenta TEXT, debe REAL, haber REAL, glosa TEXT, origen TEXT)")
-    # NUEVA: Historial de Archivos
-    ejecutar_query("CREATE TABLE IF NOT EXISTS historial_archivos (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha_proceso TEXT, nombre_archivo TEXT, tipo TEXT, registros INTEGER)")
+    ejecutar_query("CREATE TABLE IF NOT EXISTS historial_archivos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre_archivo TEXT, tipo TEXT, registros INTEGER)")
+
+    # 2. PARCHE DE EMERGENCIA: Agregamos la columna fecha_proceso si no existe
+    try:
+        ejecutar_query("ALTER TABLE historial_archivos ADD COLUMN fecha_proceso TEXT")
+    except:
+        # Si ya existe, SQLite dará error y simplemente lo ignoramos
+        pass
 
 def registrar_archivo(nombre, tipo, cantidad):
     from datetime import datetime
-    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ahora = datetime.now().strftime("%d/%m/%Y %H:%M")
     ejecutar_query("INSERT INTO historial_archivos (fecha_proceso, nombre_archivo, tipo, registros) VALUES (?,?,?,?)", (ahora, nombre, tipo, cantidad))
 
 def es_reverso(tipo_str):
