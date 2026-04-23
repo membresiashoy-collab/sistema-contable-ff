@@ -4,53 +4,42 @@ import io
 from database import ejecutar_query
 
 def limpiar_num(valor):
-    """Limpia formatos regionales de moneda (ej: 1.250,50 -> 1250.50)"""
     if pd.isna(valor) or valor == "": return 0.0
     s = str(valor).replace('.', '').replace(',', '.')
     try: return float(s)
     except: return 0.0
 
 def mostrar_ventas():
-    st.title("📂 Procesamiento con Plan de Cuentas")
-    archivo = st.file_uploader("Subir CSV de ARCA", type=["csv"])
+    st.title("📂 Carga de Ventas con Validación de Plan")
+    archivo = st.file_uploader("Subir CSV ARCA", type=["csv"])
     
     if archivo:
-        try:
-            # Leemos y limpiamos comillas dobles del archivo crudo
-            contenido = archivo.read().decode('latin-1').replace('"', '')
-            df = pd.read_csv(io.StringIO(contenido), sep=';')
-            
-            st.success("Archivo vinculado al Plan de Cuentas con éxito.")
-            st.dataframe(df.head(3))
+        # Cargamos el Plan de Cuentas para validar
+        pdc = ejecutar_query("SELECT nombre FROM plan_cuentas", fetch=True)
+        lista_cuentas = pdc['nombre'].tolist() if not pdc.empty else []
 
-            if st.button("🚀 Generar Asientos Contables"):
-                count = 0
+        if not lista_cuentas:
+            st.error("❌ No hay un Plan de Cuentas cargado. Subalo en Configuración.")
+            return
+
+        contenido = archivo.read().decode('latin-1').replace('"', '')
+        df = pd.read_csv(io.StringIO(contenido), sep=';')
+
+        if st.button("🚀 Generar Asientos "):
+            # Validamos que existan las cuentas básicas en tu PDC
+            cuenta_debe = "DEUDORES POR VENTAS"
+            if cuenta_debe in lista_cuentas:
                 for _, fila in df.iterrows():
-                    # Mapeo por posición fija (0: Fecha, 8: Receptor, 22: Neto, 26: IVA, 27: Total)
-                    f = fila.iloc[0]
-                    r = fila.iloc[8]
-                    n = limpiar_num(fila.iloc[22])
-                    i = limpiar_num(fila.iloc[26])
-                    t = limpiar_num(fila.iloc[27])
-
+                    f, r = fila.iloc[0], fila.iloc[8]
+                    n, i, t = limpiar_num(fila.iloc[22]), limpiar_num(fila.iloc[26]), limpiar_num(fila.iloc[27])
+                    
                     glosa = f"Venta s/Fac. ARCA - {r}"
                     
-                    # --- GENERACIÓN DE ASIENTOS (PARTIDA DOBLE) ---
-                    
-                    # 1. Al DEBE: Cuenta de Activo según Plan de Cuentas
-                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", 
-                                   (f, "DEUDORES POR VENTAS", t, 0, glosa))
-                    
-                    # 2. Al HABER: Cuenta de Ingresos
-                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", 
-                                   (f, "VENTAS GRAVADAS", 0, n, glosa))
-                    
-                    # 3. Al HABER: Cuenta de Pasivo Fiscal
+                    # El PDC manda: Se usa el nombre exacto del plan
+                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", (f, cuenta_debe, t, 0, glosa))
+                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", (f, "VENTAS GRAVADAS", 0, n, glosa))
                     if i > 0:
-                        ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", 
-                                       (f, "IVA DEBITO FISCAL", 0, i, glosa))
-                    count += 1
-                
-                st.success(f"✅ ¡Proceso Completo! Se integraron {count} facturas al Libro Diario.")
-        except Exception as e:
-            st.error(f"Error al procesar el archivo: {e}")
+                        ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", (f, "IVA DEBITO FISCAL", 0, i, glosa))
+                st.success("✅ Asientos generados y validados contra el Plan de Cuentas.")
+            else:
+                st.error(f"❌ La cuenta '{cuenta_debe}' no existe en tu Plan de Cuentas cargado.")
