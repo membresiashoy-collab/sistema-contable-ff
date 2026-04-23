@@ -4,7 +4,7 @@ import sys
 import os
 import io
 
-# Asegurar rutas para importación
+# Parche de rutas para encontrar database.py
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from database import ejecutar_query, eliminar_todo_diario
 
@@ -17,54 +17,55 @@ def mostrar_diario():
             eliminar_todo_diario()
             st.rerun()
     
-    # Consulta a la base de datos
+    # Obtenemos los datos ordenados
     df = ejecutar_query("SELECT id_asiento, fecha, cuenta, debe, haber, glosa FROM libro_diario ORDER BY id_asiento ASC", fetch=True)
 
     if not df.empty:
-        # --- PROCESAMIENTO PARA EXPORTAR ---
-        # Forzamos que la columna fecha sea tratada como texto con formato DD/MM/YYYY
-        df_export = df.copy()
-        
-        # --- BOTONES DE EXPORTACIÓN ---
+        # --- Lógica de Exportación ---
         with col2:
-            # Exportar a Excel
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                df_export.to_excel(writer, index=False, sheet_name='LibroDiario')
-            
-            st.download_button(
-                label="📥 Exportar a Excel",
-                data=buffer.getvalue(),
-                file_name="libro_diario.xlsx",
-                mime="application/vnd.ms-excel"
-            )
+            try:
+                buffer = io.BytesIO()
+                # Creamos un Excel limpio para el usuario
+                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                    df.to_excel(writer, index=False, sheet_name='Diario')
+                
+                st.download_button(
+                    label="📥 Descargar Excel (DD/MM/YYYY)",
+                    data=buffer.getvalue(),
+                    file_name="libro_diario_ff.xlsx",
+                    mime="application/vnd.ms-excel"
+                )
+            except Exception as e:
+                st.error("Para exportar a Excel, asegúrate de tener 'xlsxwriter' instalado.")
 
-        # --- VISUALIZACIÓN EN PANTALLA ---
+        # --- Lógica de Visualización (Sin movimientos fantasma) ---
         res = []
-        ids = df['id_asiento'].unique()
-        for i, id_as in enumerate(ids):
-            filas = df[df['id_asiento'] == id_as]
-            for _, r in filas.iterrows():
+        ids_unicos = df['id_asiento'].unique()
+        
+        for i, id_as in enumerate(ids_unicos):
+            filas_asiento = df[df['id_asiento'] == id_as]
+            for _, r in filas_asiento.iterrows():
                 res.append({
-                    "Asiento": int(r['id_asiento']), 
-                    "Fecha": r['fecha'], # Mantiene DD/MM/YYYY del procesamiento
-                    "Cuenta": r['cuenta'], 
-                    "Debe": r['debe'], 
-                    "Haber": r['haber'], 
+                    "Asiento": int(r['id_asiento']),
+                    "Fecha": r['fecha'], # Formato DD/MM/YYYY heredado de la carga
+                    "Cuenta": r['cuenta'],
+                    "Debe": r['debe'],
+                    "Haber": r['haber'],
                     "Glosa": r['glosa']
                 })
-            # Separador visual (Evita filas fantasma al final)
-            if i < len(ids) - 1:
+            
+            # Solo agregar separador si hay más asientos después
+            if i < len(ids_unicos) - 1:
                 res.append({
-                    "Asiento": "---", "Fecha": "---", "Cuenta": "-----------", 
-                    "Debe": 0, "Haber": 0, "Glosa": "---"
+                    "Asiento": "---", "Fecha": "---", "Cuenta": "-----------",
+                    "Debe": None, "Haber": None, "Glosa": "---"
                 })
         
         st.dataframe(pd.DataFrame(res), use_container_width=True, hide_index=True)
         
-        # Totales de Control
+        # Totales al final de la tabla
         c1, c2 = st.columns(2)
-        c1.metric("Total DEBE", f"$ {df['debe'].sum():,.2f}")
-        c2.metric("Total HABER", f"$ {df['haber'].sum():,.2f}")
+        c1.metric("Total Debe", f"$ {df['debe'].sum():,.2f}")
+        c2.metric("Total Haber", f"$ {df['haber'].sum():,.2f}")
     else:
-        st.info("El diario está vacío.")
+        st.info("No hay asientos registrados actualmente.")
