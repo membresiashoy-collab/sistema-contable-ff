@@ -9,37 +9,55 @@ def limpiar_num(valor):
     try: return float(s)
     except: return 0.0
 
+def buscar_cuenta(lista_cuentas, palabra_clave):
+    """Busca en el PDC una cuenta que contenga la palabra clave"""
+    for cuenta in lista_cuentas:
+        if palabra_clave.upper() in cuenta.upper():
+            return cuenta
+    return None
+
 def mostrar_ventas():
-    st.title("📂 Carga de Ventas con Validación de Plan")
-    archivo = st.file_uploader("Subir CSV ARCA", type=["csv"])
+    st.title("📂 Procesamiento Vinculado al Plan de Cuentas")
+    archivo = st.file_uploader("Subir CSV de ARCA", type=["csv"])
     
     if archivo:
-        # Cargamos el Plan de Cuentas para validar
+        # 1. Obtenemos el Plan de Cuentas actualizado
         pdc = ejecutar_query("SELECT nombre FROM plan_cuentas", fetch=True)
-        lista_cuentas = pdc['nombre'].tolist() if not pdc.empty else []
-
-        if not lista_cuentas:
-            st.error("❌ No hay un Plan de Cuentas cargado. Subalo en Configuración.")
+        if pdc.empty:
+            st.error("❌ No hay Plan de Cuentas. Cárguelo en Configuración.")
             return
+        
+        lista_ctas = pdc['nombre'].tolist()
+
+        # 2. MAPEAMOS DINÁMICAMENTE (El sistema busca según tu Plan)
+        cta_deudores = buscar_cuenta(lista_ctas, "DEUDORES") or buscar_cuenta(lista_ctas, "CLIENTES")
+        cta_ventas = buscar_cuenta(lista_ctas, "VENTAS")
+        cta_iva = buscar_cuenta(lista_ctas, "IVA D") or buscar_cuenta(lista_ctas, "IVA DF")
+
+        # Verificación de seguridad
+        if not all([cta_deudores, cta_ventas, cta_iva]):
+            st.warning("⚠️ No se encontraron coincidencias exactas en el Plan de Cuentas.")
+            st.write(f"Detectadas: {cta_deudores} | {cta_ventas} | {cta_iva}")
 
         contenido = archivo.read().decode('latin-1').replace('"', '')
         df = pd.read_csv(io.StringIO(contenido), sep=';')
 
         if st.button("🚀 Generar Asientos "):
-            # Validamos que existan las cuentas básicas en tu PDC
-            cuenta_debe = "DEUDORES POR VENTAS"
-            if cuenta_debe in lista_cuentas:
-                for _, fila in df.iterrows():
-                    f, r = fila.iloc[0], fila.iloc[8]
-                    n, i, t = limpiar_num(fila.iloc[22]), limpiar_num(fila.iloc[26]), limpiar_num(fila.iloc[27])
-                    
-                    glosa = f"Venta s/Fac. ARCA - {r}"
-                    
-                    # El PDC manda: Se usa el nombre exacto del plan
-                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", (f, cuenta_debe, t, 0, glosa))
-                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", (f, "VENTAS GRAVADAS", 0, n, glosa))
-                    if i > 0:
-                        ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", (f, "IVA DEBITO FISCAL", 0, i, glosa))
-                st.success("✅ Asientos generados y validados contra el Plan de Cuentas.")
-            else:
-                st.error(f"❌ La cuenta '{cuenta_debe}' no existe en tu Plan de Cuentas cargado.")
+            count = 0
+            for _, fila in df.iterrows():
+                f, r = fila.iloc[0], fila.iloc[8]
+                n, i, t = limpiar_num(fila.iloc[22]), limpiar_num(fila.iloc[26]), limpiar_num(fila.iloc[27])
+                glosa = f"Venta s/Fac. ARCA - {r}"
+                
+                # USAMOS LAS CUENTAS ENCONTRADAS EN TU PLAN
+                ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", 
+                               (f, cta_deudores, t, 0, glosa))
+                
+                ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", 
+                               (f, cta_ventas, 0, n, glosa))
+                
+                if i > 0:
+                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", 
+                                   (f, cta_iva, 0, i, glosa))
+                count += 1
+            st.success(f"✅ Se generaron {count} asientos usando nombres de TU Plan de Cuentas.")
