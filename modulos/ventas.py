@@ -1,54 +1,50 @@
 import streamlit as st
 import pandas as pd
 import database
-import re
-
-def limpiar_nombre_columna(col):
-    # Elimina caracteres no deseados y normaliza
-    col = col.encode('latin-1', errors='ignore').decode('utf-8', errors='ignore')
-    col = re.sub(r'[^a-zA-Z0-9\s%]', '', col)
-    return col.strip().upper()
 
 def mostrar_ventas():
-    st.title("📤 Importación de Ventas")
+    st.title("📤 Carga de Ventas")
     
-    if st.button("🗑️ Vaciar Ventas"):
+    if st.button("🗑️ Limpiar Ventas"):
         database.borrar_datos_modulo("VENTAS")
         st.rerun()
 
-    archivo = st.file_uploader("Subir CSV Ventas", type=["csv"])
+    archivo = st.file_uploader("Subir CSV", type=["csv"])
     if archivo:
         try:
-            # Leemos ignorando errores de codificación iniciales
+            # Leemos con encoding latin-1 para capturar caracteres AFIP
             df = pd.read_csv(archivo, sep=None, engine='python', encoding='latin-1')
-            # Aplicamos limpieza profunda a los títulos de las columnas
-            df.columns = [limpiar_nombre_columna(c) for c in df.columns]
             
-            st.write("Columnas procesadas correctamente:", list(df.columns))
+            # Limpiamos los nombres de las columnas de cualquier basura de encoding
+            df.columns = [c.encode('latin-1', errors='ignore').decode('utf-8', errors='ignore').strip().upper() for c in df.columns]
+            
+            # Mapeo manual para asegurar que no falle por una tilde
+            col_fecha = next((c for c in df.columns if "FECHA" in c), None)
+            col_tipo = next((c for c in df.columns if "TIPO DE COMPROBANTE" in c), None)
+            col_total = next((c for c in df.columns if "IMP. TOTAL" in c or "TOTAL" in c), None)
+            col_iva = next((c for c in df.columns if "TOTAL IVA" in c or "IVA 21%" in c), None)
 
-            if st.button("🚀 Generar Asientos"):
-                asiento = database.proximo_asiento()
+            if st.button("🚀 Procesar"):
+                nro = database.proximo_asiento()
                 for _, r in df.iterrows():
                     try:
-                        # Buscamos columnas por palabras clave para evitar fallos de tildes
-                        f = r.filter(like='FECHA').iloc[0]
-                        t = str(r.filter(like='TIPO DE COMPROBANTE').iloc[0])
-                        tot = float(str(r.filter(like='TOTAL').iloc[-1]).replace(',', '.'))
-                        iva = float(str(r.filter(like='TOTAL IVA').iloc[0]).replace(',', '.'))
+                        f = r[col_fecha]
+                        t = str(r[col_tipo])
+                        tot = float(str(r[col_total]).replace(',', '.'))
+                        iva = float(str(r[col_iva]).replace(',', '.')) if pd.notnull(r[col_iva]) else 0
                         neto = tot - iva
                         
-                        glosa = f"Venta: {t}"
-                        
+                        # Lógica contable de reverso según tabla_comprobantes
                         if database.es_reverso(t):
-                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, f, "VENTAS", neto, 0, glosa, "VENTAS"))
-                            if iva > 0: database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, f, "IVA DEBITO FISCAL", iva, 0, glosa, "VENTAS"))
-                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, f, "DEUDORES POR VENTAS", 0, tot, glosa, "VENTAS"))
+                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (nro, f, "VENTAS", neto, 0, f"NC: {t}", "VENTAS"))
+                            if iva > 0: database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (nro, f, "IVA DEBITO FISCAL", iva, 0, f"NC: {t}", "VENTAS"))
+                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (nro, f, "DEUDORES POR VENTAS", 0, tot, f"NC: {t}", "VENTAS"))
                         else:
-                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, f, "DEUDORES POR VENTAS", tot, 0, glosa, "VENTAS"))
-                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, f, "VENTAS", 0, neto, glosa, "VENTAS"))
-                            if iva > 0: database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, f, "IVA DEBITO FISCAL", 0, iva, glosa, "VENTAS"))
-                        asiento += 1
+                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (nro, f, "DEUDORES POR VENTAS", tot, 0, f"Fact: {t}", "VENTAS"))
+                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (nro, f, "VENTAS", 0, neto, f"Fact: {t}", "VENTAS"))
+                            if iva > 0: database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (nro, f, "IVA DEBITO FISCAL", 0, iva, f"Fact: {t}", "VENTAS"))
+                        nro += 1
                     except: continue
-                st.success("Asientos de Ventas procesados.")
+                st.success("Asientos generados.")
         except Exception as e:
-            st.error(f"Error técnico: {e}")
+            st.error(f"Error: {e}")
