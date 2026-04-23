@@ -1,62 +1,74 @@
 import streamlit as st
 import pandas as pd
-import io
 from database import ejecutar_query
 
-def limpiar_num(valor):
-    if pd.isna(valor) or valor == "": return 0.0
-    s = str(valor).replace('.', '').replace(',', '.')
-    try: return float(s)
-    except: return 0.0
-
 def mostrar_ventas():
-    st.title("📂 Procesamiento de Ventas (Libro Diario)")
+    st.title("📂 Procesamiento Individual de Comprobantes")
     
-    with st.expander("⚠️ Mantenimiento"):
-        if st.button("🗑️ Vaciar Libro Diario"):
-            ejecutar_query("DELETE FROM libro_diario")
-            st.success("Diario vaciado.")
+    # 1. Obtener el último número de asiento para continuar la correlatividad
+    res_asiento = ejecutar_query("SELECT MAX(id_asiento) as ultimo FROM libro_diario", fetch=True)
+    prox_asiento = (res_asiento.iloc[0]['ultimo'] or 0) + 1
 
-    archivo = st.file_uploader("Subir Ventas ARCA", type=["csv"])
+    archivo = st.file_uploader("Subir Ventas ARCA (CSV)", type=["csv"])
     
     if archivo:
+        # Cargamos el Plan de Cuentas y Tipos para la lógica
         pdc = ejecutar_query("SELECT nombre FROM plan_cuentas", fetch=True)
         tipos = ejecutar_query("SELECT * FROM tipos_comprobantes", fetch=True)
         
         if pdc.empty or tipos.empty:
-            st.error("❌ Configure Plan de Cuentas y Tabla de Comprobantes.")
+            st.error("⚠️ Error: Configure el Plan de Cuentas y la Tabla de Comprobantes primero.")
             return
-
-        lista_ctas = pdc['nombre'].tolist()
-        cta_deudores = next((c for c in lista_ctas if "DEUDORES" in c), "DEUDORES POR VENTAS")
-        cta_ventas = next((c for c in lista_ctas if "VENTAS" in c and "IVA" not in c), "VENTAS")
-        cta_iva = next((c for c in lista_ctas if "IVA" in c and ("DF" in c or "DEBITO" in c)), "IVA DF")
 
         df = pd.read_csv(archivo, sep=';', encoding='latin-1')
 
-        if st.button("🚀 Generar Asientos Individuales"):
-            for _, fila in df.iterrows():
-                # Extracción de datos
-                cod_arca = int(fila.iloc[1])
-                f, r = fila.iloc[0], fila.iloc[8]
-                n, i, t = limpiar_num(fila.iloc[22]), limpiar_num(fila.iloc[26]), limpiar_num(fila.iloc[27])
-                
-                res_tipo = tipos[tipos['codigo'] == cod_arca]
-                signo = res_tipo['signo'].values[0] if not res_tipo.empty else 1
-                desc_tipo = res_tipo['descripcion'].values[0] if not res_tipo.empty else "FACTURA"
-                
-                # Glosa única por comprobante para identificarlo en el Diario
-                glosa = f"{desc_tipo} Nro {fila.iloc[2]} - {r}"
-
-                if signo == 1: # FACTURA (Activo sube por el Debe)
-                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", (f, cta_deudores, t, 0, glosa))
-                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", (f, cta_ventas, 0, n, glosa))
-                    if i > 0:
-                        ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", (f, cta_iva, 0, i, glosa))
-                else: # NOTA DE CRÉDITO (Inversión del asiento)
-                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", (f, cta_ventas, n, 0, glosa))
-                    if i > 0:
-                        ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", (f, cta_iva, i, 0, glosa))
-                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", (f, cta_deudores, 0, t, glosa))
+        if st.button(f"🚀 Procesar desde Asiento N° {prox_asiento}"):
+            asiento_actual = prox_asiento
             
-            st.success("✅ Asientos generados individualmente por comprobante.")
+            for _, fila in df.iterrows():
+                # Datos del Comprobante
+                f = fila.iloc[0]          # Fecha
+                cod_tipo = int(fila.iloc[1]) # Código ARCA
+                nro_comp = fila.iloc[2]   # Número de comprobante
+                cliente = fila.iloc[8]    # Nombre Cliente
+                neto = limpiar_num(fila.iloc[22])
+                iva = limpiar_num(fila.iloc[26])
+                total = limpiar_num(fila.iloc[27])
+                
+                # Buscar signo (1 = Factura, -1 = Nota de Crédito)
+                info = tipos[tipos['codigo'] == cod_tipo]
+                signo = info['signo'].values[0] if not info.empty else 1
+                desc = info['descripcion'].values[0] if not info.empty else "COMP."
+                
+                glosa = f"{desc} {nro_comp} - {cliente}"
+
+                # REGISTRO POR PARTIDA DOBLE INDIVIDUAL
+                if signo == 1:
+                    # FACTURAS: Activo (Debe) contra Ingreso e IVA (Haber)
+                    registrar_linea(asiento_actual, f, "DEUDORES", total, 0, glosa)
+                    registrar_linea(asiento_actual, f, "VENTAS", 0, neto, glosa)
+                    if iva > 0:
+                        registrar_linea(asiento_actual, f, "IVA DF", 0, iva, glosa)
+                else:
+                    # NOTAS DE CRÉDITO: Reversa del asiento
+                    registrar_linea(asiento_actual, f, "VENTAS", neto, 0, glosa)
+                    if iva > 0:
+                        registrar_linea(asiento_actual, f, "IVA DF", iva, 0, glosa)
+                    registrar_linea(asiento_actual, f, "DEUDORES", 0, total, glosa)
+                
+                asiento_actual += 1 # Saltamos al siguiente asiento para el próximo comprobante
+            
+            st.success(f"✅ Se generaron {asiento_actual - prox_asiento} asientos individuales.")
+
+def registrar_linea(asiento, fecha, cuenta_keyword, debe, haber, glosa):
+    """Busca la cuenta real en el PDC y graba la línea del asiento"""
+    pdc = ejecutar_query("SELECT nombre FROM plan_cuentas", fetch=True)['nombre'].tolist()
+    cuenta_real = next((c for c in pdc if cuenta_keyword in c), cuenta_keyword)
+    
+    query = """INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) 
+               VALUES (?, ?, ?, ?, ?, ?)"""
+    ejecutar_query(query, (asiento, fecha, cuenta_real, debe, haber, glosa))
+
+def limpiar_num(v):
+    try: return float(str(v).replace('.', '').replace(',', '.'))
+    except: return 0.0
