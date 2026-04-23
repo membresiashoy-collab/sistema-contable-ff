@@ -11,9 +11,13 @@ def init_db():
             (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, cuenta TEXT, 
              debe REAL, haber REAL, glosa TEXT)""")
         
-        # Plan de Cuentas (Manda sobre el asiento)
+        # Plan de Cuentas
         cursor.execute("""CREATE TABLE IF NOT EXISTS plan_cuentas 
-            (codigo TEXT PRIMARY KEY, nombre TEXT, tipo TEXT)""")
+            (codigo TEXT PRIMARY KEY, nombre TEXT)""")
+        
+        # NUEVA: Tabla de Tipos de Comprobantes
+        cursor.execute("""CREATE TABLE IF NOT EXISTS tipos_comprobantes 
+            (codigo INTEGER PRIMARY KEY, descripcion TEXT, signo INTEGER)""")
         conn.commit()
 
 def ejecutar_query(query, params=(), fetch=False):

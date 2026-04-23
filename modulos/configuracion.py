@@ -1,41 +1,38 @@
 import streamlit as st
 import pandas as pd
-import io
 from database import ejecutar_query
 
 def mostrar_configuracion():
-    st.title("⚙️ Configuración del Sistema")
+    st.title("⚙️ Configuración Maestra")
     
-    st.subheader("📥 Cargar Plan de Cuentas Maestro")
-    st.markdown("""
-    Sube aquí el archivo CSV de tu Plan de Cuentas. 
-    El sistema usará estos nombres para validar los asientos contables.
-    """)
-    
-    archivo_plan = st.file_uploader("Subir CSV de Plan de Cuentas", type=["csv"])
-    
+    # --- SECCIÓN PLAN DE CUENTAS ---
+    st.subheader("1. Plan de Cuentas")
+    archivo_plan = st.file_uploader("Subir Plan de Cuentas", type=["csv"], key="plan")
     if archivo_plan:
-        try:
-            # Leemos el plan con detección automática de separador
-            df_plan = pd.read_csv(archivo_plan, sep=None, engine='python', encoding='latin-1')
-            df_plan.columns = df_plan.columns.str.strip().str.upper()
-            
-            st.write("### Vista previa del Plan detectado:")
-            st.dataframe(df_plan.head())
-            
-            if st.button("Confirmar y Guardar Plan de Cuentas"):
-                ejecutar_query("DELETE FROM plan_cuentas")
-                for _, fila in df_plan.iterrows():
-                    # Mapeo: Asumimos columna 0 es Código y columna 1 es Nombre
-                    cod = str(fila.iloc[0])
-                    nom = str(fila.iloc[1]).upper().strip()
-                    ejecutar_query("INSERT INTO plan_cuentas (codigo, nombre) VALUES (?, ?)", (cod, nom))
-                st.success("✅ Plan de Cuentas guardado. Los nombres de este archivo ahora validan los asientos.")
-        except Exception as e:
-            st.error(f"Error al cargar el plan: {e}")
+        if st.button("Guardar Plan"):
+            df = pd.read_csv(archivo_plan, sep=None, engine='python', encoding='latin-1')
+            ejecutar_query("DELETE FROM plan_cuentas")
+            for _, fila in df.iterrows():
+                ejecutar_query("INSERT INTO plan_cuentas VALUES (?, ?)", (str(fila.iloc[0]), str(fila.iloc[1]).upper().strip()))
+            st.success("Plan guardado.")
 
     st.divider()
-    st.subheader("🗑️ Mantenimiento")
-    if st.button("Borrar todos los Asientos del Diario"):
-        ejecutar_query("DELETE FROM libro_diario")
-        st.success("Libro Diario reseteado.")
+
+    # --- SECCIÓN TABLA DE COMPROBANTES ---
+    st.subheader("2. Tabla de Comprobantes (ARCA)")
+    archivo_tipos = st.file_uploader("Subir TABLACOMPROBANTES.csv", type=["csv"], key="tipos")
+    
+    if archivo_tipos:
+        # Saltamos las 2 filas de encabezado del archivo
+        df_tipos = pd.read_csv(archivo_tipos, skiprows=2, sep=',', encoding='utf-8')
+        st.dataframe(df_tipos.head())
+        
+        if st.button("Cargar Lógica de Comprobantes"):
+            ejecutar_query("DELETE FROM tipos_comprobantes")
+            for _, fila in df_tipos.iterrows():
+                cod = int(fila['Código'])
+                desc = str(fila['Descripción']).upper()
+                # Lógica: Si es Nota de Crédito, el signo es -1
+                signo = -1 if "NOTA DE CREDITO" in desc or "NOTA DE CRÉDITO" in desc else 1
+                ejecutar_query("INSERT INTO tipos_comprobantes VALUES (?, ?, ?)", (cod, desc, signo))
+            st.success("Lógica de comprobantes cargada exitosamente.")
