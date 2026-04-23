@@ -11,106 +11,87 @@ def limpiar_num(v):
         return 0.0
 
 def mostrar_ventas():
-    st.title("📂 Procesamiento de Ventas con Validación")
+    st.title("📂 Procesamiento Inteligente de Ventas")
 
-    # 1. Carga de archivos
     archivo = st.file_uploader("Subir Ventas ARCA", type=["csv"])
     
     if archivo:
-        # Obtenemos Plan de Cuentas y Mapeos guardados
         pdc_df = ejecutar_query("SELECT nombre FROM plan_cuentas", fetch=True)
         if pdc_df.empty:
-            st.error("❌ No hay Plan de Cuentas. Cárguelo en Configuración.")
+            st.error("❌ Carga el Plan de Cuentas en Configuración primero.")
             return
         
         lista_cuentas = pdc_df['nombre'].tolist()
         tipos = ejecutar_query("SELECT * FROM tipos_comprobantes", fetch=True)
-        
         df_csv = pd.read_csv(archivo, sep=';', encoding='latin-1')
 
-        # --- ETAPA DE PREPARACIÓN ---
-        if st.button("🔍 Analizar y Validar Asientos"):
-            asientos_previa = []
+        if st.button("🔍 Analizar Lógica Contable"):
+            automáticos = []
+            para_revision = []
+            
             for _, fila in df_csv.iterrows():
                 neto = limpiar_num(fila.iloc[22])
                 iva = limpiar_num(fila.iloc[26])
                 total = limpiar_num(fila.iloc[27])
                 
-                # Ajuste automático de partida doble si hay error de centavos
-                if round(neto + iva, 2) != total:
-                    neto = round(total - iva, 2)
+                datos = {
+                    "fecha": fila.iloc[0], "comprobante": fila.iloc[2],
+                    "cliente": fila.iloc[8], "cod_arca": int(fila.iloc[1]),
+                    "neto": neto, "iva": iva, "total": total,
+                    "cta_d": "DEUDORES POR VENTAS", "cta_v": "VENTAS"
+                }
 
-                asientos_previa.append({
-                    "fecha": fila.iloc[0],
-                    "comprobante": fila.iloc[2],
-                    "cliente": fila.iloc[8],
-                    "cod_arca": int(fila.iloc[1]),
-                    "neto": neto,
-                    "iva": iva,
-                    "total": total,
-                    "cta_deudores": "DEUDORES POR VENTAS", # Valor por defecto
-                    "cta_ventas": "VENTAS" # Valor por defecto
-                })
-            st.session_state['asientos_pendientes'] = asientos_previa
-
-        # --- ETAPA DE EDICIÓN MANUAL (Aquí está el botón/desplegable que faltaba) ---
-        if 'asientos_pendientes' in st.session_state:
-            st.subheader("📝 Revisión de Partida Doble")
-            st.warning("Verifique las cuentas y montos antes de confirmar.")
+                # CRITERIO DE EXCEPCIÓN:
+                # Si no hay IVA o si la suma no es exacta, va a REVISIÓN
+                if iva == 0 or round(neto + iva, 2) != total:
+                    para_revision.append(datos)
+                else:
+                    automáticos.append(datos)
             
-            asientos_finales = []
-            
-            for i, asis in enumerate(st.session_state['asientos_pendientes']):
-                with st.expander(f"Asiento {asis['comprobante']} - {asis['cliente']}", expanded=False):
-                    col1, col2, col3 = st.columns(3)
-                    
-                    # Desplegables para cambiar cuentas manualmente
-                    # Intentamos pre-seleccionar la cuenta si existe en el PDC
-                    idx_d = lista_cuentas.index(asis['cta_deudores']) if asis['cta_deudores'] in lista_cuentas else 0
-                    idx_v = lista_cuentas.index(asis['cta_ventas']) if asis['cta_ventas'] in lista_cuentas else 0
-                    
-                    c_deudores = col1.selectbox(f"Cuenta Deudores", lista_cuentas, index=idx_d, key=f"d_{i}")
-                    c_ventas = col2.selectbox(f"Cuenta Ventas", lista_cuentas, index=idx_v, key=f"v_{i}")
-                    
-                    # Verificación visual de partida doble
-                    suma_debe = asis['total']
-                    suma_haber = round(asis['neto'] + asis['iva'], 2)
-                    
-                    col3.metric("Balance", f"$ {suma_debe}", delta=f"Haber: {suma_haber}")
-                    
-                    if suma_debe != suma_haber:
-                        st.error("⚠️ Este asiento NO CUADRA. Revise los importes.")
-                    
-                    # Guardamos la elección del usuario
-                    asientos_finales.append({**asis, "cta_deudores": c_deudores, "cta_ventas": c_ventas})
+            st.session_state['asientos_auto'] = automáticos
+            st.session_state['asientos_manual'] = para_revision
 
-            # --- ETAPA DE GRABACIÓN FINAL ---
-            if st.button("✅ Confirmar y Grabar Todo en el Libro Diario"):
+        # --- SECCIÓN 1: OPERACIONES ESPECIALES (REVISIÓN) ---
+        if 'asientos_manual' in st.session_state and st.session_state['asientos_manual']:
+            st.subheader("⚠️ Operaciones sin IVA o Especiales (Requieren Revisión)")
+            
+            for i, asis in enumerate(st.session_state['asientos_manual']):
+                with st.expander(f"Revisar: {asis['comprobante']} - {asis['cliente']}", expanded=True):
+                    col1, col2 = st.columns(2)
+                    # Aquí podés elegir "CREDITOS POR VENTAS" o cualquier otra
+                    asis['cta_d'] = col1.selectbox("Cuenta Deudora", lista_cuentas, key=f"md_{i}")
+                    asis['cta_v'] = col2.selectbox("Cuenta Venta/Ingreso", lista_cuentas, key=f"mv_{i}")
+                    st.caption(f"Total: {asis['total']} | Neto: {asis['neto']} | IVA: {asis['iva']}")
+
+        # --- SECCIÓN 2: CONFIRMACIÓN FINAL ---
+        if 'asientos_auto' in st.session_state:
+            total_asientos = len(st.session_state.get('asientos_auto', [])) + len(st.session_state.get('asientos_manual', []))
+            
+            if st.button(f"✅ Procesar {total_asientos} Asientos"):
                 res_u = ejecutar_query("SELECT MAX(id_asiento) as u FROM libro_diario", fetch=True)
                 prox_id = (int(res_u.iloc[0]['u']) if not res_u.empty and pd.notna(res_u.iloc[0]['u']) else 0) + 1
                 
-                for a in asientos_finales:
-                    glosa = f"Venta {a['comprobante']} - {a['cliente']}"
-                    
-                    # Determinar signo (Factura vs Nota de Crédito)
+                todos = st.session_state['asientos_auto'] + st.session_state['asientos_manual']
+                
+                for a in todos:
                     t_info = tipos[tipos['codigo'] == a['cod_arca']]
                     signo = t_info['signo'].values[0] if not t_info.empty else 1
-                    
+                    glosa = f"Venta {a['comprobante']} - {a['cliente']}"
+
                     if signo == 1:
-                        # DEUDORES (Debe) contra VENTAS e IVA (Haber)
-                        ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], a['cta_deudores'], a['total'], 0, glosa))
-                        ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], a['cta_ventas'], 0, a['neto'], glosa))
+                        ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], a['cta_d'], a['total'], 0, glosa))
+                        ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], a['cta_v'], 0, a['neto'], glosa))
                         if a['iva'] > 0:
                             ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], "IVA DF", 0, a['iva'], glosa))
                     else:
-                        # NOTA DE CRÉDITO (Inverso)
-                        ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], a['cta_ventas'], a['neto'], 0, glosa))
+                        # Lógica para Notas de Crédito
+                        ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], a['cta_v'], a['neto'], 0, glosa))
                         if a['iva'] > 0:
                             ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], "IVA DF", a['iva'], 0, glosa))
-                        ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], a['cta_deudores'], 0, a['total'], glosa))
+                        ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (prox_id, a['fecha'], a['cta_d'], 0, a['total'], glosa))
                     
                     prox_id += 1
                 
-                st.success(f"✅ {len(asientos_finales)} asientos grabados correctamente.")
-                del st.session_state['asientos_pendientes']
-                st.balloons()
+                st.success("¡Asientos grabados!")
+                st.session_state.clear()
+                st.rerun()
