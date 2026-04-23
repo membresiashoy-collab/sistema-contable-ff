@@ -5,77 +5,44 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "contabilidad_ff.db")
 
-def init_db():
-    """Crea las tablas si no existen. Se asegura de que los nombres sean exactos."""
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS tabla_comprobantes (
-                    codigo INTEGER PRIMARY KEY,
-                    descripcion TEXT,
-                    es_reverso INTEGER DEFAULT 0
-                )
-            """)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS libro_diario (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    id_asiento INTEGER,
-                    fecha TEXT,
-                    cuenta TEXT,
-                    debe REAL,
-                    haber REAL,
-                    glosa TEXT,
-                    origen TEXT
-                )
-            """)
-            conn.commit()
-    except Exception as e:
-        print(f"Error inicializando DB: {e}")
-
-def cargar_tabla_referencia(df):
-    """Procesa el CSV TABLACOMPROBANTES.csv con sus nombres exactos."""
-    init_db() # Nos aseguramos de que la tabla existe
-    # Normalizamos: Código y Descripción
-    df.columns = [c.strip().replace('ó', 'o').replace('í', 'i').upper() for c in df.columns]
-    
+def ejecutar_query(query, params=(), fetch=False):
+    """Ejecuta SQL de forma segura."""
     with sqlite3.connect(DB_PATH) as conn:
+        if fetch:
+            try: return pd.read_sql_query(query, conn, params=params)
+            except: return pd.DataFrame()
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM tabla_comprobantes")
-        for _, r in df.iterrows():
-            cod = int(r.get('CODIGO', 0))
-            desc = str(r.get('DESCRIPCION', '')).upper()
-            # Si el nombre tiene 'CREDITO', el sistema sabe que es un asiento de reverso
-            reverso = 1 if "CREDITO" in desc else 0
-            cursor.execute("INSERT INTO tabla_comprobantes VALUES (?,?,?)", (cod, desc, reverso))
+        cursor.execute(query, params)
         conn.commit()
 
-def es_comprobante_reverso(tipo_str):
-    """Busca si el comprobante anula/reversa una operacion."""
-    t = str(tipo_str).upper()
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT es_reverso FROM tabla_comprobantes WHERE ? LIKE '%' || descripcion || '%'", (t,))
-            res = cursor.fetchone()
-            if res: return res[0] == 1
-    except:
-        pass
-    return "CREDITO" in t
+def init_db():
+    """Inicializa las tablas necesarias."""
+    ejecutar_query("CREATE TABLE IF NOT EXISTS tabla_comprobantes (codigo INTEGER PRIMARY KEY, descripcion TEXT, es_reverso INTEGER)")
+    ejecutar_query("CREATE TABLE IF NOT EXISTS libro_diario (id INTEGER PRIMARY KEY AUTOINCREMENT, id_asiento INTEGER, fecha TEXT, cuenta TEXT, debe REAL, haber REAL, glosa TEXT, origen TEXT)")
 
-def ejecutar_query(query, params=(), fetch=False):
-    """Ejecuta SQL con manejo de errores para evitar que la app se ponga negra."""
+def cargar_tabla_referencia(df):
+    """Carga los tipos de comprobante de ARCA."""
     init_db()
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            if fetch:
-                return pd.read_sql_query(query, conn, params=params)
-            conn.execute(query, params)
-            conn.commit()
-    except Exception as e:
-        # Si la tabla no existe aún, devolvemos un DataFrame vacío en lugar de error
-        if fetch: return pd.DataFrame()
-        raise e
+    # Detectamos columnas sin importar si tienen tildes
+    df.columns = [c.strip().upper() for c in df.columns]
+    col_cod = next(c for c in df.columns if "COD" in c)
+    col_desc = next(c for c in df.columns if "DESC" in c)
+    
+    ejecutar_query("DELETE FROM tabla_comprobantes")
+    for _, r in df.iterrows():
+        cod = int(r[col_cod])
+        desc = str(r[col_desc]).upper()
+        # Lógica: si el nombre del comprobante tiene "CREDITO", es reverso
+        reverso = 1 if "CREDITO" in desc or "CRÉDITO" in desc else 0
+        ejecutar_query("INSERT INTO tabla_comprobantes VALUES (?,?,?)", (cod, desc, reverso))
+
+def es_reverso(tipo_str):
+    """Determina si el asiento debe invertirse."""
+    t = str(tipo_str).upper()
+    df = ejecutar_query("SELECT es_reverso FROM tabla_comprobantes WHERE ? LIKE '%' || descripcion || '%'", (t,), fetch=True)
+    if not df.empty:
+        return df['es_reverso'].iloc[0] == 1
+    return "CREDITO" in t
 
 def proximo_asiento():
     df = ejecutar_query("SELECT MAX(id_asiento) as m FROM libro_diario", fetch=True)

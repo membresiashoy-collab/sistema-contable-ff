@@ -3,40 +3,40 @@ import pandas as pd
 import database
 from modulos import ventas, compras, reportes
 
-# Inicialización forzosa
 database.init_db()
 
-st.sidebar.title("SISTEMA CONTABLE FF")
-opcion = st.sidebar.radio("Menú Principal", ["Inicio", "Ventas", "Compras", "Libro Diario", "⚙️ Configuración ARCA"])
+st.sidebar.title("CONTABILIDAD FF")
+opcion = st.sidebar.radio("Navegación", ["Inicio", "Ventas", "Compras", "Libro Diario", "⚙️ Configuración ARCA"])
 
-if opcion == "⚙️ Configuración ARCA":
-    st.title("⚙️ Configuración de Tipos de Comprobante")
+if opcion == "Inicio":
+    st.title("📊 Posición de IVA")
+    # Cálculos rápidos para el Dashboard
+    dv = database.ejecutar_query("SELECT SUM(haber) - SUM(debe) as t FROM libro_diario WHERE cuenta = 'IVA DEBITO FISCAL'", fetch=True)
+    cv = database.ejecutar_query("SELECT SUM(debe) - SUM(haber) as t FROM libro_diario WHERE cuenta = 'IVA CREDITO FISCAL'", fetch=True)
     
-    # Mostrar lo que hay en la base de datos
-    df_actual = database.ejecutar_query("SELECT codigo, descripcion, es_reverso FROM tabla_comprobantes", fetch=True)
+    debito = dv['t'].iloc[0] if not dv.empty and pd.notnull(dv['t'].iloc[0]) else 0
+    credito = cv['t'].iloc[0] if not cv.empty and pd.notnull(cv['t'].iloc[0]) else 0
     
-    if not df_actual.empty:
-        st.subheader("Tipos de Comprobantes Registrados")
-        df_actual['Efecto Contable'] = df_actual['es_reverso'].map({1: "REVERSO (NC)", 0: "DIRECTO (Factura)"})
-        st.dataframe(df_actual[['codigo', 'descripcion', 'Efecto Contable']], use_container_width=True, hide_index=True)
-    else:
-        st.info("No hay datos. Cargue el archivo TABLACOMPROBANTES.csv abajo.")
+    st.metric("Saldo Técnico", f"$ {abs(debito-credito):,.2f}", delta="A PAGAR" if debito > credito else "A FAVOR")
 
-    archivo = st.file_uploader("Subir Tabla de ARCA", type=["csv"])
+elif opcion == "⚙️ Configuración ARCA":
+    st.title("Tipos de Comprobantes")
+    df = database.ejecutar_query("SELECT * FROM tabla_comprobantes", fetch=True)
+    if not df.empty:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    
+    archivo = st.file_uploader("Cargar TABLACOMPROBANTES.csv", type=["csv"])
     if archivo:
-        # Usamos el delimitador ';' que tiene tu archivo
-        df_sub = pd.read_csv(archivo, sep=';', encoding='latin-1')
-        if st.button("💾 Guardar Configuración"):
-            database.cargar_tabla_referencia(df_sub)
-            st.success("Configuración actualizada correctamente.")
+        df_csv = pd.read_csv(archivo, sep=';', encoding='latin-1')
+        if st.button("Actualizar Tabla"):
+            database.cargar_tabla_referencia(df_csv)
+            st.success("Configuración guardada.")
             st.rerun()
-
-elif opcion == "Libro Diario":
-    st.title("📓 Libro Diario")
-    if st.button("🗑️ Borrar todos los asientos"):
-        database.ejecutar_query("DELETE FROM libro_diario")
-        st.rerun()
-    reportes.mostrar_diario()
 
 elif opcion == "Ventas": ventas.mostrar_ventas()
 elif opcion == "Compras": compras.mostrar_compras()
+elif opcion == "Libro Diario":
+    st.title("Libro Diario")
+    if st.button("🗑️ Limpiar Diario"):
+        database.ejecutar_query("DELETE FROM libro_diario")
+    reportes.mostrar_diario()
