@@ -15,38 +15,36 @@ def mostrar_ventas():
     
     if archivo:
         try:
-            # Leemos el archivo con separador punto y coma y codificación latina
-            df = pd.read_csv(archivo, sep=';', encoding='latin-1')
+            # Leemos ignorando los nombres de las columnas para evitar errores de tildes
+            df = pd.read_csv(archivo, sep=';', encoding='latin-1', quotechar='"')
             
-            # --- LIMPIEZA TOTAL DE COLUMNAS ---
-            # Eliminamos comillas, espacios y posibles errores de codificación en los nombres
-            df.columns = df.columns.str.replace('"', '').str.strip()
-            
-            st.write("### 🔍 Vista previa de columnas detectadas:")
-            st.write(list(df.columns)) # Esto ayuda a verificar que los nombres estén limpios
+            st.write("### 🔍 Datos detectados (Vista por índices):")
+            st.dataframe(df.head(3))
 
             if st.button("🚀 Generar Contabilidad Real"):
                 count = 0
                 for _, fila in df.iterrows():
-                    # Usamos los nombres exactos que vimos en tu archivo
-                    fecha = fila['Fecha de Emisión']
-                    neto = limpiar_monto(fila['Imp. Neto Gravado Total'])
-                    iva = limpiar_monto(fila['Total IVA'])
-                    total = limpiar_monto(fila['Imp. Total'])
-                    receptor = fila['Denominación Receptor']
+                    # Usamos iloc para llamar por NÚMERO de columna, evitando el error de nombre
+                    fecha = fila.iloc[0]      # Columna 0: Fecha de Emisión
+                    receptor = fila.iloc[8]   # Columna 8: Denominación Receptor
+                    neto = limpiar_monto(fila.iloc[22])  # Columna 22: Imp. Neto Gravado Total
+                    iva = limpiar_monto(fila.iloc[26])   # Columna 26: Total IVA
+                    total = limpiar_monto(fila.iloc[27])  # Columna 27: Imp. Total
 
                     glosa = f"Venta s/Fac. - {receptor}"
                     
-                    # Asiento de Partida Doble
+                    # Inserción en Libro Diario (Partida Doble)
                     ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)",
                                    (str(fecha), "Caja/Clientes", total, 0, glosa))
+                    
                     ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)",
                                    (str(fecha), "Ventas Gravadas", 0, neto, glosa))
+                    
                     if iva > 0:
                         ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)",
                                        (str(fecha), "IVA Débito Fiscal", 0, iva, glosa))
                     count += 1
                 
-                st.success(f"✅ ¡Éxito! Se procesaron {count} facturas con importes reales.")
+                st.success(f"✅ ¡Proceso Exitoso! Se generaron {count} asientos con importes reales.")
         except Exception as e:
             st.error(f"Error al procesar: {e}")
