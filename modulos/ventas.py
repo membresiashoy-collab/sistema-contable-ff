@@ -8,7 +8,7 @@ def limpiar_num(v):
     except: return 0.0
 
 def mostrar_ventas():
-    st.title("📂 Carga de Ventas")
+    st.title("📂 Procesamiento de Ventas")
     archivo = st.file_uploader("Subir CSV de ARCA", type=["csv"])
     
     if archivo:
@@ -20,8 +20,9 @@ def mostrar_ventas():
             auto, revision = [], []
             for _, f in df_csv.iterrows():
                 t, i, n = limpiar_num(f.iloc[27]), limpiar_num(f.iloc[26]), limpiar_num(f.iloc[22])
+                # FORZAMOS CUENTA VENTAS Y FECHA DD/MM/YYYY
                 datos = {
-                    "fecha": f.iloc[0], "comprobante": f.iloc[2], "cliente": f.iloc[8], 
+                    "fecha": str(f.iloc[0]), "comprobante": f.iloc[2], "cliente": f.iloc[8], 
                     "cod_arca": int(f.iloc[1]), "neto": n if i > 0 else t, "iva": i, "total": t,
                     "cta_d": "DEUDORES POR VENTAS", "cta_v": "VENTAS"
                 }
@@ -29,16 +30,15 @@ def mostrar_ventas():
                 else: auto.append(datos)
             st.session_state['v_auto'], st.session_state['v_rev'] = auto, revision
 
-        # --- SECCIÓN DE VALIDACIÓN (Operaciones sin IVA) ---
         if 'v_rev' in st.session_state and st.session_state['v_rev']:
-            st.warning("⚠️ Se detectaron operaciones sin IVA. Verifique las cuentas:")
+            st.warning("⚠️ Operaciones SIN IVA detectadas. Valide las cuentas:")
             for idx, asis in enumerate(st.session_state['v_rev']):
-                with st.expander(f"Revisar: {asis['comprobante']} - {asis['cliente']}"):
+                with st.expander(f"Validar: {asis['comprobante']} - {asis['cliente']}"):
                     c1, c2 = st.columns(2)
-                    asis['cta_d'] = c1.selectbox("Cuenta Debe", pdc, index=pdc.index(asis['cta_d']) if asis['cta_d'] in pdc else 0, key=f"rev_d_{idx}")
-                    asis['cta_v'] = c2.selectbox("Cuenta Haber", pdc, index=pdc.index(asis['cta_v']) if asis['cta_v'] in pdc else 0, key=f"rev_h_{idx}")
+                    asis['cta_d'] = c1.selectbox("Cuenta Debe", pdc, index=pdc.index(asis['cta_d']) if asis['cta_d'] in pdc else 0, key=f"v_d_{idx}")
+                    asis['cta_v'] = c2.selectbox("Cuenta Haber", pdc, index=pdc.index(asis['cta_v']) if asis['cta_v'] in pdc else 0, key=f"v_h_{idx}")
 
-        if st.button("✅ Grabar Asientos"):
+        if st.button("✅ Grabar en Diario"):
             res_u = ejecutar_query("SELECT MAX(id_asiento) as u FROM libro_diario", fetch=True)
             prox_id = (int(res_u.iloc[0]['u']) if not res_u.empty and pd.notna(res_u.iloc[0]['u']) else 0) + 1
             todo = st.session_state.get('v_auto', []) + st.session_state.get('v_rev', [])
@@ -59,6 +59,6 @@ def mostrar_ventas():
                 prox_id += 1
             
             registrar_carga("Ventas", archivo.name, len(todo))
-            st.success("¡Datos guardados!")
+            st.success("Grabación finalizada.")
             st.session_state.clear()
             st.rerun()
