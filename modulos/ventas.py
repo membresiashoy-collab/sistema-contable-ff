@@ -8,36 +8,48 @@ def mostrar_ventas():
     
     if archivo:
         try:
-            # Leemos el CSV. ARCA suele usar coma o punto y coma.
+            # 1. Leer y limpiar datos
             df = pd.read_csv(archivo, encoding='latin-1', sep=None, engine='python')
-            
-            st.write("### Vista previa del CSV:")
-            st.dataframe(df.head(3))
-
-            # Limpiamos los nombres de las columnas (quita espacios raros)
             df.columns = df.columns.str.strip()
-
-            # Mapeo de columnas para CSV de ARCA
-            # Intentamos buscar por nombre, si no, usamos posición
-            for index, fila in df.iterrows():
-                # Buscamos columnas comunes en el CSV de ARCA
-                fecha = fila.get('Fecha') or fila.iloc[0]
-                tipo = fila.get('Tipo') or fila.iloc[1]
-                receptor = fila.get('Nombre o Razón Social Receptor') or fila.iloc[3]
-                cuit = fila.get('CUIT Receptor') or fila.iloc[4]
-                neto = fila.get('Importe Neto Gravado') or fila.iloc[11]
-                iva = fila.get('Importe IVA') or fila.iloc[13]
-                total = fila.get('Importe Total') or fila.iloc[15]
-
-                query = """
-                INSERT INTO ventas (fecha, tipo_comprobante, receptor, cuit_receptor, neto, iva, total)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """
-                ejecutar_query(query, (str(fecha), str(tipo), str(receptor), str(cuit), 
-                                      float(neto), float(iva), float(total)))
             
-            st.success(f"✅ ¡Éxito! Se cargaron {len(df)} registros del CSV.")
-            
+            st.write("### 🔍 Vista previa del archivo:")
+            st.dataframe(df.head(5))
+
+            # Botón para confirmar el procesamiento contable
+            if st.button("🚀 Generar Asientos Contables"):
+                count = 0
+                for index, fila in df.iterrows():
+                    # Extraer datos (ajustar nombres según tu CSV si fallan)
+                    fecha = fila.get('Fecha de Emisión') or fila.iloc[0]
+                    total = float(fila.get('Importe Total') or fila.iloc[15])
+                    neto = float(fila.get('Importe Neto Gravado') or fila.iloc[11])
+                    iva = float(fila.get('Importe IVA') or fila.iloc[13])
+                    receptor = fila.get('Denominación del Receptor') or fila.iloc[7]
+
+                    # --- LÓGICA CONTABLE (GENERACIÓN DE ASIENTO) ---
+                    glosa = f"Venta s/Fac. ARCA - {receptor}"
+                    
+                    # 1. Registro al Debe (Deudores por Ventas)
+                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?, ?, ?, ?, ?)",
+                                   (str(fecha), "Deudores por Ventas", total, 0, glosa))
+                    
+                    # 2. Registro al Haber (Ventas Netas)
+                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?, ?, ?, ?, ?)",
+                                   (str(fecha), "Ventas Gravadas", 0, neto, glosa))
+                    
+                    # 3. Registro al Haber (IVA Débito Fiscal)
+                    if iva > 0:
+                        ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?, ?, ?, ?, ?)",
+                                       (str(fecha), "IVA Débito Fiscal", 0, iva, glosa))
+                    
+                    count += 1
+                
+                st.success(f"✅ ¡Proceso Completo! Se generaron {count} asientos contables.")
+                
+                # --- VISUALIZACIÓN DE ASIENTOS ---
+                st.write("### 📝 Asientos Generados en el Libro Diario:")
+                asientos = ejecutar_query("SELECT * FROM libro_diario ORDER BY id DESC LIMIT ?", (count * 3,), fetch=True)
+                st.table(asientos)
+
         except Exception as e:
-            st.error(f"Hubo un problema al leer el CSV: {e}")
-            st.info("Asegúrate de que el archivo sea el CSV descargado directamente de ARCA.")
+            st.error(f"Error técnico: {e}")
