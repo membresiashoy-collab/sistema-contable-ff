@@ -5,29 +5,15 @@ from database import ejecutar_query
 def limpiar_num(v):
     if pd.isna(v) or v == "": return 0.0
     try:
-        # Maneja formatos con puntos de miles y comas decimales
         s = str(v).replace('.', '').replace(',', '.')
-        return float(s)
+        return round(float(s), 2)
     except:
         return 0.0
 
 def mostrar_ventas():
-    st.title("📂 Procesamiento Individual de Comprobantes")
+    st.title("📂 Procesamiento de Ventas (Partida Doble)")
     
-    # --- LÓGICA DE NUMERACIÓN DE ASIENTOS ---
-    res_asiento = ejecutar_query("SELECT MAX(id_asiento) as ultimo FROM libro_diario", fetch=True)
-    
-    # CORRECCIÓN: Validamos si el DataFrame tiene datos antes de usar iloc[0]
-    if not res_asiento.empty and pd.notna(res_asiento.iloc[0]['ultimo']):
-        prox_asiento = int(res_asiento.iloc[0]['ultimo']) + 1
-    else:
-        prox_asiento = 1
-
-    with st.expander("⚠️ Mantenimiento"):
-        if st.button("🗑️ Vaciar Libro Diario"):
-            ejecutar_query("DELETE FROM libro_diario")
-            st.success("Diario vaciado correctamente.")
-            st.rerun()
+    st.info("Nota: Los números de asiento son provisorios. Se recomienda ordenar por fecha en el Libro Diario para mantener la cronología.")
 
     archivo = st.file_uploader("Subir Ventas ARCA (CSV)", type=["csv"])
     
@@ -36,10 +22,9 @@ def mostrar_ventas():
         tipos = ejecutar_query("SELECT * FROM tipos_comprobantes", fetch=True)
         
         if pdc.empty or tipos.empty:
-            st.error("❌ Configure el Plan de Cuentas y la Tabla de Comprobantes primero.")
+            st.error("❌ Configure el Plan de Cuentas y los Tipos de Comprobantes.")
             return
 
-        # Cargamos las cuentas del PDC para mapeo
         lista_ctas = pdc['nombre'].tolist()
         cta_deudores = next((c for c in lista_ctas if "DEUDORES" in c), "DEUDORES POR VENTAS")
         cta_ventas = next((c for c in lista_ctas if "VENTAS" in c and "IVA" not in c), "VENTAS")
@@ -47,37 +32,51 @@ def mostrar_ventas():
 
         df = pd.read_csv(archivo, sep=';', encoding='latin-1')
 
-        if st.button(f"🚀 Generar Asientos Individuales (Desde N° {prox_asiento})"):
-            asiento_actual = prox_asiento
+        if st.button("🚀 Generar Asientos Validados"):
+            # Obtenemos el último ID para continuar la secuencia
+            res = ejecutar_query("SELECT MAX(id_asiento) as u FROM libro_diario", fetch=True)
+            asiento_actual = (int(res.iloc[0]['u']) if not res.empty and pd.notna(res.iloc[0]['u']) else 0) + 1
             
+            error_balance = False
+
             for _, fila in df.iterrows():
-                # Extraer datos por posición según el CSV de ARCA
-                f = fila.iloc[0]          # Fecha
-                cod_arca = int(fila.iloc[1]) # Código de Comprobante
-                nro_comp = fila.iloc[2]   # Punto de Venta y Nro
-                razon_social = fila.iloc[8]
+                f = fila.iloc[0]
+                cod_arca = int(fila.iloc[1])
+                nro_comp = fila.iloc[2]
+                cliente = fila.iloc[8]
+                
+                # Valores numéricos redondeados a 2 decimales
                 neto = limpiar_num(fila.iloc[22])
                 iva = limpiar_num(fila.iloc[26])
                 total = limpiar_num(fila.iloc[27])
                 
-                # Buscar lógica de signo según TABLACOMPROBANTES
-                info_tipo = tipos[tipos['codigo'] == cod_arca]
-                signo = info_tipo['signo'].values[0] if not info_tipo.empty else 1
-                desc_tipo = info_tipo['descripcion'].values[0] if not info_tipo.empty else "COMPROBANTE"
-                
-                glosa = f"{desc_tipo} {nro_comp} - {razon_social}"
+                # COMPROBACIÓN DE PARTIDA DOBLE
+                # En contabilidad: Neto + IVA debe ser igual a Total
+                if round(neto + iva, 2) != total:
+                    st.warning(f"⚠️ Desbalance en comp. {nro_comp}: Neto({neto}) + IVA({iva}) != Total({total}). Ajustando diferencia en cuenta Ventas.")
+                    neto = round(total - iva, 2)
 
-                if signo == 1: # FACTURAS / DÉBITOS
-                    ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento_actual, f, cta_deudores, total, 0, glosa))
-                    ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento_actual, f, cta_ventas, 0, neto, glosa))
-                    if iva > 0:
-                        ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento_actual, f, cta_iva, 0, iva, glosa))
-                else: # NOTAS DE CRÉDITO (Invertido)
-                    ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento_actual, f, cta_ventas, neto, 0, glosa))
-                    if iva > 0:
-                        ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento_actual, f, cta_iva, iva, 0, glosa))
-                    ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento_actual, f, cta_deudores, 0, total, glosa))
+                info = tipos[tipos['codigo'] == cod_arca]
+                signo = info['signo'].values[0] if not info.empty else 1
+                glosa = f"{info['descripcion'].values[0] if not info.empty else 'FC'} {nro_comp} - {cliente}"
+
+                # Inserción de líneas
+                if signo == 1:
+                    lineas = [
+                        (asiento_actual, f, cta_deudores, total, 0, glosa),
+                        (asiento_actual, f, cta_ventas, 0, neto, glosa)
+                    ]
+                    if iva > 0: lineas.append((asiento_actual, f, cta_iva, 0, iva, glosa))
+                else:
+                    lineas = [
+                        (asiento_actual, f, cta_ventas, neto, 0, glosa),
+                        (asiento_actual, f, cta_deudores, 0, total, glosa)
+                    ]
+                    if iva > 0: lineas.append((asiento_actual, f, cta_iva, iva, 0, glosa))
+
+                for l in lineas:
+                    ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", l)
                 
-                asiento_actual += 1 # Incrementar para el siguiente comprobante
-            
-            st.success(f"✅ Se procesaron {asiento_actual - prox_asiento} comprobantes como asientos individuales.")
+                asiento_actual += 1
+
+            st.success("✅ Proceso finalizado. Los asientos se han grabado respetando la partida doble.")
