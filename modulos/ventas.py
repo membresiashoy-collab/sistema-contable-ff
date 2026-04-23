@@ -1,5 +1,10 @@
 import streamlit as st
 import pandas as pd
+import sys
+import os
+
+# Parche para encontrar database.py
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from database import ejecutar_query, registrar_carga
 
 def limpiar_num(v):
@@ -12,7 +17,10 @@ def mostrar_ventas():
     archivo = st.file_uploader("Subir CSV de ARCA", type=["csv"])
     
     if archivo:
-        pdc = ejecutar_query("SELECT nombre FROM plan_cuentas", fetch=True)['nombre'].tolist()
+        # Aseguramos que existan cuentas
+        pdc_data = ejecutar_query("SELECT nombre FROM plan_cuentas", fetch=True)
+        pdc = pdc_data['nombre'].tolist() if not pdc_data.empty else ["VENTAS", "DEUDORES POR VENTAS"]
+        
         tipos = ejecutar_query("SELECT * FROM tipos_comprobantes", fetch=True)
         df_csv = pd.read_csv(archivo, sep=';', encoding='latin-1')
 
@@ -20,9 +28,8 @@ def mostrar_ventas():
             auto, revision = [], []
             for _, f in df_csv.iterrows():
                 t, i, n = limpiar_num(f.iloc[27]), limpiar_num(f.iloc[26]), limpiar_num(f.iloc[22])
-                # FORZAMOS CUENTA VENTAS Y FECHA DD/MM/YYYY
                 datos = {
-                    "fecha": str(f.iloc[0]), "comprobante": f.iloc[2], "cliente": f.iloc[8], 
+                    "fecha": str(f.iloc[0]), "comprobante": str(f.iloc[2]), "cliente": str(f.iloc[8]), 
                     "cod_arca": int(f.iloc[1]), "neto": n if i > 0 else t, "iva": i, "total": t,
                     "cta_d": "DEUDORES POR VENTAS", "cta_v": "VENTAS"
                 }
@@ -31,12 +38,12 @@ def mostrar_ventas():
             st.session_state['v_auto'], st.session_state['v_rev'] = auto, revision
 
         if 'v_rev' in st.session_state and st.session_state['v_rev']:
-            st.warning("⚠️ Operaciones SIN IVA detectadas. Valide las cuentas:")
+            st.warning("⚠️ Operaciones SIN IVA (Validar Cuentas):")
             for idx, asis in enumerate(st.session_state['v_rev']):
                 with st.expander(f"Validar: {asis['comprobante']} - {asis['cliente']}"):
                     c1, c2 = st.columns(2)
-                    asis['cta_d'] = c1.selectbox("Cuenta Debe", pdc, index=pdc.index(asis['cta_d']) if asis['cta_d'] in pdc else 0, key=f"v_d_{idx}")
-                    asis['cta_v'] = c2.selectbox("Cuenta Haber", pdc, index=pdc.index(asis['cta_v']) if asis['cta_v'] in pdc else 0, key=f"v_h_{idx}")
+                    asis['cta_d'] = c1.selectbox("Cuenta Debe", pdc, key=f"v_d_{idx}")
+                    asis['cta_v'] = c2.selectbox("Cuenta Haber", pdc, key=f"v_h_{idx}")
 
         if st.button("✅ Grabar en Diario"):
             res_u = ejecutar_query("SELECT MAX(id_asiento) as u FROM libro_diario", fetch=True)
@@ -44,7 +51,7 @@ def mostrar_ventas():
             todo = st.session_state.get('v_auto', []) + st.session_state.get('v_rev', [])
             
             for a in todo:
-                t_info = tipos[tipos['codigo'] == a['cod_arca']]
+                t_info = tipos[tipos['codigo'] == a['cod_arca']] if not tipos.empty else pd.DataFrame()
                 s = t_info['signo'].values[0] if not t_info.empty else 1
                 glo = f"Venta {a['comprobante']} - {a['cliente']}"
                 
@@ -59,6 +66,6 @@ def mostrar_ventas():
                 prox_id += 1
             
             registrar_carga("Ventas", archivo.name, len(todo))
-            st.success("Grabación finalizada.")
+            st.success("Grabado con éxito.")
             st.session_state.clear()
             st.rerun()

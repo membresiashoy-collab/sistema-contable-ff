@@ -8,7 +8,6 @@ DB_PATH = os.path.join(BASE_DIR, "contabilidad_ff.db")
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        # Creamos tablas desde cero
         cursor.execute("CREATE TABLE IF NOT EXISTS libro_diario (id INTEGER PRIMARY KEY AUTOINCREMENT, id_asiento INTEGER, fecha TEXT, cuenta TEXT, debe REAL, haber REAL, glosa TEXT)")
         cursor.execute("CREATE TABLE IF NOT EXISTS historial_cargas (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha_carga TIMESTAMP DEFAULT CURRENT_TIMESTAMP, modulo TEXT, nombre_archivo TEXT, registros_procesados INTEGER)")
         cursor.execute("CREATE TABLE IF NOT EXISTS plan_cuentas (codigo TEXT PRIMARY KEY, nombre TEXT)")
