@@ -1,32 +1,39 @@
 import streamlit as st
 import pandas as pd
-import sys
-import os
-
-# Fix de importación: sube un nivel para encontrar database.py
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from database import ejecutar_query, obtener_proximo_asiento
+import database
 
 def mostrar_compras():
-    st.title("📥 Módulo de Compras")
-    archivo = st.file_uploader("Subir CSV de Portal IVA", type=["csv"])
+    st.title("📥 Registro de Compras (Portal IVA)")
+    archivo = st.file_uploader("Subir CSV de Compras Recibidas", type=["csv"])
 
     if archivo:
+        # Configuración para tu archivo: separador ';' y decimal ','
         df = pd.read_csv(archivo, sep=';', decimal=',', encoding='utf-8')
         df.columns = [c.strip('"') for c in df.columns]
 
-        if st.button("🚀 Cargar a Libro Diario"):
-            asiento = obtener_proximo_asiento()
-            for _, r in df.iterrows():
-                total = float(r['Importe Total'])
-                iva = float(r['Total IVA'])
-                neto = total - iva
-                prov = str(r['Denominación Vendedor']).replace('"', '')
-                fecha = r['Fecha de Emisión']
+        st.dataframe(df[['Fecha de Emisión', 'Denominación Vendedor', 'Importe Total', 'Total IVA']].head())
 
-                # Asiento Triple
-                ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento, fecha, "COMPRAS", neto, 0, f"Compra: {prov}"))
-                ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento, fecha, "IVA CREDITO FISCAL", iva, 0, f"Compra: {prov}"))
-                ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento, fecha, "PROVEEDORES", 0, total, f"Compra: {prov}"))
-                asiento += 1
-            st.success("Asientos generados correctamente.")
+        if st.button("🚀 Procesar Compras y Generar Asientos"):
+            asiento = database.obtener_proximo_asiento()
+            for _, r in df.iterrows():
+                try:
+                    fecha = r['Fecha de Emisión']
+                    prov = str(r['Denominación Vendedor']).replace('"', '')
+                    total = float(r['Importe Total'])
+                    iva = float(r['Total IVA'])
+                    neto = total - iva
+                    glosa = f"Compra: {prov}"
+
+                    # DEBE: Compras (Neto)
+                    database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)",
+                                   (asiento, fecha, "COMPRAS", neto, 0, glosa))
+                    # DEBE: IVA Crédito Fiscal
+                    database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)",
+                                   (asiento, fecha, "IVA CREDITO FISCAL", iva, 0, glosa))
+                    # HABER: Proveedores (Total)
+                    database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)",
+                                   (asiento, fecha, "PROVEEDORES", 0, total, glosa))
+                    asiento += 1
+                except:
+                    continue
+            st.success("Compras procesadas correctamente.")
