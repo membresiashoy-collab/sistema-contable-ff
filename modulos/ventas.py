@@ -2,9 +2,9 @@ import streamlit as st
 import pandas as pd
 from database import ejecutar_query
 
-def limpiar_arca(valor):
+def limpiar_monto(valor):
+    """Convierte formatos '1.234,56' a '1234.56'"""
     if pd.isna(valor) or valor == "": return 0.0
-    # Quitamos puntos de miles y cambiamos coma por punto
     s = str(valor).replace('.', '').replace(',', '.')
     try: return float(s)
     except: return 0.0
@@ -15,23 +15,24 @@ def mostrar_ventas():
     
     if archivo:
         try:
-            # Leemos con el separador detectado en tu archivo
+            # Leemos el archivo con separador punto y coma y codificación latina
             df = pd.read_csv(archivo, sep=';', encoding='latin-1')
             
-            # LIMPIEZA CRUCIAL: Quitamos comillas dobles y espacios de los nombres de columnas
+            # --- LIMPIEZA TOTAL DE COLUMNAS ---
+            # Eliminamos comillas, espacios y posibles errores de codificación en los nombres
             df.columns = df.columns.str.replace('"', '').str.strip()
             
-            st.write("### 🔍 Vista previa de datos limpios:")
-            st.dataframe(df.head(3))
+            st.write("### 🔍 Vista previa de columnas detectadas:")
+            st.write(list(df.columns)) # Esto ayuda a verificar que los nombres estén limpios
 
             if st.button("🚀 Generar Contabilidad Real"):
                 count = 0
                 for _, fila in df.iterrows():
-                    # Usamos los nombres exactos del CSV de ARCA
+                    # Usamos los nombres exactos que vimos en tu archivo
                     fecha = fila['Fecha de Emisión']
-                    neto = limpiar_arca(fila['Imp. Neto Gravado Total'])
-                    iva = limpiar_arca(fila['Total IVA'])
-                    total = limpiar_arca(fila['Imp. Total'])
+                    neto = limpiar_monto(fila['Imp. Neto Gravado Total'])
+                    iva = limpiar_monto(fila['Total IVA'])
+                    total = limpiar_monto(fila['Imp. Total'])
                     receptor = fila['Denominación Receptor']
 
                     glosa = f"Venta s/Fac. - {receptor}"
@@ -48,5 +49,4 @@ def mostrar_ventas():
                 
                 st.success(f"✅ ¡Éxito! Se procesaron {count} facturas con importes reales.")
         except Exception as e:
-            st.error(f"Error al procesar columnas: {e}")
-            st.info("Nota: Si el error persiste, verifica que el archivo no esté abierto en Excel.")
+            st.error(f"Error al procesar: {e}")
