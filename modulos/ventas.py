@@ -3,9 +3,15 @@ import pandas as pd
 import sys
 import os
 
-# Parche para encontrar database.py
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from database import ejecutar_query, registrar_carga
+# Asegurar que encuentre la raíz del proyecto
+ruta_raiz = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if ruta_raiz not in sys.path:
+    sys.path.append(ruta_raiz)
+
+try:
+    from database import ejecutar_query, registrar_carga
+except ImportError:
+    st.error("Error al conectar con la base de datos. Verifique la estructura de carpetas.")
 
 def limpiar_num(v):
     if pd.isna(v) or v == "": return 0.0
@@ -17,9 +23,9 @@ def mostrar_ventas():
     archivo = st.file_uploader("Subir CSV de ARCA", type=["csv"])
     
     if archivo:
-        # Aseguramos que existan cuentas
-        pdc_data = ejecutar_query("SELECT nombre FROM plan_cuentas", fetch=True)
-        pdc = pdc_data['nombre'].tolist() if not pdc_data.empty else ["VENTAS", "DEUDORES POR VENTAS"]
+        # Traer plan de cuentas
+        pdc_df = ejecutar_query("SELECT nombre FROM plan_cuentas", fetch=True)
+        pdc = pdc_df['nombre'].tolist() if not pdc_df.empty else ["VENTAS", "DEUDORES POR VENTAS"]
         
         tipos = ejecutar_query("SELECT * FROM tipos_comprobantes", fetch=True)
         df_csv = pd.read_csv(archivo, sep=';', encoding='latin-1')
@@ -66,6 +72,6 @@ def mostrar_ventas():
                 prox_id += 1
             
             registrar_carga("Ventas", archivo.name, len(todo))
-            st.success("Grabado con éxito.")
+            st.success("Asientos grabados exitosamente.")
             st.session_state.clear()
             st.rerun()

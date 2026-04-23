@@ -1,5 +1,10 @@
 import streamlit as st
 import pandas as pd
+import sys
+import os
+
+# Parche de rutas
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from database import ejecutar_query, eliminar_todo_diario
 
 def mostrar_diario():
@@ -13,20 +18,14 @@ def mostrar_diario():
 
     if not df.empty:
         res = []
-        asientos_unicos = df['id_asiento'].unique()
-        
-        for i, id_as in enumerate(asientos_unicos):
+        asientos = df['id_asiento'].unique()
+        for i, id_as in enumerate(asientos):
             filas = df[df['id_asiento'] == id_as]
             for _, r in filas.iterrows():
-                res.append({
-                    "Asiento": r['id_asiento'], "Fecha": r['fecha'], 
-                    "Cuenta": r['cuenta'], "Debe": r['debe'], 
-                    "Haber": r['haber'], "Glosa": r['glosa']
-                })
-            # Solo agregar separador si NO es el último asiento
-            if i < len(asientos_unicos) - 1:
+                res.append({"Asiento": r['id_asiento'], "Fecha": r['fecha'], "Cuenta": r['cuenta'], "Debe": r['debe'], "Haber": r['haber'], "Glosa": r['glosa']})
+            if i < len(asientos) - 1:
                 res.append({"Asiento": "---", "Fecha": "---", "Cuenta": "-----------", "Debe": None, "Haber": None, "Glosa": "---"})
         
         st.dataframe(pd.DataFrame(res), use_container_width=True, hide_index=True)
     else:
-        st.info("No hay datos cargados.")
+        st.info("El diario está vacío.")

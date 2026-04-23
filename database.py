@@ -22,6 +22,9 @@ def ejecutar_query(query, params=(), fetch=False):
         cursor.execute(query, params)
         conn.commit()
 
+def registrar_carga(modulo, archivo, cantidad):
+    ejecutar_query("INSERT INTO historial_cargas (modulo, nombre_archivo, registros_procesados) VALUES (?,?,?)", (modulo, archivo, cantidad))
+
 def eliminar_todo_diario():
     ejecutar_query("DELETE FROM libro_diario")
     ejecutar_query("DELETE FROM sqlite_sequence WHERE name='libro_diario'")
