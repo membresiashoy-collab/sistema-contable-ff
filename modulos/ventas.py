@@ -5,10 +5,10 @@ import database
 def mostrar_ventas():
     st.title("📤 Módulo de Ventas")
     
-    # Botón de reset: USALO UNA VEZ antes de cargar
-    if st.button("🔴 RESETEAR SISTEMA (Borrar todo y empezar limpio)"):
+    # Botón técnico para mantenimiento del sistema
+    if st.button("Limpiar Sistema (Reset)"):
         database.init_db()
-        st.success("Base de datos recreada desde cero.")
+        st.info("Sistema listo.")
 
     archivo = st.file_uploader("Subir CSV de AFIP", type=["csv"])
     
@@ -17,13 +17,14 @@ def mostrar_ventas():
             df = pd.read_csv(archivo, sep=None, engine='python', encoding='latin-1')
             df.columns = [c.strip().upper() for c in df.columns]
             
+            # Identificación de columnas
             c_f = next(c for c in df.columns if "FECHA" in c)
             c_t = next(c for c in df.columns if "TIPO" in c and "COMPROBANTE" in c)
             c_tot = next(c for c in df.columns if "TOTAL" in c and "IVA" not in c)
             c_iva = next((c for c in df.columns if "TOTAL IVA" in c or "IVA 21%" in c), None)
 
-            if st.button("🚀 PROCESAR AHORA"):
-                # Obtenemos el ID de asiento actual
+            if st.button("Procesar Asientos"):
+                # Cálculo de número de asiento
                 res = database.ejecutar_query("SELECT MAX(id_asiento) FROM libro_diario", fetch=True)
                 n_asiento = 1 if res.empty or res.iloc[0,0] is None else int(res.iloc[0,0]) + 1
                 
@@ -36,17 +37,20 @@ def mostrar_ventas():
                         try: iva = float(str(r[c_iva]).replace(',', '.'))
                         except: iva = 0
                     
-                    neto = total - iva
+                    neto = total - iva # Lógica para Facturas A, B o C (IVA 0)
 
-                    # INSERTAMOS Y FORZAMOS
+                    # --- GRABACIÓN EN DB ---
+                    # DEUDORES (DEBE)
                     database.ejecutar_query(
                         "INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)",
                         (n_asiento, f, "DEUDORES POR VENTAS", total, 0, f"Venta {t}", "VENTAS")
                     )
+                    # VENTAS (HABER)
                     database.ejecutar_query(
                         "INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)",
                         (n_asiento, f, "VENTAS", 0, neto, f"Venta {t}", "VENTAS")
                     )
+                    # IVA (HABER - SI CORRESPONDE)
                     if iva > 0:
                         database.ejecutar_query(
                             "INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)",
@@ -56,13 +60,7 @@ def mostrar_ventas():
                     exitos += 1
                 
                 if exitos > 0:
-                    st.balloons()
-                    st.success(f"¡LOGRADO! Se guardaron {exitos} comprobantes en la base de datos.")
-                    # Mostramos una vista previa rápida para confirmar que NO hay ceros
-                    debug_df = database.ejecutar_query("SELECT * FROM libro_diario ORDER BY id DESC LIMIT 5", fetch=True)
-                    st.write("Vista previa de lo guardado:", debug_df)
-                else:
-                    st.error("El archivo se leyó pero no se insertó nada.")
+                    st.success(f"Se han generado {exitos} asientos en el Libro Diario.")
                     
         except Exception as e:
-            st.error(f"Error fatal: {e}")
+            st.error(f"Error técnico: {e}")
