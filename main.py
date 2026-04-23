@@ -1,51 +1,51 @@
 import streamlit as st
+import pandas as pd
 from database import init_db, ejecutar_query
 from modulos import ventas, reportes, configuracion
 
-st.set_page_config(page_title="Sistema Contable FF", layout="wide", page_icon="📈")
+st.set_page_config(page_title="Sistema Contable FF", layout="wide")
 init_db()
 
-# --- NAVEGACIÓN ---
-st.sidebar.title("🚀 Gestión Contable")
-menu = ["🏠 Inicio", "📂 Ventas (ARCA)", "🛒 Compras", "⚖️ Impuestos", "👔 Sueldos y Jornales", "🏦 Bancos", "📓 Libro Diario", "⚖️ Sumas y Saldos", "⚙️ Configuración"]
-opcion = st.sidebar.selectbox("Seleccione Módulo:", menu)
+st.sidebar.title("🚀 Navegación")
+opcion = st.sidebar.radio("Ir a:", ["🏠 Inicio", "📂 Ventas", "📓 Libro Diario", "⚙️ Configuración"])
 
 if opcion == "🏠 Inicio":
-    st.title("Sistema Contable Automatizado FF")
+    st.title("📊 Dashboard de Gestión")
     
-    # Verificación automática del Plan de Cuentas
+    # 1. Verificación de PDC
     check_pdc = ejecutar_query("SELECT COUNT(*) as total FROM plan_cuentas", fetch=True)
-    if check_pdc.iloc[0]['total'] > 0:
-        st.success(f"✅ Plan de Cuentas detectado ({check_pdc.iloc[0]['total']} cuentas). El sistema está listo para operar.")
-    else:
-        st.warning("⚠️ Paso 1: Ve a 'Configuración' y carga tu Plan de Cuentas para empezar.")
+    if check_pdc.iloc[0]['total'] == 0:
+        st.warning("⚠️ Plan de Cuentas no detectado. Cargue uno en Configuración.")
     
-    st.info("Utilice el menú lateral para navegar entre los diferentes módulos operativos.")
+    # 2. Lógica del Dashboard (Ventas Mensuales)
+    st.subheader("📈 Ventas Mensuales (Neto)")
+    # Buscamos en el diario los movimientos al haber de la cuenta 'VENTAS'
+    query_ventas = """
+        SELECT SUBSTR(fecha, 4, 7) as mes, SUM(haber - debe) as neto
+        FROM libro_diario 
+        WHERE cuenta LIKE '%VENTAS%'
+        GROUP BY mes
+        ORDER BY mes ASC
+    """
+    df_grafico = ejecutar_query(query_ventas, fetch=True)
+    
+    if not df_grafico.empty:
+        # Mostramos gráfico de barras
+        st.bar_chart(data=df_grafico, x='mes', y='neto')
+        
+        # Métricas rápidas
+        col1, col2 = st.columns(2)
+        total_acumulado = df_grafico['neto'].sum()
+        col1.metric("Total Ventas Netas", f"$ {total_acumulado:,.2f}")
+        col2.metric("Mes con mayor venta", df_grafico.loc[df_grafico['neto'].idxmax()]['mes'])
+    else:
+        st.info("No hay datos en el Libro Diario para mostrar estadísticas.")
 
-elif opcion == "📂 Ventas (ARCA)":
+elif opcion == "📂 Ventas":
     ventas.mostrar_ventas()
-
-elif opcion == "🛒 Compras":
-    st.title("🛒 Módulo de Compras")
-    st.info("Próximamente: Importación de comprobantes recibidos y carga manual.")
-
-elif opcion == "⚖️ Impuestos":
-    st.title("⚖️ Módulo de Impuestos")
-    st.info("Próximamente: Liquidación de IVA y Retenciones.")
-
-elif opcion == "👔 Sueldos y Jornales":
-    st.title("👔 Módulo de Sueldos")
-    st.info("Próximamente: Liquidación de haberes y cargas sociales.")
-
-elif opcion == "🏦 Bancos":
-    st.title("🏦 Módulo de Bancos")
-    st.info("Próximamente: Conciliación bancaria y carga de extractos.")
 
 elif opcion == "📓 Libro Diario":
     reportes.mostrar_diario()
-
-elif opcion == "⚖️ Sumas y Saldos":
-    reportes.mostrar_balance()
 
 elif opcion == "⚙️ Configuración":
     configuracion.mostrar_configuracion()
