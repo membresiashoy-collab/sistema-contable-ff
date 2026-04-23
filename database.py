@@ -16,27 +16,20 @@ def ejecutar_query(query, params=(), fetch=False):
         conn.commit()
 
 def init_db():
-    """Inicializa y repara la estructura de la base de datos."""
-    # Tablas base
+    """Crea las tablas y repara columnas faltantes."""
     ejecutar_query("CREATE TABLE IF NOT EXISTS tabla_comprobantes (codigo INTEGER PRIMARY KEY, descripcion TEXT, es_reverso INTEGER)")
     ejecutar_query("CREATE TABLE IF NOT EXISTS libro_diario (id INTEGER PRIMARY KEY AUTOINCREMENT, id_asiento INTEGER, fecha TEXT, cuenta TEXT, debe REAL, haber REAL, glosa TEXT, origen TEXT)")
     ejecutar_query("CREATE TABLE IF NOT EXISTS historial_archivos (id INTEGER PRIMARY KEY AUTOINCREMENT)")
 
-    # Reparación de columnas por si faltan
-    columnas = [
-        ("nombre_archivo", "TEXT"),
-        ("tipo", "TEXT"),
-        ("registros", "INTEGER"),
-        ("fecha_proceso", "TEXT")
-    ]
-    for col, tipo in columnas:
+    # Agregamos columnas de historial una por una para evitar errores
+    for col, tipo in [("nombre_archivo", "TEXT"), ("tipo", "TEXT"), ("registros", "INTEGER"), ("fecha_proceso", "TEXT")]:
         try: ejecutar_query(f"ALTER TABLE historial_archivos ADD COLUMN {col} {tipo}")
         except: pass
 
 def registrar_archivo(nombre, tipo, cantidad):
-    ahora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    ahora = datetime.now().strftime("%d/%m/%Y %H:%M")
     ejecutar_query("INSERT INTO historial_archivos (nombre_archivo, tipo, registros, fecha_proceso) VALUES (?,?,?,?)", 
-                   (nombre, tipo, cantidad, ahora))
+                   (nombre, tipo, int(cantidad), ahora))
 
 def es_reverso(tipo_str):
     t = str(tipo_str).upper()
