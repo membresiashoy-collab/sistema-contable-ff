@@ -5,72 +5,52 @@ from database import ejecutar_query
 def mostrar_configuracion():
     st.title("⚙️ Panel de Control y Configuración")
 
-    # --- SECCIÓN 1: ESTADO DE DOCUMENTOS CARGADOS ---
+    # --- VERIFICACIÓN DE DATOS ---
+    try:
+        df_p = ejecutar_query("SELECT * FROM plan_cuentas", fetch=True)
+        df_t = ejecutar_query("SELECT * FROM tipos_comprobantes", fetch=True)
+    except:
+        df_p = pd.DataFrame()
+        df_t = pd.DataFrame()
+
     st.header("📊 Estado de los Documentos")
-    col_a, col_b = st.columns(2)
+    col1, col2 = st.columns(2)
 
-    # Verificación del Plan de Cuentas
-    try:
-        res_plan = ejecutar_query("SELECT COUNT(*) as cant FROM plan_cuentas", fetch=True)
-        cant_plan = res_plan.iloc[0]['cant'] if not res_plan.empty else 0
-    except:
-        cant_plan = 0
-
-    with col_a:
-        if cant_plan > 0:
-            st.success(f"✅ Plan de Cuentas: {cant_plan} cuentas cargadas.")
-            if st.checkbox("Ver detalle del Plan", key="view_pdc"):
-                df_p = ejecutar_query("SELECT * FROM plan_cuentas", fetch=True)
-                st.dataframe(df_p, use_container_width=True, height=250)
+    with col1:
+        st.subheader("📖 Plan de Cuentas")
+        if not df_p.empty:
+            st.success(f"Cargadas: {len(df_p)} cuentas")
+            st.dataframe(df_p, use_container_width=True, height=200)
         else:
-            st.error("❌ Plan de Cuentas: No detectado.")
+            st.warning("No hay Plan de Cuentas en la base de datos.")
 
-    # Verificación de Tabla de Comprobantes
-    try:
-        res_tipos = ejecutar_query("SELECT COUNT(*) as cant FROM tipos_comprobantes", fetch=True)
-        cant_tipos = res_tipos.iloc[0]['cant'] if not res_tipos.empty else 0
-    except:
-        cant_tipos = 0
-
-    with col_b:
-        if cant_tipos > 0:
-            st.success(f"✅ Tabla ARCA: {cant_tipos} códigos configurados.")
-            if st.checkbox("Ver detalle de Comprobantes", key="view_tipos"):
-                df_t = ejecutar_query("SELECT * FROM tipos_comprobantes", fetch=True)
-                st.dataframe(df_t, use_container_width=True, height=250)
+    with col2:
+        st.subheader("📋 Tabla ARCA")
+        if not df_t.empty:
+            st.success(f"Configurados: {len(df_t)} tipos")
+            st.dataframe(df_t, use_container_width=True, height=200)
         else:
-            st.error("❌ Tabla ARCA: No detectada.")
+            st.warning("No hay Tabla de Comprobantes cargada.")
 
     st.divider()
+    
+    # --- FORMULARIOS DE CARGA (Se mantienen igual) ---
+    with st.expander("📥 Subir / Actualizar Archivos"):
+        f_plan = st.file_uploader("Archivo Plan de Cuentas", type=["csv"], key="plan_up")
+        if f_plan and st.button("Guardar Plan"):
+            df = pd.read_csv(f_plan, sep=None, engine='python', encoding='latin-1')
+            ejecutar_query("DELETE FROM plan_cuentas")
+            for _, fila in df.iterrows():
+                ejecutar_query("INSERT INTO plan_cuentas VALUES (?, ?)", (str(fila.iloc[0]), str(fila.iloc[1]).upper().strip()))
+            st.success("Plan guardado correctamente")
+            st.rerun()
 
-    # --- SECCIÓN 2: CARGA / ACTUALIZACIÓN ---
-    st.header("📥 Cargar o Actualizar")
-
-    # Plan de Cuentas
-    with st.expander("Subir Plan de Cuentas"):
-        archivo_plan = st.file_uploader("CSV del Plan de Cuentas", type=["csv"], key="u_plan")
-        if archivo_plan:
-            if st.button("Confirmar Actualización de Plan"):
-                df = pd.read_csv(archivo_plan, sep=None, engine='python', encoding='latin-1')
-                ejecutar_query("DELETE FROM plan_cuentas")
-                for _, fila in df.iterrows():
-                    ejecutar_query("INSERT INTO plan_cuentas VALUES (?, ?)", 
-                                   (str(fila.iloc[0]), str(fila.iloc[1]).upper().strip()))
-                st.success("Plan actualizado. Refresque la página.")
-                st.balloons()
-
-    # Tabla de Comprobantes
-    with st.expander("Subir TABLACOMPROBANTES.csv"):
-        archivo_tipos = st.file_uploader("Archivo de códigos ARCA", type=["csv"], key="u_tipos")
-        if archivo_tipos:
-            if st.button("Confirmar Actualización de Comprobantes"):
-                # Forzamos el separador ';' que tiene tu archivo
-                df_tipos = pd.read_csv(archivo_tipos, sep=';', encoding='latin-1')
-                ejecutar_query("DELETE FROM tipos_comprobantes")
-                for _, fila in df_tipos.iterrows():
-                    cod = int(fila['Código'])
-                    desc = str(fila['Descripción']).upper().strip()
-                    signo = -1 if "NOTA DE CREDITO" in desc or "NOTA DE CRÉDITO" in desc else 1
-                    ejecutar_query("INSERT INTO tipos_comprobantes VALUES (?, ?, ?)", (cod, desc, signo))
-                st.success("Lógica ARCA actualizada.")
-                st.balloons()
+        f_tipos = st.file_uploader("Archivo TABLACOMPROBANTES.csv", type=["csv"], key="tipos_up")
+        if f_tipos and st.button("Guardar Comprobantes"):
+            df = pd.read_csv(f_tipos, sep=';', encoding='latin-1')
+            ejecutar_query("DELETE FROM tipos_comprobantes")
+            for _, fila in df.iterrows():
+                signo = -1 if "NOTA DE CREDITO" in str(fila['Descripción']).upper() else 1
+                ejecutar_query("INSERT INTO tipos_comprobantes VALUES (?, ?, ?)", (int(fila['Código']), str(fila['Descripción']).upper(), signo))
+            st.success("Tabla ARCA guardada")
+            st.rerun()
