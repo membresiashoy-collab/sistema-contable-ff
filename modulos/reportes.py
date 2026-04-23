@@ -2,42 +2,30 @@ import streamlit as st
 import pandas as pd
 import sys
 import os
-import io
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from database import ejecutar_query, eliminar_todo_diario
 
 def mostrar_diario():
-    st.title("📓 Libro Diario Unificado")
-
+    st.title("📓 Libro Diario")
     df_base = ejecutar_query("SELECT id_asiento, fecha, cuenta, debe, haber, glosa FROM libro_diario ORDER BY id_asiento ASC", fetch=True)
 
     if df_base.empty:
-        st.info("El diario está vacío.")
+        st.info("Diario vacío.")
         return
 
-    # Barra de herramientas superior
-    c1, c2, c3, c4 = st.columns([1.5, 1, 2, 1])
-    with c1:
-        tipo = st.selectbox("Filtrar:", ["Todos", "Ventas", "Compras"], label_visibility="collapsed")
-    with c2:
-        as_list = ["Todos"] + sorted(df_base['id_asiento'].unique().tolist())
-        sel_as = st.selectbox("Asiento", as_list, label_visibility="collapsed")
-    with c3:
-        busq = st.text_input("Buscar...", placeholder="Cuenta o detalle...", label_visibility="collapsed")
-    with c4:
-        if st.button("🗑️ VACIAR", use_container_width=True):
+    # Filtros rápidos
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c1: tipo = st.selectbox("Ver:", ["Todos", "Ventas", "Compras"], label_visibility="collapsed")
+    with c3: 
+        if st.button("🗑️ VACIAR"):
             eliminar_todo_diario()
             st.rerun()
 
-    # Aplicación de filtros
     df_f = df_base.copy()
     if tipo == "Ventas": df_f = df_f[df_f['glosa'].str.contains("Venta", case=False, na=False)]
     if tipo == "Compras": df_f = df_f[df_f['glosa'].str.contains("Compra", case=False, na=False)]
-    if sel_as != "Todos": df_f = df_f[df_f['id_asiento'] == sel_as]
-    if busq: df_f = df_f[df_f['cuenta'].str.contains(busq, case=False) | df_f['glosa'].str.contains(busq, case=False)]
 
-    # Formateo visual
     res = []
     ids = df_f['id_asiento'].unique()
     for i, id_as in enumerate(ids):

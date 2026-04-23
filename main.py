@@ -3,52 +3,33 @@ import sys
 import os
 import pandas as pd
 
-# Configuración de rutas
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-if BASE_DIR not in sys.path:
-    sys.path.append(BASE_DIR)
+# Fix de rutas para que main vea la raíz
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from database import init_db, ejecutar_query
-from modulos import ventas, reportes, auditoria, configuracion, compras 
+from modulos import ventas, reportes, compras, configuracion
 
-st.set_page_config(page_title="Sistema Contable FF", layout="wide", page_icon="📊")
+st.set_page_config(page_title="Sistema Contable FF", layout="wide")
 init_db()
 
-# --- NAVEGACIÓN ---
 st.sidebar.title("🚀 Menú Principal")
-opcion = st.sidebar.radio(
-    "Seleccione un módulo:",
-    ["Inicio / Posición IVA", "Ventas", "Compras", "Libro Diario", "Configuración"]
-)
+opcion = st.sidebar.radio("Seleccione:", ["Inicio", "Ventas", "Compras", "Libro Diario", "Configuración"])
 
-if opcion == "Inicio / Posición IVA":
-    st.title("🏠 Panel de Control: Posición Mensual")
+if opcion == "Inicio":
+    st.title("🏠 Posición Mensual de IVA")
     
-    # Cálculo de IVA desde el Libro Diario
+    # Traemos totales de las cuentas específicas
     df_v = ejecutar_query("SELECT SUM(haber) as debito FROM libro_diario WHERE cuenta = 'IVA DEBITO FISCAL'", fetch=True)
     df_c = ejecutar_query("SELECT SUM(debe) as credito FROM libro_diario WHERE cuenta = 'IVA CREDITO FISCAL'", fetch=True)
     
-    iva_debito = df_v['debito'].iloc[0] if not df_v.empty and df_v['debito'].iloc[0] else 0.0
-    iva_credito = df_c['credito'].iloc[0] if not df_c.empty and df_c['credito'].iloc[0] else 0.0
-    resultado = iva_debito - iva_credito
+    debito = df_v['debito'].iloc[0] or 0.0
+    credito = df_c['credito'].iloc[0] or 0.0
+    saldo = debito - credito
 
-    # Métricas Visuales
     c1, c2, c3 = st.columns(3)
-    c1.metric("IVA Débito (Ventas)", f"$ {iva_debito:,.2f}")
-    c2.metric("IVA Crédito (Compras)", f"$ {iva_credito:,.2f}")
-    
-    if resultado > 0:
-        c3.metric("IVA a Pagar", f"$ {resultado:,.2f}", delta=f"-{resultado:,.2f}", delta_color="inverse")
-    else:
-        c3.metric("Saldo a Favor", f"$ {abs(resultado):,.2f}", delta=f"+{abs(resultado):,.2f}")
-
-    st.divider()
-    st.subheader("Análisis de Saldos")
-    res_data = pd.DataFrame({
-        "Concepto": ["Débito Fiscal", "Crédito Fiscal"],
-        "Monto": [iva_debito, iva_credito]
-    })
-    st.bar_chart(res_data.set_index("Concepto"))
+    c1.metric("IVA Débito (Ventas)", f"$ {debito:,.2f}")
+    c2.metric("IVA Crédito (Compras)", f"$ {credito:,.2f}")
+    c3.metric("Saldo del Mes", f"$ {abs(saldo):,.2f}", delta="A Pagar" if saldo > 0 else "A Favor", delta_color="inverse" if saldo > 0 else "normal")
 
 elif opcion == "Ventas":
     ventas.mostrar_ventas()

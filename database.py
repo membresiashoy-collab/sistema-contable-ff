@@ -8,6 +8,7 @@ DB_PATH = os.path.join(BASE_DIR, "contabilidad_ff.db")
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
+        # Tabla Diario
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS libro_diario (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -19,6 +20,7 @@ def init_db():
                 glosa TEXT
             )
         """)
+        # Tabla Compras
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS compras (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
