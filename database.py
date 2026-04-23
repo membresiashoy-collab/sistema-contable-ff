@@ -20,8 +20,7 @@ def init_db():
                 origen TEXT
             )
         """)
-        # Tabla para registrar qué archivos ya fueron procesados
-        cursor.execute("CREATE TABLE IF NOT EXISTS archivos_cargados (nombre TEXT PRIMARY KEY, fecha_carga TEXT)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS archivos_cargados (nombre TEXT PRIMARY KEY)")
         conn.commit()
 
 def ejecutar_query(query, params=(), fetch=False):
@@ -34,26 +33,18 @@ def ejecutar_query(query, params=(), fetch=False):
         conn.commit()
 
 def es_comprobante_reverso(tipo_str):
-    """ Basado en la tabla de comprobantes de ARCA """
     t = str(tipo_str).upper()
     return any(x in t for x in ["NOTA DE CRÉDITO", "NOTA DE CREDITO", "NC-"])
 
-def archivo_ya_existe(nombre):
+def resetear_sistema():
+    """ Borra TODO: Asientos y registro de archivos """
+    ejecutar_query("DELETE FROM libro_diario")
+    ejecutar_query("DELETE FROM archivos_cargados")
+    ejecutar_query("DELETE FROM sqlite_sequence WHERE name='libro_diario'")
+
+def archivo_procesado(nombre):
     df = ejecutar_query("SELECT nombre FROM archivos_cargados WHERE nombre = ?", (nombre,), fetch=True)
     return not df.empty
 
 def registrar_archivo(nombre):
-    from datetime import datetime
-    ejecutar_query("INSERT INTO archivos_cargados (nombre, fecha_carga) VALUES (?, ?)", (nombre, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-
-def obtener_proximo_asiento():
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT MAX(id_asiento) FROM libro_diario")
-        res = cursor.fetchone()[0]
-        return (res + 1) if res else 1
-
-def eliminar_todo_diario():
-    ejecutar_query("DELETE FROM libro_diario")
-    ejecutar_query("DELETE FROM archivos_cargados")
-    ejecutar_query("DELETE FROM sqlite_sequence WHERE name='libro_diario'")
+    ejecutar_query("INSERT OR REPLACE INTO archivos_cargados (nombre) VALUES (?)", (nombre,))
