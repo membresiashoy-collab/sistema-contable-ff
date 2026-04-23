@@ -15,22 +15,31 @@ def ejecutar_query(query, params=(), fetch=False):
         conn.commit()
 
 def init_db():
-    # 1. Creamos las tablas base
+    """Inicializa y repara la estructura de la base de datos."""
+    # Creamos tablas base si no existen
     ejecutar_query("CREATE TABLE IF NOT EXISTS tabla_comprobantes (codigo INTEGER PRIMARY KEY, descripcion TEXT, es_reverso INTEGER)")
     ejecutar_query("CREATE TABLE IF NOT EXISTS libro_diario (id INTEGER PRIMARY KEY AUTOINCREMENT, id_asiento INTEGER, fecha TEXT, cuenta TEXT, debe REAL, haber REAL, glosa TEXT, origen TEXT)")
-    ejecutar_query("CREATE TABLE IF NOT EXISTS historial_archivos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre_archivo TEXT, tipo TEXT, registros INTEGER)")
+    ejecutar_query("CREATE TABLE IF NOT EXISTS historial_archivos (id INTEGER PRIMARY KEY AUTOINCREMENT)")
 
-    # 2. PARCHE DE EMERGENCIA: Agregamos la columna fecha_proceso si no existe
-    try:
-        ejecutar_query("ALTER TABLE historial_archivos ADD COLUMN fecha_proceso TEXT")
-    except:
-        # Si ya existe, SQLite dará error y simplemente lo ignoramos
-        pass
+    # REPARACIÓN DE COLUMNAS: Agregamos una por una por si faltan
+    columnas_historial = [
+        ("nombre_archivo", "TEXT"),
+        ("tipo", "TEXT"),
+        ("registros", "INTEGER"),
+        ("fecha_proceso", "TEXT")
+    ]
+    
+    for col, tipo in columnas_historial:
+        try:
+            ejecutar_query(f"ALTER TABLE historial_archivos ADD COLUMN {col} {tipo}")
+        except:
+            pass # Si ya existe, no hace nada
 
 def registrar_archivo(nombre, tipo, cantidad):
     from datetime import datetime
     ahora = datetime.now().strftime("%d/%m/%Y %H:%M")
-    ejecutar_query("INSERT INTO historial_archivos (fecha_proceso, nombre_archivo, tipo, registros) VALUES (?,?,?,?)", (ahora, nombre, tipo, cantidad))
+    ejecutar_query("INSERT INTO historial_archivos (nombre_archivo, tipo, registros, fecha_proceso) VALUES (?,?,?,?)", 
+                   (nombre, tipo, cantidad, ahora))
 
 def es_reverso(tipo_str):
     t = str(tipo_str).upper()
