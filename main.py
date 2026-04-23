@@ -1,32 +1,29 @@
 import streamlit as st
-from database import init_db, ejecutar_query
-from modulos import ventas, reportes
+from database import init_db
+# 1. Asegúrate de importar el nuevo módulo aquí
+from modulos import ventas, reportes, configuracion 
 
-# Configuración y estilos
-st.set_page_config(page_title="Sistema FF", layout="wide", page_icon="📈")
+st.set_page_config(page_title="Sistema Contable FF", layout="wide")
 init_db()
 
-# Menú de Navegación Profesional
 st.sidebar.title("🚀 Gestión Contable")
-menu = st.sidebar.radio("Módulos:", 
-    ["Inicio", "Importar Ventas ARCA", "Libro Diario", "Balance y Saldos", "Configuración"])
+# 2. Agrega "Configuración" a la lista de radio
+opcion = st.sidebar.radio("Ir a:", 
+    ["Inicio", "Importar Ventas ARCA", "Libro Diario", "Sumas y Saldos", "Configuración"])
 
-if menu == "Inicio":
+if opcion == "Inicio":
     st.title("Sistema Contable Automatizado")
-    st.write("Bienvenido. Este sistema procesa comprobantes de ARCA y genera asientos automáticos.")
+    st.info("Paso 1: Ve a 'Configuración' y carga tu Plan de Cuentas.")
 
-elif menu == "Importar Ventas ARCA":
+elif opcion == "Importar Ventas ARCA":
     ventas.mostrar_ventas()
 
-elif menu == "Libro Diario":
+elif opcion == "Libro Diario":
     reportes.mostrar_diario()
 
-elif menu == "Balance y Saldos":
+elif opcion == "Sumas y Saldos":
     reportes.mostrar_balance()
 
-elif menu == "Configuración":
-    st.title("⚙️ Mantenimiento")
-    st.warning("Esta acción borrará todos los asientos generados.")
-    if st.button("🗑️ Limpiar Libro Diario"):
-        ejecutar_query("DELETE FROM libro_diario")
-        st.success("Base de datos reseteada con éxito.")
+# 3. Este bloque es el que hace que aparezca el contenido al hacer clic
+elif opcion == "Configuración":
+    configuracion.mostrar_configuracion()
