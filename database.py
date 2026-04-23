@@ -1,15 +1,13 @@
 import sqlite3
 import pandas as pd
-import os
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "contabilidad_ff.db")
+# Usamos un nombre directo para que lo encuentres fácil en tu carpeta
+DB_PATH = "contabilidad_ff.db"
 
 def init_db():
-    """Crea la base de datos de cero con la estructura correcta."""
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        # Eliminamos lo viejo para limpiar cualquier error anterior
+        # Borramos y recreamos para limpiar cualquier error de "ceros"
         cursor.execute("DROP TABLE IF EXISTS libro_diario")
         cursor.execute("""
             CREATE TABLE libro_diario (
