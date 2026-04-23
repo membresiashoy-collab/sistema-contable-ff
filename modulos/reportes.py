@@ -1,4 +1,23 @@
-with tab2:
+import streamlit as st
+import pandas as pd
+from database import ejecutar_query
+
+def mostrar_reportes():
+    st.title("📑 Reportes Contables Integrales")
+    
+    # Primero creamos las pestañas
+    tab1, tab2, tab3 = st.tabs(["Libro Diario", "Libro Mayor", "Sumas y Saldos"])
+
+    with tab1:
+        st.subheader("📓 Libro Diario")
+        query = "SELECT id, fecha, cuenta, debe, haber, glosa FROM libro_diario ORDER BY id DESC"
+        diario = ejecutar_query(query, fetch=True)
+        if not diario.empty:
+            st.dataframe(diario, use_container_width=True)
+        else:
+            st.warning("El Libro Diario está vacío.")
+
+    with tab2:
         st.subheader("🔍 Libro Mayor")
         cuentas_query = "SELECT DISTINCT cuenta FROM libro_diario"
         cuentas = ejecutar_query(cuentas_query, fetch=True)
@@ -13,8 +32,28 @@ with tab2:
             saldo = total_debe - total_haber
             
             col1, col2 = st.columns(2)
-            # AQUÍ ESTABA EL ERROR: ahora tiene la 'f' de float
             col1.metric("Total Debe", f"$ {total_debe:,.2f}")
             col2.metric("Saldo Actual", f"$ {saldo:,.2f}")
         else:
             st.info("No hay movimientos para mostrar.")
+
+    with tab3:
+        st.subheader("⚖️ Balance de Sumas y Saldos")
+        balance_query = """
+            SELECT cuenta, 
+                   SUM(debe) as "Suma Debe", 
+                   SUM(haber) as "Suma Haber",
+                   (SUM(debe) - SUM(haber)) as "Saldo"
+            FROM libro_diario 
+            GROUP BY cuenta
+        """
+        balance = ejecutar_query(balance_query, fetch=True)
+        if not balance.empty:
+            st.dataframe(balance, use_container_width=True)
+            
+            t_debe = balance['Suma Debe'].sum()
+            t_haber = balance['Suma Haber'].sum()
+            if abs(t_debe - t_haber) < 0.01:
+                st.success(f"✅ Balance Cuadrado: $ {t_debe:,.2f}")
+            else:
+                st.error(f"❌ Diferencia en Balance: {t_debe - t_haber:,.2f}")
