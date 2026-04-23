@@ -19,22 +19,13 @@ def init_db():
                 glosa TEXT
             )
         """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS compras (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                fecha TEXT,
-                proveedor TEXT,
-                neto REAL,
-                iva REAL,
-                total REAL
-            )
-        """)
         conn.commit()
 
 def ejecutar_query(query, params=(), fetch=False):
     with sqlite3.connect(DB_PATH) as conn:
         if fetch:
-            return pd.read_sql_query(query, conn, params=params)
+            try: return pd.read_sql_query(query, conn, params=params)
+            except: return pd.DataFrame()
         cursor = conn.cursor()
         cursor.execute(query, params)
         conn.commit()
@@ -45,6 +36,13 @@ def obtener_proximo_asiento():
         cursor.execute("SELECT MAX(id_asiento) FROM libro_diario")
         res = cursor.fetchone()[0]
         return (res + 1) if res else 1
+
+def es_comprobante_reverso(tipo_str):
+    """
+    Consulta si el comprobante es una Nota de Crédito (Reverso contable).
+    """
+    t = str(tipo_str).upper()
+    return "NOTA DE CRÉDITO" in t or "NOTA DE CREDITO" in t or "NC-" in t
 
 def eliminar_todo_diario():
     ejecutar_query("DELETE FROM libro_diario")
