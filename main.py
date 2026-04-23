@@ -2,33 +2,31 @@ import streamlit as st
 from database import init_db, ejecutar_query
 from modulos import ventas, reportes
 
-st.set_page_config(page_title="Sistema FF", layout="wide")
+# Configuración y estilos
+st.set_page_config(page_title="Sistema FF", layout="wide", page_icon="📈")
 init_db()
 
-# Navegación clara y profesional
-st.sidebar.title("📈 Menú Contable")
-menu = st.sidebar.radio("Seleccione módulo:", 
-    ["Inicio", "Importar Ventas", "Libro Diario", "Balance", "Configuración"])
+# Menú de Navegación Profesional
+st.sidebar.title("🚀 Gestión Contable")
+menu = st.sidebar.radio("Módulos:", 
+    ["Inicio", "Importar Ventas ARCA", "Libro Diario", "Balance y Saldos", "Configuración"])
 
 if menu == "Inicio":
-    st.title("Sistema Contable Automatizado FF")
-    st.info("Cargue sus archivos de ARCA en el módulo de Importación.")
+    st.title("Sistema Contable Automatizado")
+    st.write("Bienvenido. Este sistema procesa comprobantes de ARCA y genera asientos automáticos.")
 
-elif menu == "Importar Ventas":
+elif menu == "Importar Ventas ARCA":
     ventas.mostrar_ventas()
 
 elif menu == "Libro Diario":
-    st.title("📓 Libro Diario")
-    df = ejecutar_query("SELECT * FROM libro_diario ORDER BY id DESC", fetch=True)
-    st.dataframe(df, use_container_width=True)
+    reportes.mostrar_diario()
 
-elif menu == "Balance":
-    st.title("⚖️ Sumas y Saldos")
-    sql = "SELECT cuenta, SUM(debe) as Debe, SUM(haber) as Haber, (SUM(debe)-SUM(haber)) as Saldo FROM libro_diario GROUP BY cuenta"
-    st.dataframe(ejecutar_query(sql, fetch=True), use_container_width=True)
+elif menu == "Balance y Saldos":
+    reportes.mostrar_balance()
 
 elif menu == "Configuración":
     st.title("⚙️ Mantenimiento")
-    if st.button("🗑️ Vaciar todos los registros"):
+    st.warning("Esta acción borrará todos los asientos generados.")
+    if st.button("🗑️ Limpiar Libro Diario"):
         ejecutar_query("DELETE FROM libro_diario")
-        st.success("Sistema reseteado.")
+        st.success("Base de datos reseteada con éxito.")

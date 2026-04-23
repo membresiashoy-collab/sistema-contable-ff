@@ -4,34 +4,29 @@ import io
 from database import ejecutar_query
 
 def limpiar_num(valor):
+    """Limpia formatos regionales de moneda (ej: 1.250,50 -> 1250.50)"""
     if pd.isna(valor) or valor == "": return 0.0
-    # Quitamos cualquier carácter que no sea número, coma o punto
     s = str(valor).replace('.', '').replace(',', '.')
     try: return float(s)
     except: return 0.0
 
 def mostrar_ventas():
-    st.title("📂 Carga Profesional de Ventas")
+    st.title("📂 Procesamiento con Plan de Cuentas")
     archivo = st.file_uploader("Subir CSV de ARCA", type=["csv"])
     
     if archivo:
         try:
-            # LEER ARCHIVO COMO TEXTO PARA LIMPIARLO
-            contenido = archivo.read().decode('latin-1')
-            # Quitamos las comillas dobles que causan el error de claves
-            contenido_limpio = contenido.replace('"', '')
+            # Leemos y limpiamos comillas dobles del archivo crudo
+            contenido = archivo.read().decode('latin-1').replace('"', '')
+            df = pd.read_csv(io.StringIO(contenido), sep=';')
             
-            # Convertimos el texto limpio de nuevo a un formato que Pandas entienda
-            df = pd.read_csv(io.StringIO(contenido_limpio), sep=';')
-            
-            st.write("### ✅ Archivo interpretado correctamente")
+            st.success("Archivo vinculado al Plan de Cuentas con éxito.")
             st.dataframe(df.head(3))
 
-            if st.button("🚀 Procesar Asientos Contables"):
+            if st.button("🚀 Generar Asientos Contables"):
                 count = 0
                 for _, fila in df.iterrows():
-                    # Usamos ILOC (posición) para que no importe cómo se llame la columna
-                    # 0=Fecha, 8=Receptor, 22=Neto, 26=IVA, 27=Total
+                    # Mapeo por posición fija (0: Fecha, 8: Receptor, 22: Neto, 26: IVA, 27: Total)
                     f = fila.iloc[0]
                     r = fila.iloc[8]
                     n = limpiar_num(fila.iloc[22])
@@ -40,12 +35,22 @@ def mostrar_ventas():
 
                     glosa = f"Venta s/Fac. ARCA - {r}"
                     
-                    # Partida Doble
-                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", (f, "Caja/Clientes", t, 0, glosa))
-                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", (f, "Ventas Gravadas", 0, n, glosa))
+                    # --- GENERACIÓN DE ASIENTOS (PARTIDA DOBLE) ---
+                    
+                    # 1. Al DEBE: Cuenta de Activo según Plan de Cuentas
+                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", 
+                                   (f, "DEUDORES POR VENTAS", t, 0, glosa))
+                    
+                    # 2. Al HABER: Cuenta de Ingresos
+                    ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", 
+                                   (f, "VENTAS GRAVADAS", 0, n, glosa))
+                    
+                    # 3. Al HABER: Cuenta de Pasivo Fiscal
                     if i > 0:
-                        ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", (f, "IVA Débito Fiscal", 0, i, glosa))
+                        ejecutar_query("INSERT INTO libro_diario (fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?)", 
+                                       (f, "IVA DEBITO FISCAL", 0, i, glosa))
                     count += 1
-                st.success(f"✅ Se generaron {count} asientos con éxito.")
+                
+                st.success(f"✅ ¡Proceso Completo! Se integraron {count} facturas al Libro Diario.")
         except Exception as e:
-            st.error(f"Error crítico de lectura: {e}")
+            st.error(f"Error al procesar el archivo: {e}")

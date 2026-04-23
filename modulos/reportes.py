@@ -2,58 +2,31 @@ import streamlit as st
 import pandas as pd
 from database import ejecutar_query
 
-def mostrar_reportes():
-    st.title("📑 Reportes Contables Integrales")
+def mostrar_diario():
+    st.title("📓 Libro Diario")
+    st.subheader("Registros Cronológicos")
+    # Ordenamos por fecha (campo TEXT en formato YYYY-MM-DD o similar)
+    query = "SELECT fecha, cuenta, debe, haber, glosa FROM libro_diario ORDER BY fecha ASC, id ASC"
+    df = ejecutar_query(query, fetch=True)
     
-    # Primero creamos las pestañas
-    tab1, tab2, tab3 = st.tabs(["Libro Diario", "Libro Mayor", "Sumas y Saldos"])
+    if not df.empty:
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("El Libro Diario está vacío. Por favor, cargue ventas primero.")
 
-    with tab1:
-        st.subheader("📓 Libro Diario")
-        query = "SELECT id, fecha, cuenta, debe, haber, glosa FROM libro_diario ORDER BY id DESC"
-        diario = ejecutar_query(query, fetch=True)
-        if not diario.empty:
-            st.dataframe(diario, use_container_width=True)
-        else:
-            st.warning("El Libro Diario está vacío.")
-
-    with tab2:
-        st.subheader("🔍 Libro Mayor")
-        cuentas_query = "SELECT DISTINCT cuenta FROM libro_diario"
-        cuentas = ejecutar_query(cuentas_query, fetch=True)
-        
-        if not cuentas.empty:
-            cuenta_sel = st.selectbox("Seleccione una cuenta:", cuentas['cuenta'])
-            mayor = ejecutar_query("SELECT fecha, glosa, debe, haber FROM libro_diario WHERE cuenta = ?", (cuenta_sel,), fetch=True)
-            st.table(mayor)
-            
-            total_debe = mayor['debe'].sum()
-            total_haber = mayor['haber'].sum()
-            saldo = total_debe - total_haber
-            
-            col1, col2 = st.columns(2)
-            col1.metric("Total Debe", f"$ {total_debe:,.2f}")
-            col2.metric("Saldo Actual", f"$ {saldo:,.2f}")
-        else:
-            st.info("No hay movimientos para mostrar.")
-
-    with tab3:
-        st.subheader("⚖️ Balance de Sumas y Saldos")
-        balance_query = """
-            SELECT cuenta, 
-                   SUM(debe) as "Suma Debe", 
-                   SUM(haber) as "Suma Haber",
-                   (SUM(debe) - SUM(haber)) as "Saldo"
-            FROM libro_diario 
-            GROUP BY cuenta
-        """
-        balance = ejecutar_query(balance_query, fetch=True)
-        if not balance.empty:
-            st.dataframe(balance, use_container_width=True)
-            
-            t_debe = balance['Suma Debe'].sum()
-            t_haber = balance['Suma Haber'].sum()
-            if abs(t_debe - t_haber) < 0.01:
-                st.success(f"✅ Balance Cuadrado: $ {t_debe:,.2f}")
-            else:
-                st.error(f"❌ Diferencia en Balance: {t_debe - t_haber:,.2f}")
+def mostrar_balance():
+    st.title("⚖️ Balance de Sumas y Saldos")
+    sql = """
+        SELECT cuenta, 
+               SUM(debe) as "Suma Debe", 
+               SUM(haber) as "Suma Haber",
+               (SUM(debe) - SUM(haber)) as "Saldo"
+        FROM libro_diario 
+        GROUP BY cuenta
+    """
+    df = ejecutar_query(sql, fetch=True)
+    if not df.empty:
+        st.dataframe(df, use_container_width=True)
+        # Validación de partida doble
+        if abs(df["Suma Debe"].sum() - df["Suma Haber"].sum()) < 0.01:
+            st.success(f"Balance Cuadrado: $ {df['Suma Debe'].sum():,.2f}")
