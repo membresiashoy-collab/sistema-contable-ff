@@ -8,7 +8,6 @@ DB_PATH = os.path.join(BASE_DIR, "contabilidad_ff.db")
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        # Tabla Diario
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS libro_diario (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20,7 +19,6 @@ def init_db():
                 glosa TEXT
             )
         """)
-        # Tabla Compras
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS compras (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,8 +34,7 @@ def init_db():
 def ejecutar_query(query, params=(), fetch=False):
     with sqlite3.connect(DB_PATH) as conn:
         if fetch:
-            try: return pd.read_sql_query(query, conn, params=params)
-            except: return pd.DataFrame()
+            return pd.read_sql_query(query, conn, params=params)
         cursor = conn.cursor()
         cursor.execute(query, params)
         conn.commit()
@@ -52,4 +49,3 @@ def obtener_proximo_asiento():
 def eliminar_todo_diario():
     ejecutar_query("DELETE FROM libro_diario")
     ejecutar_query("DELETE FROM sqlite_sequence WHERE name='libro_diario'")
-    ejecutar_query("DELETE FROM compras")
