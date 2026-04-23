@@ -3,112 +3,118 @@ import pandas as pd
 import sys
 import os
 import io
-from fpdf import FPDF # Asegúrate de agregar fpdf2 a tu requirements.txt
+from fpdf import FPDF
 
-# Parche de rutas
+# Configuración de rutas
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from database import ejecutar_query, eliminar_todo_diario
 
 def generar_pdf(df):
+    # Filtrar el DataFrame para que el PDF NO tenga las filas de separación "---"
+    df_limpio = df[df['Asiento'] != "---"].copy()
+    
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(190, 10, "Libro Diario - Sistema Contable FF", ln=True, align="C")
-    pdf.ln(10)
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(190, 10, "LIBRO DIARIO - SISTEMA CONTABLE FF", ln=True, align="C")
+    pdf.ln(5)
     
-    # Encabezados
-    pdf.set_font("Arial", "B", 10)
-    pdf.cell(20, 10, "Asiento", 1)
-    pdf.cell(30, 10, "Fecha", 1)
-    pdf.cell(50, 10, "Cuenta", 1)
-    pdf.cell(30, 10, "Debe", 1)
-    pdf.cell(30, 10, "Haber", 1)
-    pdf.ln()
+    # Encabezados de tabla
+    pdf.set_font("Arial", "B", 9)
+    pdf.set_fill_color(200, 200, 200)
+    pdf.cell(15, 8, "Asn.", 1, 0, "C", True)
+    pdf.cell(25, 8, "Fecha", 1, 0, "C", True)
+    pdf.cell(60, 8, "Cuenta", 1, 0, "C", True)
+    pdf.cell(30, 8, "Debe", 1, 0, "C", True)
+    pdf.cell(30, 8, "Haber", 1, 0, "C", True)
+    pdf.cell(30, 8, "Glosa", 1, 1, "C", True)
     
-    # Datos
-    pdf.set_font("Arial", "", 9)
-    for _, r in df.iterrows():
-        if r['Asiento'] != "---":
-            pdf.cell(20, 10, str(r['Asiento']), 1)
-            pdf.cell(30, 10, str(r['Fecha']), 1)
-            pdf.cell(50, 10, str(r['Cuenta'])[:25], 1)
-            pdf.cell(30, 10, f"{r['Debe']:,.2f}", 1)
-            pdf.cell(30, 10, f"{r['Haber']:,.2f}", 1)
-            pdf.ln()
-    return pdf.output(dest='S').encode('latin-1')
+    # Filas de datos
+    pdf.set_font("Arial", "", 8)
+    for _, r in df_limpio.iterrows():
+        pdf.cell(15, 7, str(r['Asiento']), 1)
+        pdf.cell(25, 7, str(r['Fecha']), 1)
+        pdf.cell(60, 7, str(r['Cuenta'])[:35], 1)
+        pdf.cell(30, 7, f"{float(r['Debe']):,.2f}", 1, 0, "R")
+        pdf.cell(30, 7, f"{float(r['Haber']):,.2f}", 1, 0, "R")
+        pdf.cell(30, 7, str(r['Glosa'])[:15], 1, 1)
+    
+    # Totales al final del PDF
+    pdf.ln(2)
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(100, 8, "TOTALES GENERALES:", 0, 0, "R")
+    pdf.cell(30, 8, f"{df_limpio['Debe'].sum():,.2f}", 1, 0, "R")
+    pdf.cell(30, 8, f"{df_limpio['Haber'].sum():,.2f}", 1, 1, "R")
+    
+    return pdf.output() # fpdf2 devuelve bytes directamente con .output()
 
 def mostrar_diario():
     st.title("📓 Libro Diario")
 
-    # 1. Obtener datos base
     df_base = ejecutar_query("SELECT id_asiento, fecha, cuenta, debe, haber, glosa FROM libro_diario ORDER BY id_asiento ASC", fetch=True)
 
     if df_base.empty:
         st.info("El Libro Diario está vacío.")
-        if st.button("🗑️ VACIAR DATOS"):
+        if st.button("🗑️ REINICIAR SISTEMA"):
             eliminar_todo_diario()
         return
 
-    # 2. BARRA DE HERRAMIENTAS (Ubicada sobre las X rojas)
-    # Creamos una fila de columnas para que todo esté alineado arriba de la tabla
-    col_f1, col_f2, col_btn1, col_btn2, col_btn3, col_btn4 = st.columns([1.5, 2, 0.8, 0.8, 0.8, 1.2])
+    # BARRA DE HERRAMIENTAS SOBRE LA TABLA
+    c1, c2, c3, c4, c5, c6 = st.columns([1.5, 2, 0.8, 0.8, 0.8, 1.2])
 
-    with col_f1:
+    with c1:
         asientos = ["Todos"] + sorted(df_base['id_asiento'].unique().tolist())
-        filtro_as = st.selectbox("Asiento:", asientos, label_visibility="collapsed")
+        f_as = st.selectbox("Asiento", asientos, label_visibility="collapsed")
+    with c2:
+        busq = st.text_input("Buscador...", label_visibility="collapsed")
 
-    with col_f2:
-        busqueda = st.text_input("Buscar cuenta/glosa...", label_visibility="collapsed")
+    # Aplicar Filtros
+    df_f = df_base.copy()
+    if f_as != "Todos": df_f = df_f[df_f['id_asiento'] == f_as]
+    if busq: df_f = df_f[df_f['cuenta'].str.contains(busq, case=False) | df_f['glosa'].str.contains(busq, case=False)]
 
-    # Filtrado lógico
-    df_filtrado = df_base.copy()
-    if filtro_as != "Todos":
-        df_filtrado = df_filtrado[df_filtrado['id_asiento'] == filtro_as]
-    if busqueda:
-        df_filtrado = df_filtrado[df_filtrado['cuenta'].str.contains(busqueda, case=False) | df_filtrado['glosa'].str.contains(busqueda, case=False)]
+    # Construcción de la tabla para pantalla (con separadores visuales)
+    res_pantalla = []
+    ids = df_f['id_asiento'].unique()
+    for i, id_as in enumerate(ids):
+        filas = df_f[df_f['id_asiento'] == id_as]
+        for _, r in filas.iterrows():
+            res_pantalla.append({
+                "Asiento": int(r['id_asiento']), "Fecha": r['fecha'],
+                "Cuenta": r['cuenta'], "Debe": r['debe'], "Haber": r['haber'], "Glosa": r['glosa']
+            })
+        if i < len(ids) - 1:
+            # Aquí cambiamos los ceros por None para que no ensucien la vista
+            res_pantalla.append({"Asiento": "---", "Fecha": "---", "Cuenta": "-----------", "Debe": None, "Haber": None, "Glosa": "---"})
+    
+    df_visual = pd.DataFrame(res_pantalla)
 
-    # 3. BOTONES DE ACCIÓN (Compactos)
-    with col_btn1:
+    # BOTONES DE ACCIÓN
+    with c3:
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine='xlsxwriter') as w:
+            df_f.to_excel(w, index=False)
+        st.download_button("📊 Excel", buf.getvalue(), "diario.xlsx")
+
+    with c4:
         try:
-            buf = io.BytesIO()
-            with pd.ExcelWriter(buf, engine='xlsxwriter') as w:
-                df_filtrado.to_excel(w, index=False)
-            st.download_button("📊 Excel", buf.getvalue(), "diario.xlsx")
-        except: st.error("Excel Error")
+            pdf_data = generar_pdf(df_visual)
+            st.download_button("📕 PDF", pdf_data, "diario.pdf", "application/pdf")
+        except Exception as e:
+            st.error("Error PDF")
 
-    with col_btn2:
-        try:
-            # Procesamos el DF para el PDF (quitando filas de separación)
-            pdf_bytes = generar_pdf(df_filtrado)
-            st.download_button("📕 PDF", pdf_bytes, "diario.pdf", "application/pdf")
-        except: st.write("📝 PDF") # Fallback si no está fpdf
+    with c5:
+        st.download_button("📄 CSV", df_f.to_csv(index=False).encode('utf-8'), "diario.csv")
 
-    with col_btn3:
-        csv = df_filtrado.to_csv(index=False).encode('utf-8')
-        st.download_button("📄 CSV", csv, "diario.csv")
-
-    with col_btn4:
+    with c6:
         if st.button("🗑️ VACIAR", use_container_width=True):
             eliminar_todo_diario()
             st.rerun()
 
-    # 4. TABLA DE RESULTADOS
-    res = []
-    ids_unicos = df_filtrado['id_asiento'].unique()
-    for i, id_as in enumerate(ids_unicos):
-        asiento_actual = df_filtrado[df_filtrado['id_asiento'] == id_as]
-        for _, r in asiento_actual.iterrows():
-            res.append({
-                "Asiento": int(r['id_asiento']), "Fecha": r['fecha'],
-                "Cuenta": r['cuenta'], "Debe": r['debe'],
-                "Haber": r['haber'], "Glosa": r['glosa']
-            })
-        if i < len(ids_unicos) - 1:
-            res.append({"Asiento": "---", "Fecha": "---", "Cuenta": "-----------", "Debe": 0, "Haber": 0, "Glosa": "---"})
-    
-    st.dataframe(pd.DataFrame(res), use_container_width=True, hide_index=True)
+    # Mostrar Tabla
+    st.dataframe(df_visual, use_container_width=True, hide_index=True)
 
-    # Totales
+    # Totales inferiores
     t1, t2 = st.columns(2)
-    t1.metric("Total DEBE", f"$ {df_filtrado['debe'].sum():,.2f}")
-    t2.metric("Total HABER", f"$ {df_filtrado['haber'].sum():,.2f}")
+    t1.metric("Total DEBE", f"$ {df_f['debe'].sum():,.2f}")
+    t2.metric("Total HABER", f"$ {df_f['haber'].sum():,.2f}")
