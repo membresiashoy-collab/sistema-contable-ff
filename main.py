@@ -10,42 +10,42 @@ st.sidebar.title("🚀 Navegación")
 opcion = st.sidebar.radio("Ir a:", ["🏠 Inicio", "📂 Ventas", "📓 Libro Diario", "⚙️ Configuración"])
 
 if opcion == "🏠 Inicio":
-    st.title("📊 Dashboard de Gestión")
+    st.title("📊 Resumen Ejecutivo de Ventas")
     
-    # 1. Verificación de PDC
-    check_pdc = ejecutar_query("SELECT COUNT(*) as total FROM plan_cuentas", fetch=True)
-    if check_pdc.iloc[0]['total'] == 0:
-        st.warning("⚠️ Plan de Cuentas no detectado. Cargue uno en Configuración.")
-    
-    # 2. Lógica del Dashboard (Ventas Mensuales)
-    st.subheader("📈 Ventas Mensuales (Neto)")
-    # Buscamos en el diario los movimientos al haber de la cuenta 'VENTAS'
-    query_ventas = """
-        SELECT SUBSTR(fecha, 4, 7) as mes, SUM(haber - debe) as neto
-        FROM libro_diario 
-        WHERE cuenta LIKE '%VENTAS%'
-        GROUP BY mes
-        ORDER BY mes ASC
+    # Query para obtener Neto, IVA y Total agrupado por mes
+    # Se calcula: Neto (Ventas), IVA (IVA DF), Total (Deudores)
+    query_stats = """
+        SELECT 
+            SUBSTR(fecha, 4, 7) as Mes,
+            SUM(CASE WHEN cuenta LIKE '%VENTAS%' THEN (haber - debe) ELSE 0 END) as Neto,
+            SUM(CASE WHEN cuenta LIKE '%IVA%' THEN (haber - debe) ELSE 0 END) as IVA,
+            SUM(CASE WHEN cuenta LIKE '%DEUDORES%' OR cuenta LIKE '%CLIENTES%' THEN (debe - haber) ELSE 0 END) as Total
+        FROM libro_diario
+        GROUP BY Mes
+        ORDER BY Mes ASC
     """
-    df_grafico = ejecutar_query(query_ventas, fetch=True)
+    df_stats = ejecutar_query(query_stats, fetch=True)
     
-    if not df_grafico.empty:
-        # Mostramos gráfico de barras
-        st.bar_chart(data=df_grafico, x='mes', y='neto')
+    if not df_stats.empty:
+        # 1. Gráfico Multilineal o de Barras comparativo
+        st.subheader("📈 Evolución Mensual")
+        st.bar_chart(df_stats.set_index('Mes'))
         
-        # Métricas rápidas
-        col1, col2 = st.columns(2)
-        total_acumulado = df_grafico['neto'].sum()
-        col1.metric("Total Ventas Netas", f"$ {total_acumulado:,.2f}")
-        col2.metric("Mes con mayor venta", df_grafico.loc[df_grafico['neto'].idxmax()]['mes'])
+        # 2. Tabla Detallada
+        st.subheader("📋 Detalle por Período")
+        # Formateamos los números para que se entiendan
+        df_display = df_stats.copy()
+        for col in ['Neto', 'IVA', 'Total']:
+            df_display[col] = df_display[col].apply(lambda x: f"$ {x:,.2f}")
+        st.table(df_display)
+        
+        # 3. Métricas Destacadas del mes actual
+        ult_mes = df_stats.iloc[-1]
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"Neto ({ult_mes['Mes']})", f"$ {ult_mes['Neto']:,.2f}")
+        c2.metric(f"IVA ({ult_mes['Mes']})", f"$ {ult_mes['IVA']:,.2f}")
+        c3.metric(f"Total ({ult_mes['Mes']})", f"$ {ult_mes['Total']:,.2f}")
     else:
-        st.info("No hay datos en el Libro Diario para mostrar estadísticas.")
+        st.info("Cargue ventas para visualizar el Dashboard.")
 
-elif opcion == "📂 Ventas":
-    ventas.mostrar_ventas()
-
-elif opcion == "📓 Libro Diario":
-    reportes.mostrar_diario()
-
-elif opcion == "⚙️ Configuración":
-    configuracion.mostrar_configuracion()
+# ... resto de las opciones (Ventas, Diario, Configuración) ...
