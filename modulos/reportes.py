@@ -4,7 +4,7 @@ import sys
 import os
 import io
 
-# Parche de rutas para encontrar database.py
+# Parche de rutas para asegurar que encuentre database.py
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from database import ejecutar_query, eliminar_todo_diario
 
@@ -17,44 +17,46 @@ def mostrar_diario():
             eliminar_todo_diario()
             st.rerun()
     
-    # Obtenemos los datos ordenados
+    # Traemos los datos de la DB
     df = ejecutar_query("SELECT id_asiento, fecha, cuenta, debe, haber, glosa FROM libro_diario ORDER BY id_asiento ASC", fetch=True)
 
     if not df.empty:
-        # --- Lógica de Exportación ---
+        # --- SECCIÓN DE EXPORTACIÓN ---
         with col2:
             try:
+                import xlsxwriter
                 buffer = io.BytesIO()
-                # Creamos un Excel limpio para el usuario
+                # Generamos el Excel con los datos puros
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    df.to_excel(writer, index=False, sheet_name='Diario')
+                    df.to_excel(writer, index=False, sheet_name='LibroDiario')
                 
                 st.download_button(
-                    label="📥 Descargar Excel (DD/MM/YYYY)",
+                    label="📥 Descargar reporte (Excel)",
                     data=buffer.getvalue(),
-                    file_name="libro_diario_ff.xlsx",
+                    file_name="libro_diario_sistema.xlsx",
                     mime="application/vnd.ms-excel"
                 )
-            except Exception as e:
-                st.error("Para exportar a Excel, asegúrate de tener 'xlsxwriter' instalado.")
+            except ImportError:
+                st.error("⚠️ Falta instalar 'xlsxwriter'. Agregalo a tu requirements.txt.")
 
-        # --- Lógica de Visualización (Sin movimientos fantasma) ---
+        # --- SECCIÓN DE VISUALIZACIÓN (Sin filas fantasma) ---
         res = []
         ids_unicos = df['id_asiento'].unique()
         
         for i, id_as in enumerate(ids_unicos):
-            filas_asiento = df[df['id_asiento'] == id_as]
-            for _, r in filas_asiento.iterrows():
+            asiento_actual = df[df['id_asiento'] == id_as]
+            for _, r in asiento_actual.iterrows():
                 res.append({
                     "Asiento": int(r['id_asiento']),
-                    "Fecha": r['fecha'], # Formato DD/MM/YYYY heredado de la carga
+                    "Fecha": r['fecha'], # Formato DD/MM/YYYY
                     "Cuenta": r['cuenta'],
                     "Debe": r['debe'],
                     "Haber": r['haber'],
                     "Glosa": r['glosa']
                 })
             
-            # Solo agregar separador si hay más asientos después
+            # Solo agregamos separador si NO es el último asiento
+            # Esto evita los guiones y ceros al final de la tabla
             if i < len(ids_unicos) - 1:
                 res.append({
                     "Asiento": "---", "Fecha": "---", "Cuenta": "-----------",
@@ -63,9 +65,9 @@ def mostrar_diario():
         
         st.dataframe(pd.DataFrame(res), use_container_width=True, hide_index=True)
         
-        # Totales al final de la tabla
-        c1, c2 = st.columns(2)
-        c1.metric("Total Debe", f"$ {df['debe'].sum():,.2f}")
-        c2.metric("Total Haber", f"$ {df['haber'].sum():,.2f}")
+        # Resumen de totales
+        c_debe, c_haber = st.columns(2)
+        c_debe.metric("Total DEBE", f"$ {df['debe'].sum():,.2f}")
+        c_haber.metric("Total HABER", f"$ {df['haber'].sum():,.2f}")
     else:
-        st.info("No hay asientos registrados actualmente.")
+        st.info("El Libro Diario está vacío.")
