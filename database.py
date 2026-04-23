@@ -15,11 +15,36 @@ def ejecutar_query(query, params=(), fetch=False):
         cursor.execute(query, params)
         conn.commit()
 
+def init_db():
+    """Inicializa y repara la estructura de la base de datos."""
+    # Tablas base
+    ejecutar_query("CREATE TABLE IF NOT EXISTS tabla_comprobantes (codigo INTEGER PRIMARY KEY, descripcion TEXT, es_reverso INTEGER)")
+    ejecutar_query("CREATE TABLE IF NOT EXISTS libro_diario (id INTEGER PRIMARY KEY AUTOINCREMENT, id_asiento INTEGER, fecha TEXT, cuenta TEXT, debe REAL, haber REAL, glosa TEXT, origen TEXT)")
+    ejecutar_query("CREATE TABLE IF NOT EXISTS historial_archivos (id INTEGER PRIMARY KEY AUTOINCREMENT)")
+
+    # Reparación de columnas por si faltan
+    columnas = [
+        ("nombre_archivo", "TEXT"),
+        ("tipo", "TEXT"),
+        ("registros", "INTEGER"),
+        ("fecha_proceso", "TEXT")
+    ]
+    for col, tipo in columnas:
+        try: ejecutar_query(f"ALTER TABLE historial_archivos ADD COLUMN {col} {tipo}")
+        except: pass
+
 def registrar_archivo(nombre, tipo, cantidad):
-    """Guarda constancia del archivo procesado."""
     ahora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    # Aseguramos que la tabla tenga las columnas correctas
     ejecutar_query("INSERT INTO historial_archivos (nombre_archivo, tipo, registros, fecha_proceso) VALUES (?,?,?,?)", 
                    (nombre, tipo, cantidad, ahora))
 
-# Mantener init_db, es_reverso y proximo_asiento igual que en el mensaje anterior
+def es_reverso(tipo_str):
+    t = str(tipo_str).upper()
+    df = ejecutar_query("SELECT es_reverso FROM tabla_comprobantes WHERE ? LIKE '%' || descripcion || '%'", (t,), fetch=True)
+    if not df.empty: return df['es_reverso'].iloc[0] == 1
+    return "CREDITO" in t or "CRÉDITO" in t
+
+def proximo_asiento():
+    df = ejecutar_query("SELECT MAX(id_asiento) as m FROM libro_diario", fetch=True)
+    if df.empty or pd.isnull(df['m'].iloc[0]): return 1
+    return int(df['m'].iloc[0]) + 1
