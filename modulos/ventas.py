@@ -3,10 +3,14 @@ import pandas as pd
 import database
 
 def mostrar_ventas():
-    st.title("📤 Ventas (Portal IVA ARCA)")
-    archivo = st.file_uploader("Subir CSV de Ventas", type=["csv"])
+    st.title("📤 Registro de Ventas")
+    archivo = st.file_uploader("Subir CSV de Ventas (Portal IVA)", type=["csv"])
 
     if archivo:
+        if database.archivo_ya_existe(archivo.name):
+            st.warning(f"⚠️ El archivo '{archivo.name}' ya fue procesado anteriormente.")
+            if not st.checkbox("Procesar de todos modos"): return
+
         try:
             df = pd.read_csv(archivo, sep=';', decimal=',', encoding='latin-1')
         except:
@@ -14,7 +18,7 @@ def mostrar_ventas():
         
         df.columns = [c.strip().replace('"', '') for c in df.columns]
 
-        if st.button("🚀 Procesar según Tabla de Comprobantes"):
+        if st.button("🚀 Procesar Ventas"):
             asiento = database.obtener_proximo_asiento()
             for _, r in df.iterrows():
                 try:
@@ -27,17 +31,18 @@ def mostrar_ventas():
                     glosa = f"{tipo}: {cliente}"
 
                     if database.es_comprobante_reverso(tipo):
-                        # REVERSO: Nota de Crédito Ventas
-                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento, fecha, "VENTAS", neto, 0, glosa))
+                        # REVERSO NC: Venta al Debe, Deudor al Haber
+                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, fecha, "VENTAS", neto, 0, glosa, "VENTAS"))
                         if iva > 0:
-                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento, fecha, "IVA DEBITO FISCAL", iva, 0, glosa))
-                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento, fecha, "DEUDORES POR VENTAS", 0, tot, glosa))
+                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, fecha, "IVA DEBITO FISCAL", iva, 0, glosa, "VENTAS"))
+                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, fecha, "DEUDORES POR VENTAS", 0, tot, glosa, "VENTAS"))
                     else:
-                        # NORMAL: Factura Ventas
-                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento, fecha, "DEUDORES POR VENTAS", tot, 0, glosa))
-                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento, fecha, "VENTAS", 0, neto, glosa))
+                        # NORMAL FACTURA: Deudor al Debe, Venta al Haber
+                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, fecha, "DEUDORES POR VENTAS", tot, 0, glosa, "VENTAS"))
+                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, fecha, "VENTAS", 0, neto, glosa, "VENTAS"))
                         if iva > 0:
-                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento, fecha, "IVA DEBITO FISCAL", 0, iva, glosa))
+                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, fecha, "IVA DEBITO FISCAL", 0, iva, glosa, "VENTAS"))
                     asiento += 1
                 except: continue
-            st.success("Ventas procesadas correctamente.")
+            database.registrar_archivo(archivo.name)
+            st.success("Ventas procesadas y registradas.")

@@ -3,10 +3,14 @@ import pandas as pd
 import database
 
 def mostrar_compras():
-    st.title("📥 Compras (Portal IVA ARCA)")
+    st.title("📥 Registro de Compras")
     archivo = st.file_uploader("Subir CSV de Compras", type=["csv"])
 
     if archivo:
+        if database.archivo_ya_existe(archivo.name):
+            st.error(f"El archivo '{archivo.name}' ya se encuentra en la base de datos.")
+            return
+
         try:
             df = pd.read_csv(archivo, sep=';', decimal=',', encoding='latin-1')
         except:
@@ -14,7 +18,7 @@ def mostrar_compras():
         
         df.columns = [c.strip().replace('"', '') for c in df.columns]
 
-        if st.button("🚀 Procesar según Tabla de Comprobantes"):
+        if st.button("🚀 Procesar Compras"):
             asiento = database.obtener_proximo_asiento()
             for _, r in df.iterrows():
                 try:
@@ -25,17 +29,16 @@ def mostrar_compras():
                     glosa = f"{tipo}: {prov}"
 
                     if database.es_comprobante_reverso(tipo):
-                        # REVERSO: Nota de Crédito Compras
-                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento, fecha, "PROVEEDORES", tot, 0, glosa))
-                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento, fecha, "COMPRAS", 0, neto, glosa))
+                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, fecha, "PROVEEDORES", tot, 0, glosa, "COMPRAS"))
+                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, fecha, "COMPRAS", 0, neto, glosa, "COMPRAS"))
                         if iva > 0:
-                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento, fecha, "IVA CREDITO FISCAL", 0, iva, glosa))
+                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, fecha, "IVA CREDITO FISCAL", 0, iva, glosa, "COMPRAS"))
                     else:
-                        # NORMAL: Factura Compras
-                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento, fecha, "COMPRAS", neto, 0, glosa))
+                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, fecha, "COMPRAS", neto, 0, glosa, "COMPRAS"))
                         if iva > 0:
-                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento, fecha, "IVA CREDITO FISCAL", iva, 0, glosa))
-                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa) VALUES (?,?,?,?,?,?)", (asiento, fecha, "PROVEEDORES", 0, tot, glosa))
+                            database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, fecha, "IVA CREDITO FISCAL", iva, 0, glosa, "COMPRAS"))
+                        database.ejecutar_query("INSERT INTO libro_diario (id_asiento, fecha, cuenta, debe, haber, glosa, origen) VALUES (?,?,?,?,?,?,?)", (asiento, fecha, "PROVEEDORES", 0, tot, glosa, "COMPRAS"))
                     asiento += 1
                 except: continue
-            st.success("Compras procesadas correctamente.")
+            database.registrar_archivo(archivo.name)
+            st.success("Compras procesadas.")

@@ -16,9 +16,12 @@ def init_db():
                 cuenta TEXT,
                 debe REAL,
                 haber REAL,
-                glosa TEXT
+                glosa TEXT,
+                origen TEXT
             )
         """)
+        # Tabla para registrar qué archivos ya fueron procesados
+        cursor.execute("CREATE TABLE IF NOT EXISTS archivos_cargados (nombre TEXT PRIMARY KEY, fecha_carga TEXT)")
         conn.commit()
 
 def ejecutar_query(query, params=(), fetch=False):
@@ -30,6 +33,19 @@ def ejecutar_query(query, params=(), fetch=False):
         cursor.execute(query, params)
         conn.commit()
 
+def es_comprobante_reverso(tipo_str):
+    """ Basado en la tabla de comprobantes de ARCA """
+    t = str(tipo_str).upper()
+    return any(x in t for x in ["NOTA DE CRÉDITO", "NOTA DE CREDITO", "NC-"])
+
+def archivo_ya_existe(nombre):
+    df = ejecutar_query("SELECT nombre FROM archivos_cargados WHERE nombre = ?", (nombre,), fetch=True)
+    return not df.empty
+
+def registrar_archivo(nombre):
+    from datetime import datetime
+    ejecutar_query("INSERT INTO archivos_cargados (nombre, fecha_carga) VALUES (?, ?)", (nombre, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+
 def obtener_proximo_asiento():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
@@ -37,13 +53,7 @@ def obtener_proximo_asiento():
         res = cursor.fetchone()[0]
         return (res + 1) if res else 1
 
-def es_comprobante_reverso(tipo_str):
-    """
-    Consulta si el comprobante es una Nota de Crédito (Reverso contable).
-    """
-    t = str(tipo_str).upper()
-    return "NOTA DE CRÉDITO" in t or "NOTA DE CREDITO" in t or "NC-" in t
-
 def eliminar_todo_diario():
     ejecutar_query("DELETE FROM libro_diario")
+    ejecutar_query("DELETE FROM archivos_cargados")
     ejecutar_query("DELETE FROM sqlite_sequence WHERE name='libro_diario'")
