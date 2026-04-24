@@ -78,3 +78,6 @@ elif menu == "Estado de Cargas":
 
 elif menu == "Configuración":
     configuracion.mostrar_configuracion()
+
+elif menu == "Estados Financieros":
+    estados_financieros.mostrar_estados()    
