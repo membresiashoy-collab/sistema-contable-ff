@@ -7,7 +7,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
-from core.database import init_db
+from core.database import init_db, ejecutar_query
 from modulos import ventas, compras, reportes, auditoria, configuracion
 
 st.set_page_config(
@@ -19,8 +19,6 @@ st.set_page_config(
 init_db()
 
 st.sidebar.title("📌 Sistema Contable FF")
-st.sidebar.caption("Versión Profesional")
-
 menu = st.sidebar.radio(
     "Menú",
     [
@@ -34,8 +32,18 @@ menu = st.sidebar.radio(
 )
 
 if menu == "Dashboard":
-    st.title("📊 Dashboard")
-    st.success("Sistema listo para operar.")
+    st.title("📊 Dashboard General")
+
+    df = ejecutar_query("SELECT * FROM libro_diario", fetch=True)
+
+    if df.empty:
+        st.info("Sin movimientos cargados.")
+    else:
+        c1, c2, c3 = st.columns(3)
+
+        c1.metric("Asientos", df["id_asiento"].nunique())
+        c2.metric("Debe", f"$ {df['debe'].sum():,.2f}")
+        c3.metric("Haber", f"$ {df['haber'].sum():,.2f}")
 
 elif menu == "Ventas":
     ventas.mostrar_ventas()
