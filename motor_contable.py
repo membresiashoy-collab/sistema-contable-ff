@@ -15,8 +15,8 @@ def limpiar_num(v):
 
 def obtener_tipo_comprobante(codigo):
     """
-    Busca el código en tabla tipos_comprobantes.
-    Retorna tipo y signo.
+    Busca en tabla tipos_comprobantes.
+    Si no encuentra, toma FACTURA por defecto.
     """
 
     try:
@@ -27,19 +27,20 @@ def obtener_tipo_comprobante(codigo):
         """, (str(codigo),), fetch=True)
 
         if not df.empty:
-            desc = str(df.iloc[0]["descripcion"]).upper()
+
+            descripcion = str(df.iloc[0]["descripcion"]).upper()
             signo = int(df.iloc[0]["signo"])
 
-            if "CREDITO" in desc:
+            if "CREDITO" in descripcion:
                 tipo = "NC"
 
-            elif "DEBITO" in desc:
+            elif "DEBITO" in descripcion:
                 tipo = "ND"
 
             else:
                 tipo = "FACTURA"
 
-            return tipo, signo, desc
+            return tipo, signo, descripcion
 
     except:
         pass
@@ -65,7 +66,7 @@ def mostrar_ventas():
                 encoding="latin-1"
             )
 
-            # Vista previa desde 1
+            # Vista previa
             preview = df.head().reset_index(drop=True)
             preview.index = preview.index + 1
 
@@ -90,16 +91,16 @@ def mostrar_ventas():
                         iva = limpiar_num(fila.iloc[26])
                         total = limpiar_num(fila.iloc[27])
 
-                        # Buscar tipo comprobante real
+                        # Detectar tipo comprobante
                         tipo, signo, descripcion = obtener_tipo_comprobante(codigo)
 
-                        # Si no discrimina IVA
+                        # Si IVA = 0 toma total completo
                         if iva == 0:
                             neto = total
 
-                        neto = neto * signo
-                        iva = iva * signo
-                        total = total * signo
+                        neto *= signo
+                        iva *= signo
+                        total *= signo
 
                         glosa = f"{tipo} {numero} - {cliente}"
 
@@ -133,7 +134,7 @@ def mostrar_ventas():
                             "VENTAS"
                         ))
 
-                        # IVA DÉBITO FISCAL
+                        # IVA
                         if iva != 0:
                             ejecutar_query("""
                                 INSERT INTO libro_diario
@@ -163,6 +164,7 @@ def mostrar_ventas():
                 )
 
                 st.success(f"✅ Procesados: {procesados}")
+
                 if errores > 0:
                     st.warning(f"⚠️ Errores omitidos: {errores}")
 
