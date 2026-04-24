@@ -34,7 +34,6 @@ def ejecutar_transaccion(operaciones):
     try:
         for sql, params in operaciones:
             cur.execute(sql, params)
-
         conn.commit()
 
     except Exception as e:
@@ -99,6 +98,43 @@ def init_db():
         CREATE TABLE IF NOT EXISTS plan_cuentas (
             codigo TEXT,
             nombre TEXT
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS plan_cuentas_detallado (
+            cuenta TEXT PRIMARY KEY,
+            detalle TEXT,
+            imputable TEXT,
+            ajustable TEXT,
+            tipo TEXT,
+            madre TEXT,
+            nivel INTEGER,
+            orden INTEGER
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS categorias_compra (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            categoria TEXT UNIQUE,
+            cuenta_codigo TEXT,
+            cuenta_nombre TEXT,
+            cuenta_proveedor_codigo TEXT,
+            cuenta_proveedor_nombre TEXT,
+            tipo_categoria TEXT,
+            activo INTEGER DEFAULT 1
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS conceptos_fiscales_compra (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            concepto TEXT UNIQUE,
+            cuenta_codigo TEXT,
+            cuenta_nombre TEXT,
+            tratamiento TEXT,
+            activo INTEGER DEFAULT 1
         )
     """)
 
@@ -202,41 +238,15 @@ def init_db():
         )
     """)
 
-    # Compatibilidad con bases antiguas
     agregar_columna_si_no_existe(conn, "libro_diario", "archivo", "TEXT")
     agregar_columna_si_no_existe(conn, "historial_cargas", "registros", "INTEGER DEFAULT 0")
 
-    # Índices
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_libro_diario_archivo
-        ON libro_diario(archivo)
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_libro_diario_origen
-        ON libro_diario(origen)
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_ventas_archivo
-        ON ventas_comprobantes(archivo)
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_compras_archivo
-        ON compras_comprobantes(archivo)
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_cta_cte_cliente
-        ON cuenta_corriente_clientes(cliente)
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_cta_cte_proveedor
-        ON cuenta_corriente_proveedores(proveedor)
-    """)
-
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_libro_diario_archivo ON libro_diario(archivo)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_libro_diario_origen ON libro_diario(origen)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ventas_archivo ON ventas_comprobantes(archivo)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_compras_archivo ON compras_comprobantes(archivo)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_cta_cte_cliente ON cuenta_corriente_clientes(cliente)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_cta_cte_proveedor ON cuenta_corriente_proveedores(proveedor)")
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_comprobantes_procesados
         ON comprobantes_procesados(modulo, codigo, numero, cliente_proveedor)
@@ -318,10 +328,6 @@ def eliminar_diferencias_redondeo():
 
 def limpiar_errores():
     ejecutar_query("DELETE FROM errores_carga")
-
-
-def limpiar_comprobantes_procesados():
-    ejecutar_query("DELETE FROM comprobantes_procesados")
 
 
 def limpiar_base_pruebas():
@@ -441,3 +447,252 @@ def registrar_cta_cte_cliente(fecha, cliente, cuit, tipo, numero, debe, haber, s
         (fecha, cliente, cuit, tipo, numero, debe, haber, saldo, origen, archivo)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (fecha, cliente, cuit, tipo, numero, debe, haber, saldo, origen, archivo))
+
+
+# ======================================================
+# CONFIGURACIÓN - PLAN DE CUENTAS
+# ======================================================
+
+def obtener_plan_cuentas_simple():
+    return ejecutar_query("""
+        SELECT codigo, nombre
+        FROM plan_cuentas
+        ORDER BY codigo
+    """, fetch=True)
+
+
+def obtener_plan_cuentas_detallado():
+    return ejecutar_query("""
+        SELECT cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden
+        FROM plan_cuentas_detallado
+        ORDER BY cuenta
+    """, fetch=True)
+
+
+def reemplazar_plan_cuentas_simple(df):
+    conn = conectar()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("DELETE FROM plan_cuentas")
+
+        for _, fila in df.iterrows():
+            codigo = str(fila["codigo"]).strip()
+            nombre = str(fila["nombre"]).strip()
+
+            if codigo and nombre:
+                cur.execute("""
+                    INSERT INTO plan_cuentas (codigo, nombre)
+                    VALUES (?, ?)
+                """, (codigo, nombre))
+
+        conn.commit()
+
+    except Exception as e:
+        conn.rollback()
+        raise e
+
+    finally:
+        conn.close()
+
+
+def reemplazar_plan_cuentas_detallado(df):
+    conn = conectar()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("DELETE FROM plan_cuentas_detallado")
+        cur.execute("DELETE FROM plan_cuentas")
+
+        for _, fila in df.iterrows():
+            cuenta = str(fila.get("cuenta", "")).strip()
+            detalle = str(fila.get("detalle", "")).strip()
+            imputable = str(fila.get("imputable", "")).strip()
+            ajustable = str(fila.get("ajustable", "")).strip()
+            tipo = str(fila.get("tipo", "")).strip()
+            madre = str(fila.get("madre", "")).strip()
+
+            try:
+                nivel = int(float(fila.get("nivel", 0)))
+            except Exception:
+                nivel = 0
+
+            try:
+                orden = int(float(fila.get("orden", 0)))
+            except Exception:
+                orden = 0
+
+            if cuenta and detalle:
+                cur.execute("""
+                    INSERT OR REPLACE INTO plan_cuentas_detallado
+                    (cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden))
+
+                cur.execute("""
+                    INSERT INTO plan_cuentas (codigo, nombre)
+                    VALUES (?, ?)
+                """, (cuenta, detalle))
+
+        conn.commit()
+
+    except Exception as e:
+        conn.rollback()
+        raise e
+
+    finally:
+        conn.close()
+
+
+def guardar_cuenta_detallada(cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden):
+    ejecutar_query("""
+        INSERT OR REPLACE INTO plan_cuentas_detallado
+        (cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden))
+
+    ejecutar_query("""
+        DELETE FROM plan_cuentas
+        WHERE codigo = ?
+    """, (cuenta,))
+
+    ejecutar_query("""
+        INSERT INTO plan_cuentas (codigo, nombre)
+        VALUES (?, ?)
+    """, (cuenta, detalle))
+
+
+def eliminar_cuenta(cuenta):
+    ejecutar_query("DELETE FROM plan_cuentas_detallado WHERE cuenta = ?", (cuenta,))
+    ejecutar_query("DELETE FROM plan_cuentas WHERE codigo = ?", (cuenta,))
+
+
+# ======================================================
+# CONFIGURACIÓN - CATEGORÍAS DE COMPRA
+# ======================================================
+
+def obtener_categorias_compra():
+    return ejecutar_query("""
+        SELECT categoria, cuenta_codigo, cuenta_nombre,
+               cuenta_proveedor_codigo, cuenta_proveedor_nombre,
+               tipo_categoria, activo
+        FROM categorias_compra
+        ORDER BY categoria
+    """, fetch=True)
+
+
+def reemplazar_categorias_compra(df):
+    conn = conectar()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("DELETE FROM categorias_compra")
+
+        for _, fila in df.iterrows():
+            categoria = str(fila.get("categoria", "")).strip()
+            cuenta_codigo = str(fila.get("cuenta_codigo", "")).strip()
+            cuenta_nombre = str(fila.get("cuenta_nombre", "")).strip()
+            cuenta_proveedor_codigo = str(fila.get("cuenta_proveedor_codigo", "")).strip()
+            cuenta_proveedor_nombre = str(fila.get("cuenta_proveedor_nombre", "")).strip()
+            tipo_categoria = str(fila.get("tipo_categoria", "")).strip()
+
+            if categoria:
+                cur.execute("""
+                    INSERT OR REPLACE INTO categorias_compra
+                    (categoria, cuenta_codigo, cuenta_nombre,
+                     cuenta_proveedor_codigo, cuenta_proveedor_nombre,
+                     tipo_categoria, activo)
+                    VALUES (?, ?, ?, ?, ?, ?, 1)
+                """, (
+                    categoria,
+                    cuenta_codigo,
+                    cuenta_nombre,
+                    cuenta_proveedor_codigo,
+                    cuenta_proveedor_nombre,
+                    tipo_categoria
+                ))
+
+        conn.commit()
+
+    except Exception as e:
+        conn.rollback()
+        raise e
+
+    finally:
+        conn.close()
+
+
+def guardar_categoria_compra(categoria, cuenta_codigo, cuenta_nombre, cuenta_proveedor_codigo, cuenta_proveedor_nombre, tipo_categoria, activo=1):
+    ejecutar_query("""
+        INSERT OR REPLACE INTO categorias_compra
+        (categoria, cuenta_codigo, cuenta_nombre,
+         cuenta_proveedor_codigo, cuenta_proveedor_nombre,
+         tipo_categoria, activo)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        categoria,
+        cuenta_codigo,
+        cuenta_nombre,
+        cuenta_proveedor_codigo,
+        cuenta_proveedor_nombre,
+        tipo_categoria,
+        activo
+    ))
+
+
+def eliminar_categoria_compra(categoria):
+    ejecutar_query("DELETE FROM categorias_compra WHERE categoria = ?", (categoria,))
+
+
+# ======================================================
+# CONFIGURACIÓN - CONCEPTOS FISCALES DE COMPRA
+# ======================================================
+
+def obtener_conceptos_fiscales_compra():
+    return ejecutar_query("""
+        SELECT concepto, cuenta_codigo, cuenta_nombre, tratamiento, activo
+        FROM conceptos_fiscales_compra
+        ORDER BY concepto
+    """, fetch=True)
+
+
+def reemplazar_conceptos_fiscales_compra(df):
+    conn = conectar()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("DELETE FROM conceptos_fiscales_compra")
+
+        for _, fila in df.iterrows():
+            concepto = str(fila.get("concepto", "")).strip()
+            cuenta_codigo = str(fila.get("cuenta_codigo", "")).strip()
+            cuenta_nombre = str(fila.get("cuenta_nombre", "")).strip()
+            tratamiento = str(fila.get("tratamiento", "")).strip()
+
+            if concepto:
+                cur.execute("""
+                    INSERT OR REPLACE INTO conceptos_fiscales_compra
+                    (concepto, cuenta_codigo, cuenta_nombre, tratamiento, activo)
+                    VALUES (?, ?, ?, ?, 1)
+                """, (concepto, cuenta_codigo, cuenta_nombre, tratamiento))
+
+        conn.commit()
+
+    except Exception as e:
+        conn.rollback()
+        raise e
+
+    finally:
+        conn.close()
+
+
+def guardar_concepto_fiscal_compra(concepto, cuenta_codigo, cuenta_nombre, tratamiento, activo=1):
+    ejecutar_query("""
+        INSERT OR REPLACE INTO conceptos_fiscales_compra
+        (concepto, cuenta_codigo, cuenta_nombre, tratamiento, activo)
+        VALUES (?, ?, ?, ?, ?)
+    """, (concepto, cuenta_codigo, cuenta_nombre, tratamiento, activo))
+
+
+def eliminar_concepto_fiscal_compra(concepto):
+    ejecutar_query("DELETE FROM conceptos_fiscales_compra WHERE concepto = ?", (concepto,))
