@@ -1,29 +1,51 @@
 import streamlit as st
 import pandas as pd
+import unicodedata
 
-from database import (
-    ejecutar_query,
-    obtener_plan_cuentas_simple,
-    obtener_plan_cuentas_detallado,
-    reemplazar_plan_cuentas_simple,
-    reemplazar_plan_cuentas_detallado,
-    guardar_cuenta_detallada,
-    eliminar_cuenta,
-    obtener_categorias_compra,
-    reemplazar_categorias_compra,
-    guardar_categoria_compra,
-    eliminar_categoria_compra,
-    obtener_conceptos_fiscales_compra,
-    reemplazar_conceptos_fiscales_compra,
-    guardar_concepto_fiscal_compra,
-    eliminar_concepto_fiscal_compra
-)
+from database import ejecutar_query
 
-from core.ui import preparar_vista
+
+# ======================================================
+# FUNCIONES AUXILIARES
+# ======================================================
+
+def preparar_vista(df):
+    df_vista = df.copy()
+    df_vista.index = range(1, len(df_vista) + 1)
+    df_vista.index.name = "N°"
+    return df_vista
+
+
+def quitar_acentos(texto):
+    texto = str(texto)
+    texto = unicodedata.normalize("NFD", texto)
+    texto = texto.encode("ascii", "ignore").decode("utf-8")
+    return texto
+
+
+def normalizar_nombre_columna(nombre):
+    nombre = quitar_acentos(nombre)
+    nombre = nombre.lower().strip()
+    nombre = nombre.replace(".", "")
+    nombre = nombre.replace("-", "_")
+    nombre = nombre.replace("/", "_")
+    nombre = nombre.replace(" ", "_")
+
+    while "__" in nombre:
+        nombre = nombre.replace("__", "_")
+
+    return nombre
+
+
+def normalizar_columnas(df):
+    df = df.copy()
+    df.columns = [normalizar_nombre_columna(c) for c in df.columns]
+    return df
 
 
 def leer_csv_configuracion(archivo):
     try:
+        archivo.seek(0)
         return pd.read_csv(
             archivo,
             sep=None,
@@ -42,14 +64,305 @@ def leer_csv_configuracion(archivo):
         )
 
 
-def normalizar_columnas(df):
-    df = df.copy()
-    df.columns = [
-        str(c).strip().lower().replace(" ", "_")
-        for c in df.columns
-    ]
-    return df
+def limpiar_valor(v):
+    try:
+        if pd.isna(v):
+            return ""
+        return str(v).strip()
+    except Exception:
+        return ""
 
+
+def init_tablas_configuracion():
+    ejecutar_query("""
+        CREATE TABLE IF NOT EXISTS plan_cuentas (
+            codigo TEXT,
+            nombre TEXT
+        )
+    """)
+
+    ejecutar_query("""
+        CREATE TABLE IF NOT EXISTS plan_cuentas_detallado (
+            cuenta TEXT PRIMARY KEY,
+            detalle TEXT,
+            imputable TEXT,
+            ajustable TEXT,
+            tipo TEXT,
+            madre TEXT,
+            nivel INTEGER,
+            orden INTEGER
+        )
+    """)
+
+    ejecutar_query("""
+        CREATE TABLE IF NOT EXISTS categorias_compra (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            categoria TEXT UNIQUE,
+            cuenta_codigo TEXT,
+            cuenta_nombre TEXT,
+            cuenta_proveedor_codigo TEXT,
+            cuenta_proveedor_nombre TEXT,
+            tipo_categoria TEXT,
+            activo INTEGER DEFAULT 1
+        )
+    """)
+
+    ejecutar_query("""
+        CREATE TABLE IF NOT EXISTS conceptos_fiscales_compra (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            concepto TEXT UNIQUE,
+            cuenta_codigo TEXT,
+            cuenta_nombre TEXT,
+            tratamiento TEXT,
+            activo INTEGER DEFAULT 1
+        )
+    """)
+
+
+# ======================================================
+# BASE - PLAN DE CUENTAS
+# ======================================================
+
+def obtener_plan_simple():
+    return ejecutar_query("""
+        SELECT codigo, nombre
+        FROM plan_cuentas
+        ORDER BY codigo
+    """, fetch=True)
+
+
+def obtener_plan_detallado():
+    return ejecutar_query("""
+        SELECT cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden
+        FROM plan_cuentas_detallado
+        ORDER BY cuenta
+    """, fetch=True)
+
+
+def borrar_plan_cuentas():
+    ejecutar_query("DELETE FROM plan_cuentas")
+    ejecutar_query("DELETE FROM plan_cuentas_detallado")
+
+
+def reemplazar_plan_simple(df):
+    borrar_plan_cuentas()
+
+    for _, fila in df.iterrows():
+        codigo = limpiar_valor(fila.get("codigo", ""))
+        nombre = limpiar_valor(fila.get("nombre", ""))
+
+        if codigo and nombre:
+            ejecutar_query("""
+                INSERT INTO plan_cuentas (codigo, nombre)
+                VALUES (?, ?)
+            """, (codigo, nombre))
+
+
+def reemplazar_plan_detallado(df):
+    borrar_plan_cuentas()
+
+    for _, fila in df.iterrows():
+        cuenta = limpiar_valor(fila.get("cuenta", ""))
+        detalle = limpiar_valor(fila.get("detalle", ""))
+
+        imputable = limpiar_valor(fila.get("imputable", "S"))
+        ajustable = limpiar_valor(fila.get("ajustable", "N"))
+        tipo = limpiar_valor(fila.get("tipo", "D"))
+        madre = limpiar_valor(fila.get("madre", ""))
+
+        try:
+            nivel = int(float(limpiar_valor(fila.get("nivel", 1)) or 1))
+        except Exception:
+            nivel = 1
+
+        try:
+            orden = int(float(limpiar_valor(fila.get("orden", 0)) or 0))
+        except Exception:
+            orden = 0
+
+        if cuenta and detalle:
+            ejecutar_query("""
+                INSERT OR REPLACE INTO plan_cuentas_detallado
+                (cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden))
+
+            ejecutar_query("""
+                INSERT INTO plan_cuentas (codigo, nombre)
+                VALUES (?, ?)
+            """, (cuenta, detalle))
+
+
+def guardar_cuenta_manual(cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden):
+    ejecutar_query("""
+        INSERT OR REPLACE INTO plan_cuentas_detallado
+        (cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (cuenta, detalle, imputable, ajustable, tipo, madre, int(nivel), int(orden)))
+
+    ejecutar_query("""
+        DELETE FROM plan_cuentas
+        WHERE codigo = ?
+    """, (cuenta,))
+
+    ejecutar_query("""
+        INSERT INTO plan_cuentas (codigo, nombre)
+        VALUES (?, ?)
+    """, (cuenta, detalle))
+
+
+def eliminar_cuenta(cuenta):
+    ejecutar_query("""
+        DELETE FROM plan_cuentas_detallado
+        WHERE cuenta = ?
+    """, (cuenta,))
+
+    ejecutar_query("""
+        DELETE FROM plan_cuentas
+        WHERE codigo = ?
+    """, (cuenta,))
+
+
+# ======================================================
+# BASE - CATEGORÍAS DE COMPRA
+# ======================================================
+
+def obtener_categorias_compra():
+    return ejecutar_query("""
+        SELECT 
+            categoria,
+            cuenta_codigo,
+            cuenta_nombre,
+            cuenta_proveedor_codigo,
+            cuenta_proveedor_nombre,
+            tipo_categoria,
+            activo
+        FROM categorias_compra
+        ORDER BY categoria
+    """, fetch=True)
+
+
+def borrar_categorias_compra():
+    ejecutar_query("DELETE FROM categorias_compra")
+
+
+def reemplazar_categorias_compra(df):
+    borrar_categorias_compra()
+
+    for _, fila in df.iterrows():
+        categoria = limpiar_valor(fila.get("categoria", ""))
+        cuenta_codigo = limpiar_valor(fila.get("cuenta_codigo", ""))
+        cuenta_nombre = limpiar_valor(fila.get("cuenta_nombre", ""))
+        cuenta_proveedor_codigo = limpiar_valor(fila.get("cuenta_proveedor_codigo", ""))
+        cuenta_proveedor_nombre = limpiar_valor(fila.get("cuenta_proveedor_nombre", ""))
+        tipo_categoria = limpiar_valor(fila.get("tipo_categoria", ""))
+
+        if categoria:
+            ejecutar_query("""
+                INSERT OR REPLACE INTO categorias_compra
+                (categoria, cuenta_codigo, cuenta_nombre,
+                 cuenta_proveedor_codigo, cuenta_proveedor_nombre,
+                 tipo_categoria, activo)
+                VALUES (?, ?, ?, ?, ?, ?, 1)
+            """, (
+                categoria,
+                cuenta_codigo,
+                cuenta_nombre,
+                cuenta_proveedor_codigo,
+                cuenta_proveedor_nombre,
+                tipo_categoria
+            ))
+
+
+def guardar_categoria_compra(
+    categoria,
+    cuenta_codigo,
+    cuenta_nombre,
+    cuenta_proveedor_codigo,
+    cuenta_proveedor_nombre,
+    tipo_categoria,
+    activo=1
+):
+    ejecutar_query("""
+        INSERT OR REPLACE INTO categorias_compra
+        (categoria, cuenta_codigo, cuenta_nombre,
+         cuenta_proveedor_codigo, cuenta_proveedor_nombre,
+         tipo_categoria, activo)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        categoria,
+        cuenta_codigo,
+        cuenta_nombre,
+        cuenta_proveedor_codigo,
+        cuenta_proveedor_nombre,
+        tipo_categoria,
+        activo
+    ))
+
+
+def eliminar_categoria_compra(categoria):
+    ejecutar_query("""
+        DELETE FROM categorias_compra
+        WHERE categoria = ?
+    """, (categoria,))
+
+
+# ======================================================
+# BASE - CONCEPTOS FISCALES
+# ======================================================
+
+def obtener_conceptos_fiscales_compra():
+    return ejecutar_query("""
+        SELECT 
+            concepto,
+            cuenta_codigo,
+            cuenta_nombre,
+            tratamiento,
+            activo
+        FROM conceptos_fiscales_compra
+        ORDER BY concepto
+    """, fetch=True)
+
+
+def borrar_conceptos_fiscales_compra():
+    ejecutar_query("DELETE FROM conceptos_fiscales_compra")
+
+
+def reemplazar_conceptos_fiscales_compra(df):
+    borrar_conceptos_fiscales_compra()
+
+    for _, fila in df.iterrows():
+        concepto = limpiar_valor(fila.get("concepto", ""))
+        cuenta_codigo = limpiar_valor(fila.get("cuenta_codigo", ""))
+        cuenta_nombre = limpiar_valor(fila.get("cuenta_nombre", ""))
+        tratamiento = limpiar_valor(fila.get("tratamiento", ""))
+
+        if concepto:
+            ejecutar_query("""
+                INSERT OR REPLACE INTO conceptos_fiscales_compra
+                (concepto, cuenta_codigo, cuenta_nombre, tratamiento, activo)
+                VALUES (?, ?, ?, ?, 1)
+            """, (concepto, cuenta_codigo, cuenta_nombre, tratamiento))
+
+
+def guardar_concepto_fiscal_compra(concepto, cuenta_codigo, cuenta_nombre, tratamiento, activo=1):
+    ejecutar_query("""
+        INSERT OR REPLACE INTO conceptos_fiscales_compra
+        (concepto, cuenta_codigo, cuenta_nombre, tratamiento, activo)
+        VALUES (?, ?, ?, ?, ?)
+    """, (concepto, cuenta_codigo, cuenta_nombre, tratamiento, activo))
+
+
+def eliminar_concepto_fiscal_compra(concepto):
+    ejecutar_query("""
+        DELETE FROM conceptos_fiscales_compra
+        WHERE concepto = ?
+    """, (concepto,))
+
+
+# ======================================================
+# UI AUXILIAR
+# ======================================================
 
 def seleccionar_cuenta(label, df_plan, key):
     if df_plan.empty:
@@ -69,7 +382,13 @@ def seleccionar_cuenta(label, df_plan, key):
     return codigo, nombre
 
 
+# ======================================================
+# PANTALLA PRINCIPAL
+# ======================================================
+
 def mostrar_configuracion():
+    init_tablas_configuracion()
+
     st.title("⚙️ Configuración")
 
     tab1, tab2, tab3, tab4 = st.tabs([
@@ -92,6 +411,10 @@ def mostrar_configuracion():
         mostrar_conceptos_fiscales_compra()
 
 
+# ======================================================
+# TAB 1 - TIPOS DE COMPROBANTES
+# ======================================================
+
 def mostrar_tipos_comprobantes():
     st.subheader("Tipos de Comprobantes")
 
@@ -108,23 +431,23 @@ def mostrar_tipos_comprobantes():
 
     st.divider()
 
-    st.subheader("Agregar / Actualizar comprobante")
+    with st.form("form_comprobante"):
+        st.subheader("Agregar / Actualizar comprobante")
 
-    col1, col2, col3 = st.columns(3)
+        col1, col2, col3 = st.columns(3)
 
-    with col1:
-        codigo = st.text_input("Código")
+        with col1:
+            codigo = st.text_input("Código")
 
-    with col2:
-        descripcion = st.text_input("Descripción")
+        with col2:
+            descripcion = st.text_input("Descripción")
 
-    with col3:
-        signo = st.selectbox("Signo", [1, -1])
+        with col3:
+            signo = st.selectbox("Signo", [1, -1])
 
-    col1, col2 = st.columns(2)
+        guardar = st.form_submit_button("Guardar comprobante")
 
-    with col1:
-        if st.button("Guardar comprobante"):
+        if guardar:
             if codigo == "" or descripcion == "":
                 st.warning("Completar todos los campos.")
             else:
@@ -137,26 +460,35 @@ def mostrar_tipos_comprobantes():
                 st.success("Comprobante guardado.")
                 st.rerun()
 
-    with col2:
-        if st.button("Eliminar comprobante"):
-            if codigo == "":
-                st.warning("Indicá el código a eliminar.")
+    st.divider()
+
+    with st.form("form_eliminar_comprobante"):
+        codigo_eliminar = st.text_input("Código de comprobante a eliminar")
+        eliminar = st.form_submit_button("Eliminar comprobante")
+
+        if eliminar:
+            if codigo_eliminar == "":
+                st.warning("Indicá el código.")
             else:
                 ejecutar_query("""
                     DELETE FROM tipos_comprobantes
                     WHERE codigo = ?
-                """, (codigo.strip(),))
+                """, (codigo_eliminar.strip(),))
 
                 st.success("Comprobante eliminado.")
                 st.rerun()
 
 
+# ======================================================
+# TAB 2 - PLAN DE CUENTAS
+# ======================================================
+
 def mostrar_plan_cuentas():
     st.subheader("Plan de Cuentas")
 
     st.info(
-        "Acá cargás el archivo Plan_de_Cuenta_Mejorado_Estructurado.csv. "
-        "Ese archivo reemplaza el plan anterior."
+        "Cargá acá el archivo Plan_de_Cuenta_Mejorado_Estructurado.csv. "
+        "También podés borrar el plan actual y crear cuentas manualmente."
     )
 
     archivo = st.file_uploader(
@@ -176,80 +508,115 @@ def mostrar_plan_cuentas():
 
         if {"cuenta", "detalle"}.issubset(columnas):
             tipo_plan = "estructurado"
-            st.success("Formato detectado: Plan de cuentas estructurado.")
+            st.success("Formato detectado: plan de cuentas estructurado.")
         elif {"codigo", "nombre"}.issubset(columnas):
             tipo_plan = "simple"
-            st.success("Formato detectado: Plan de cuentas simple.")
+            st.success("Formato detectado: plan de cuentas simple.")
         else:
             tipo_plan = None
             st.error(
-                "No se reconoció el formato. Debe tener columnas "
+                "No se reconoció el formato. El archivo debe tener columnas "
                 "'cuenta' y 'detalle' o 'codigo' y 'nombre'."
             )
 
-        if tipo_plan and st.button("Reemplazar plan de cuentas"):
-            if tipo_plan == "estructurado":
-                reemplazar_plan_cuentas_detallado(df)
-            else:
-                reemplazar_plan_cuentas_simple(df)
+        if tipo_plan:
+            if st.button("Reemplazar plan de cuentas con este archivo"):
+                if tipo_plan == "estructurado":
+                    reemplazar_plan_detallado(df)
+                else:
+                    reemplazar_plan_simple(df)
 
-            st.success("Plan de cuentas cargado correctamente.")
-            st.rerun()
+                st.success("Plan de cuentas cargado correctamente.")
+                st.rerun()
 
     st.divider()
 
-    df_detallado = obtener_plan_cuentas_detallado()
-    df_simple = obtener_plan_cuentas_simple()
-
     st.subheader("Plan actual")
 
+    df_detallado = obtener_plan_detallado()
+    df_simple = obtener_plan_simple()
+
     if not df_detallado.empty:
+        st.caption(f"Cuentas cargadas: {len(df_detallado)}")
         st.dataframe(preparar_vista(df_detallado), use_container_width=True)
+
     elif not df_simple.empty:
+        st.caption(f"Cuentas cargadas: {len(df_simple)}")
         st.dataframe(preparar_vista(df_simple), use_container_width=True)
+
     else:
         st.info("No hay plan de cuentas cargado.")
 
     st.divider()
 
+    st.subheader("Borrar plan de cuentas actual")
+
+    if "confirmar_borrar_plan" not in st.session_state:
+        st.session_state["confirmar_borrar_plan"] = False
+
+    if st.button("🧹 Borrar plan de cuentas actual"):
+        st.session_state["confirmar_borrar_plan"] = True
+
+    if st.session_state["confirmar_borrar_plan"]:
+        st.warning(
+            "¿Confirmás borrar todo el plan de cuentas actual? "
+            "Esto no borra Libro Diario ni comprobantes cargados."
+        )
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if st.button("Sí, borrar plan"):
+                borrar_plan_cuentas()
+                st.success("Plan de cuentas borrado.")
+                st.session_state["confirmar_borrar_plan"] = False
+                st.rerun()
+
+        with col2:
+            if st.button("Cancelar borrado"):
+                st.session_state["confirmar_borrar_plan"] = False
+                st.rerun()
+
+    st.divider()
+
     st.subheader("Crear / Actualizar cuenta manualmente")
 
-    col1, col2, col3, col4 = st.columns(4)
+    with st.form("form_cuenta_manual"):
+        col1, col2, col3, col4 = st.columns(4)
 
-    with col1:
-        cuenta = st.text_input("Código cuenta", key="manual_cuenta")
+        with col1:
+            cuenta = st.text_input("Código cuenta")
 
-    with col2:
-        detalle = st.text_input("Nombre / detalle", key="manual_detalle")
+        with col2:
+            detalle = st.text_input("Nombre / detalle")
 
-    with col3:
-        imputable = st.selectbox("Imputable", ["S", "N"], key="manual_imputable")
+        with col3:
+            imputable = st.selectbox("Imputable", ["S", "N"])
 
-    with col4:
-        tipo = st.selectbox("Tipo", ["D", "A", "N"], key="manual_tipo")
+        with col4:
+            tipo = st.selectbox("Tipo", ["D", "A", "N"])
 
-    col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4 = st.columns(4)
 
-    with col1:
-        ajustable = st.selectbox("Ajustable", ["N", "S"], key="manual_ajustable")
+        with col1:
+            ajustable = st.selectbox("Ajustable", ["N", "S"])
 
-    with col2:
-        madre = st.text_input("Cuenta madre", key="manual_madre")
+        with col2:
+            madre = st.text_input("Cuenta madre")
 
-    with col3:
-        nivel = st.number_input("Nivel", min_value=1, max_value=10, value=1, step=1)
+        with col3:
+            nivel = st.number_input("Nivel", min_value=1, max_value=20, value=1, step=1)
 
-    with col4:
-        orden = st.number_input("Orden", min_value=0, value=0, step=1)
+        with col4:
+            orden = st.number_input("Orden", min_value=0, value=0, step=1)
 
-    col1, col2 = st.columns(2)
+        guardar = st.form_submit_button("Guardar cuenta")
 
-    with col1:
-        if st.button("Guardar cuenta manual"):
+        if guardar:
             if cuenta == "" or detalle == "":
                 st.warning("Completar código y nombre de cuenta.")
             else:
-                guardar_cuenta_detallada(
+                guardar_cuenta_manual(
                     cuenta.strip(),
                     detalle.strip(),
                     imputable,
@@ -260,25 +627,34 @@ def mostrar_plan_cuentas():
                     int(orden)
                 )
 
-                st.success("Cuenta guardada.")
+                st.success("Cuenta guardada correctamente.")
                 st.rerun()
 
-    with col2:
-        if st.button("Eliminar cuenta manual"):
-            if cuenta == "":
-                st.warning("Indicá el código de cuenta a eliminar.")
+    st.divider()
+
+    with st.form("form_eliminar_cuenta"):
+        cuenta_eliminar = st.text_input("Código de cuenta a eliminar")
+        eliminar = st.form_submit_button("Eliminar cuenta")
+
+        if eliminar:
+            if cuenta_eliminar == "":
+                st.warning("Indicá el código de cuenta.")
             else:
-                eliminar_cuenta(cuenta.strip())
+                eliminar_cuenta(cuenta_eliminar.strip())
                 st.success("Cuenta eliminada.")
                 st.rerun()
 
+
+# ======================================================
+# TAB 3 - CATEGORÍAS DE COMPRA
+# ======================================================
 
 def mostrar_categorias_compra():
     st.subheader("Categorías de Compra")
 
     st.info(
-        "Acá cargás Categorias_Compra_Sugeridas.csv. "
-        "Esto le dice al sistema qué cuenta usar según el tipo de compra."
+        "Cargá acá Categorias_Compra_Sugeridas.csv. "
+        "Esto define qué cuenta usar según el tipo de compra."
     )
 
     archivo = st.file_uploader(
@@ -299,7 +675,7 @@ def mostrar_categorias_compra():
         else:
             if st.button("Reemplazar categorías de compra"):
                 reemplazar_categorias_compra(df)
-                st.success("Categorías de compra cargadas correctamente.")
+                st.success("Categorías cargadas correctamente.")
                 st.rerun()
 
     st.divider()
@@ -317,42 +693,41 @@ def mostrar_categorias_compra():
 
     st.subheader("Crear / Actualizar categoría manual")
 
-    df_plan = obtener_plan_cuentas_simple()
+    df_plan = obtener_plan_simple()
 
-    categoria = st.text_input("Nombre categoría", key="cat_nombre")
+    with st.form("form_categoria_compra"):
+        categoria = st.text_input("Nombre categoría")
 
-    tipo_categoria = st.selectbox(
-        "Tipo categoría",
-        [
-            "BIENES / MERCADERÍAS",
-            "SERVICIOS / GASTOS",
-            "BIENES DE USO",
-            "IMPUESTOS / TASAS",
-            "OTROS"
-        ],
-        key="cat_tipo"
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        cuenta_codigo, cuenta_nombre = seleccionar_cuenta(
-            "Cuenta principal de la compra",
-            df_plan,
-            "cat_cuenta_principal"
+        tipo_categoria = st.selectbox(
+            "Tipo categoría",
+            [
+                "BIENES / MERCADERÍAS",
+                "SERVICIOS / GASTOS",
+                "BIENES DE USO",
+                "IMPUESTOS / TASAS",
+                "OTROS"
+            ]
         )
 
-    with col2:
-        proveedor_codigo, proveedor_nombre = seleccionar_cuenta(
-            "Cuenta proveedor / acreedor",
-            df_plan,
-            "cat_cuenta_proveedor"
-        )
+        col1, col2 = st.columns(2)
 
-    col1, col2 = st.columns(2)
+        with col1:
+            cuenta_codigo, cuenta_nombre = seleccionar_cuenta(
+                "Cuenta principal de la compra",
+                df_plan,
+                "cat_cuenta_principal"
+            )
 
-    with col1:
-        if st.button("Guardar categoría"):
+        with col2:
+            proveedor_codigo, proveedor_nombre = seleccionar_cuenta(
+                "Cuenta proveedor / acreedor",
+                df_plan,
+                "cat_cuenta_proveedor"
+            )
+
+        guardar = st.form_submit_button("Guardar categoría")
+
+        if guardar:
             if categoria == "":
                 st.warning("Ingresá el nombre de la categoría.")
             else:
@@ -369,22 +744,31 @@ def mostrar_categorias_compra():
                 st.success("Categoría guardada.")
                 st.rerun()
 
-    with col2:
-        if st.button("Eliminar categoría"):
-            if categoria == "":
+    st.divider()
+
+    with st.form("form_eliminar_categoria"):
+        categoria_eliminar = st.text_input("Categoría a eliminar")
+        eliminar = st.form_submit_button("Eliminar categoría")
+
+        if eliminar:
+            if categoria_eliminar == "":
                 st.warning("Ingresá la categoría a eliminar.")
             else:
-                eliminar_categoria_compra(categoria.strip())
+                eliminar_categoria_compra(categoria_eliminar.strip())
                 st.success("Categoría eliminada.")
                 st.rerun()
 
+
+# ======================================================
+# TAB 4 - CONCEPTOS FISCALES DE COMPRA
+# ======================================================
 
 def mostrar_conceptos_fiscales_compra():
     st.subheader("Conceptos Fiscales de Compra")
 
     st.info(
-        "Acá cargás Conceptos_Fiscales_Compra_Sugeridos.csv. "
-        "Esto define a qué cuenta van IVA, percepciones, impuestos internos y otros tributos."
+        "Cargá acá Conceptos_Fiscales_Compra_Sugeridos.csv. "
+        "Define a qué cuenta van IVA, percepciones, impuestos internos y otros tributos."
     )
 
     archivo = st.file_uploader(
@@ -423,33 +807,32 @@ def mostrar_conceptos_fiscales_compra():
 
     st.subheader("Crear / Actualizar concepto fiscal manual")
 
-    df_plan = obtener_plan_cuentas_simple()
+    df_plan = obtener_plan_simple()
 
-    concepto = st.text_input("Concepto fiscal", key="concepto_nombre")
+    with st.form("form_concepto_fiscal"):
+        concepto = st.text_input("Concepto fiscal")
 
-    tratamiento = st.selectbox(
-        "Tratamiento",
-        [
-            "CREDITO_FISCAL",
-            "PERCEPCION_COMPUTABLE",
-            "MAYOR_COSTO",
-            "GASTO",
-            "NO_COMPUTABLE",
-            "OTROS"
-        ],
-        key="concepto_tratamiento"
-    )
+        tratamiento = st.selectbox(
+            "Tratamiento",
+            [
+                "CREDITO_FISCAL",
+                "PERCEPCION_COMPUTABLE",
+                "MAYOR_COSTO",
+                "GASTO",
+                "NO_COMPUTABLE",
+                "OTROS"
+            ]
+        )
 
-    cuenta_codigo, cuenta_nombre = seleccionar_cuenta(
-        "Cuenta contable asociada",
-        df_plan,
-        "concepto_cuenta"
-    )
+        cuenta_codigo, cuenta_nombre = seleccionar_cuenta(
+            "Cuenta contable asociada",
+            df_plan,
+            "concepto_cuenta"
+        )
 
-    col1, col2 = st.columns(2)
+        guardar = st.form_submit_button("Guardar concepto fiscal")
 
-    with col1:
-        if st.button("Guardar concepto fiscal"):
+        if guardar:
             if concepto == "":
                 st.warning("Ingresá el nombre del concepto fiscal.")
             else:
@@ -464,11 +847,16 @@ def mostrar_conceptos_fiscales_compra():
                 st.success("Concepto fiscal guardado.")
                 st.rerun()
 
-    with col2:
-        if st.button("Eliminar concepto fiscal"):
-            if concepto == "":
+    st.divider()
+
+    with st.form("form_eliminar_concepto"):
+        concepto_eliminar = st.text_input("Concepto fiscal a eliminar")
+        eliminar = st.form_submit_button("Eliminar concepto fiscal")
+
+        if eliminar:
+            if concepto_eliminar == "":
                 st.warning("Ingresá el concepto fiscal a eliminar.")
             else:
-                eliminar_concepto_fiscal_compra(concepto.strip())
+                eliminar_concepto_fiscal_compra(concepto_eliminar.strip())
                 st.success("Concepto fiscal eliminado.")
                 st.rerun()
