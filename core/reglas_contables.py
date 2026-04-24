@@ -1,18 +1,37 @@
-def interpretar_factura(tipo, neto, iva, total):
+def interpretar_comprobante(tipo, neto, iva, total):
 
     tipo = str(tipo).upper().strip()
 
-    # CASO SIN DISCRIMINACIÓN DE IVA
-    if float(neto) == 0 and float(iva) == 0:
+    try:
+        neto = float(neto)
+    except:
+        neto = 0.0
+
+    try:
+        iva = float(iva)
+    except:
+        iva = 0.0
+
+    try:
+        total = float(total)
+    except:
+        total = 0.0
+
+    # -------------------------------------------------
+    # CASO SIN IVA DETALLADO (regla que definiste)
+    # -------------------------------------------------
+    if neto == 0 and iva == 0:
         return {
-            "neto": float(total),
-            "iva": 0,
+            "neto": total,
+            "iva": 0.0,
             "modo": "SIN_IVA_DETALLADO"
         }
 
+    # -------------------------------------------------
     # CASO NORMAL
+    # -------------------------------------------------
     return {
-        "neto": float(neto),
-        "iva": float(iva),
+        "neto": neto,
+        "iva": iva,
         "modo": "IVA_DETALLADO"
     }

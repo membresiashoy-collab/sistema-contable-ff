@@ -1,29 +1,44 @@
 import streamlit as st
 import pandas as pd
-from core import database
+from core.database import ejecutar_query, registrar_carga, proximo_asiento
+from core.reglas_contables import interpretar_comprobante
 
 
 def mostrar_compras():
     st.title("📥 Módulo de Compras")
 
-    archivo = st.file_uploader("Subir CSV Compras", type=["csv"])
+    archivo = st.file_uploader("Subir CSV de Compras", type=["csv"])
 
     if archivo:
         try:
-            df = pd.read_csv(archivo, sep=None, engine="python", encoding="latin-1")
+            df = pd.read_csv(
+                archivo,
+                sep=None,
+                engine="python",
+                encoding="latin-1"
+            )
+
             st.dataframe(df.head(), use_container_width=True)
 
             if st.button("Procesar Compras"):
-                asiento = database.proximo_asiento()
+                asiento = proximo_asiento()
                 cantidad = 0
 
                 for _, fila in df.iterrows():
                     try:
                         fecha = str(fila.iloc[0])
-                        proveedor = str(fila.iloc[1])
-                        total = float(str(fila.iloc[2]).replace(",", "."))
+                        tipo = fila.iloc[1]
 
-                        database.ejecutar_query("""
+                        total = float(str(fila.iloc[2]).replace(",", "."))
+                        iva = float(str(fila.iloc[3]).replace(",", ".")) if len(fila) > 3 else 0
+
+                        datos = interpretar_comprobante(tipo, 0, iva, total)
+
+                        neto = datos["neto"]
+                        iva = datos["iva"]
+
+                        # GASTOS / COMPRAS
+                        ejecutar_query("""
                         INSERT INTO libro_diario
                         (id_asiento, fecha, cuenta, debe, haber, glosa, origen)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -31,13 +46,30 @@ def mostrar_compras():
                             asiento,
                             fecha,
                             "COMPRAS",
-                            total,
+                            neto,
                             0,
-                            f"Compra {proveedor}",
+                            f"Compra {tipo}",
                             "COMPRAS"
                         ))
 
-                        database.ejecutar_query("""
+                        # IVA CREDITO
+                        if iva > 0:
+                            ejecutar_query("""
+                            INSERT INTO libro_diario
+                            (id_asiento, fecha, cuenta, debe, haber, glosa, origen)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                asiento,
+                                fecha,
+                                "IVA CREDITO FISCAL",
+                                iva,
+                                0,
+                                f"Compra {tipo}",
+                                "COMPRAS"
+                            ))
+
+                        # PROVEEDORES
+                        ejecutar_query("""
                         INSERT INTO libro_diario
                         (id_asiento, fecha, cuenta, debe, haber, glosa, origen)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -47,7 +79,7 @@ def mostrar_compras():
                             "PROVEEDORES",
                             0,
                             total,
-                            f"Compra {proveedor}",
+                            f"Compra {tipo}",
                             "COMPRAS"
                         ))
 
@@ -57,13 +89,8 @@ def mostrar_compras():
                     except:
                         continue
 
-                database.registrar_archivo(
-                    archivo.name,
-                    "COMPRAS",
-                    cantidad
-                )
-
-                st.success(f"Se cargaron {cantidad} compras.")
+                registrar_carga("COMPRAS", archivo.name, cantidad)
+                st.success(f"Se procesaron {cantidad} compras.")
 
         except Exception as e:
             st.error(f"Error: {e}")
