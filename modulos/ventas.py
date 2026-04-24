@@ -27,20 +27,15 @@ def obtener_tipo_comprobante(codigo):
         """, (str(codigo),), fetch=True)
 
         if not df.empty:
-
             descripcion = str(df.iloc[0]["descripcion"]).upper()
             signo = int(df.iloc[0]["signo"])
 
             if "CREDITO" in descripcion:
-                tipo = "NC"
-
+                return "NC", signo
             elif "DEBITO" in descripcion:
-                tipo = "ND"
-
+                return "ND", signo
             else:
-                tipo = "FACTURA"
-
-            return tipo, signo
+                return "FACTURA", signo
 
     except:
         pass
@@ -49,18 +44,14 @@ def obtener_tipo_comprobante(codigo):
 
 
 def mostrar_ventas():
-    st.title("📤 Ventas PRO V2")
+    st.title("📤 Ventas")
 
-    archivo = st.file_uploader(
-        "Subir archivo CSV Ventas",
-        type=["csv"]
-    )
+    archivo = st.file_uploader("Subir CSV Ventas", type=["csv"])
 
     if archivo:
 
-        # Control archivo duplicado
         if archivo_ya_cargado(archivo.name):
-            st.error("⚠️ Ese archivo ya fue procesado anteriormente.")
+            st.error("Ese archivo ya fue cargado.")
             return
 
         try:
@@ -71,12 +62,7 @@ def mostrar_ventas():
                 encoding="latin-1"
             )
 
-            # Vista previa
-            preview = df.head().reset_index(drop=True)
-            preview.index = preview.index + 1
-
-            st.subheader("Vista previa")
-            st.dataframe(preview, use_container_width=True)
+            st.dataframe(df.head(), use_container_width=True)
 
             if st.button("Procesar Ventas"):
 
@@ -84,25 +70,19 @@ def mostrar_ventas():
 
                 procesados = 0
                 errores = 0
-                facturas = 0
-                nc = 0
-                nd = 0
+                detalle_errores = []
 
-                for _, fila in df.iterrows():
+                for i, fila in df.iterrows():
 
                     try:
                         fecha = str(fila.iloc[0])
                         codigo = str(fila.iloc[1]).strip()
-                        numero = str(fila.iloc[2])
+                        numero = str(fila.iloc[2]).strip()
 
                         cliente = str(fila.iloc[8]).strip()
-                        cuit = str(fila.iloc[6]).strip()
 
                         if cliente == "" or cliente.lower() == "nan":
                             cliente = "CONSUMIDOR FINAL"
-
-                        if cuit == "" or cuit.lower() == "nan":
-                            cuit = "S/CUIT"
 
                         neto = limpiar_num(fila.iloc[22])
                         iva = limpiar_num(fila.iloc[26])
@@ -110,14 +90,6 @@ def mostrar_ventas():
 
                         tipo, signo = obtener_tipo_comprobante(codigo)
 
-                        if tipo == "FACTURA":
-                            facturas += 1
-                        elif tipo == "NC":
-                            nc += 1
-                        elif tipo == "ND":
-                            nd += 1
-
-                        # Sin IVA discriminado
                         if iva == 0:
                             neto = total
 
@@ -127,79 +99,61 @@ def mostrar_ventas():
 
                         glosa = f"{tipo} {numero} - {cliente}"
 
-                        # Cliente / deudores
                         ejecutar_query("""
                             INSERT INTO libro_diario
-                            (id_asiento, fecha, cuenta, debe, haber, glosa, origen, archivo)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            (id_asiento,fecha,cuenta,debe,haber,glosa,origen,archivo)
+                            VALUES (?,?,?,?,?,?,?,?)
                         """, (
-                            asiento,
-                            fecha,
+                            asiento, fecha,
                             "DEUDORES POR VENTAS",
                             total if total > 0 else 0,
                             abs(total) if total < 0 else 0,
-                            glosa,
-                            "VENTAS",
-                            archivo.name
+                            glosa, "VENTAS", archivo.name
                         ))
 
-                        # Ventas
                         ejecutar_query("""
                             INSERT INTO libro_diario
-                            (id_asiento, fecha, cuenta, debe, haber, glosa, origen, archivo)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            (id_asiento,fecha,cuenta,debe,haber,glosa,origen,archivo)
+                            VALUES (?,?,?,?,?,?,?,?)
                         """, (
-                            asiento,
-                            fecha,
+                            asiento, fecha,
                             "VENTAS",
                             abs(neto) if neto < 0 else 0,
                             neto if neto > 0 else 0,
-                            glosa,
-                            "VENTAS",
-                            archivo.name
+                            glosa, "VENTAS", archivo.name
                         ))
 
-                        # IVA
                         if iva != 0:
                             ejecutar_query("""
                                 INSERT INTO libro_diario
-                                (id_asiento, fecha, cuenta, debe, haber, glosa, origen, archivo)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                (id_asiento,fecha,cuenta,debe,haber,glosa,origen,archivo)
+                                VALUES (?,?,?,?,?,?,?,?)
                             """, (
-                                asiento,
-                                fecha,
+                                asiento, fecha,
                                 "IVA DEBITO FISCAL",
                                 abs(iva) if iva < 0 else 0,
                                 iva if iva > 0 else 0,
-                                glosa,
-                                "VENTAS",
-                                archivo.name
+                                glosa, "VENTAS", archivo.name
                             ))
 
                         asiento += 1
                         procesados += 1
 
-                    except:
+                    except Exception as e:
                         errores += 1
-                        continue
+                        detalle_errores.append(f"Fila {i+1}: {str(e)}")
 
-                registrar_carga(
-                    "VENTAS",
-                    archivo.name,
-                    procesados
-                )
+                if procesados > 0:
+                    registrar_carga("VENTAS", archivo.name, procesados)
 
-                st.success("✅ Proceso Finalizado")
-
-                c1, c2, c3, c4 = st.columns(4)
-
-                c1.metric("Procesados", procesados)
-                c2.metric("Facturas", facturas)
-                c3.metric("Notas Crédito", nc)
-                c4.metric("Notas Débito", nd)
+                st.success(f"Procesados: {procesados}")
 
                 if errores > 0:
-                    st.warning(f"⚠️ Registros con error: {errores}")
+                    st.warning(f"Errores detectados: {errores}")
+
+                    with st.expander("Ver detalle errores"):
+                        for x in detalle_errores[:50]:
+                            st.write(x)
 
         except Exception as e:
-            st.error(f"Error general: {e}")
+            st.error(str(e))
