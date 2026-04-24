@@ -10,6 +10,8 @@ from database import (
     limpiar_base_pruebas
 )
 
+from core.ui import preparar_vista
+
 
 def mostrar_estado():
     st.title("📋 Estado de Cargas y Auditoría")
@@ -24,26 +26,22 @@ def mostrar_estado():
         if df.empty:
             st.info("No existen archivos cargados.")
         else:
-            df_vista = df.copy()
-            df_vista.index = range(1, len(df_vista) + 1)
-            df_vista.index.name = "N°"
-
-            st.dataframe(df_vista, use_container_width=True)
+            st.dataframe(preparar_vista(df), use_container_width=True)
 
             st.divider()
 
             st.subheader("Eliminar archivo individual")
 
-            for i, fila in df.iterrows():
+            for numero, (_, fila) in enumerate(df.iterrows(), start=1):
                 archivo = fila["nombre_archivo"]
                 modulo = fila["modulo"]
                 registros = fila["registros"]
                 fecha = fila["fecha"]
 
-                col1, col2, col3, col4, col5 = st.columns([1, 4, 2, 2, 1])
+                col1, col2, col3, col4, col5, col6 = st.columns([1, 4, 2, 2, 2, 1])
 
                 with col1:
-                    st.write(i + 1)
+                    st.write(numero)
 
                 with col2:
                     st.write(f"📄 **{archivo}**")
@@ -55,6 +53,9 @@ def mostrar_estado():
                     st.write(f"Registros: {registros}")
 
                 with col5:
+                    st.write(str(fecha))
+
+                with col6:
                     if st.button("❌", key=f"eliminar_{archivo}"):
                         st.session_state["archivo_a_eliminar"] = archivo
 
@@ -159,12 +160,8 @@ def mostrar_estado():
         if df_errores.empty:
             st.success("No hay errores registrados.")
         else:
-            df_errores_vista = df_errores.copy()
-            df_errores_vista.index = range(1, len(df_errores_vista) + 1)
-            df_errores_vista.index.name = "N°"
-
-            st.warning(f"Errores encontrados: {len(df_errores_vista)}")
-            st.dataframe(df_errores_vista, use_container_width=True)
+            st.warning(f"Errores encontrados: {len(df_errores)}")
+            st.dataframe(preparar_vista(df_errores), use_container_width=True)
 
         st.divider()
 

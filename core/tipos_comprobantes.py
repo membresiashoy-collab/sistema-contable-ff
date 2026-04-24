@@ -1,24 +1,10 @@
-def interpretar_tipo_comprobante(tipo_signo, neto, iva, total):
+def clasificar_tipo_comprobante(descripcion):
+    descripcion = str(descripcion).upper()
 
-    # NOTA DE CRÉDITO
-    if tipo_signo == -1:
-        return {
-            "neto": -abs(neto),
-            "iva": -abs(iva),
-            "total": -abs(total)
-        }
+    if "CREDITO" in descripcion or "CRÉDITO" in descripcion:
+        return "NC"
 
-    # NOTA DE DÉBITO
-    if tipo_signo == 1 and "DEBITO" in str(tipo_signo):
-        return {
-            "neto": abs(neto),
-            "iva": abs(iva),
-            "total": abs(total)
-        }
+    if "DEBITO" in descripcion or "DÉBITO" in descripcion:
+        return "ND"
 
-    # FACTURA NORMAL
-    return {
-        "neto": neto,
-        "iva": iva,
-        "total": total
-    }
+    return "FACTURA"

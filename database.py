@@ -7,8 +7,14 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "contabilidad_ff.db")
 
 
+def conectar():
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
 def ejecutar_query(sql, params=(), fetch=False):
-    conn = sqlite3.connect(DB_PATH)
+    conn = conectar()
 
     if fetch:
         df = pd.read_sql_query(sql, conn, params=params)
@@ -21,8 +27,47 @@ def ejecutar_query(sql, params=(), fetch=False):
     conn.close()
 
 
+def ejecutar_transaccion(operaciones):
+    """
+    Ejecuta una lista de operaciones en una sola transacción.
+    Cada operación debe ser una tupla:
+        (sql, params)
+
+    Si algo falla, no se guarda nada de esa tanda.
+    """
+    conn = conectar()
+    cur = conn.cursor()
+
+    try:
+        for sql, params in operaciones:
+            cur.execute(sql, params)
+
+        conn.commit()
+
+    except Exception as e:
+        conn.rollback()
+        raise e
+
+    finally:
+        conn.close()
+
+
+def columna_existe(conn, tabla, columna):
+    columnas = pd.read_sql_query(
+        f"PRAGMA table_info({tabla})",
+        conn
+    )["name"].tolist()
+
+    return columna in columnas
+
+
+def agregar_columna_si_no_existe(conn, tabla, columna, definicion):
+    if not columna_existe(conn, tabla, columna):
+        conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {definicion}")
+
+
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = conectar()
     cur = conn.cursor()
 
     cur.execute("""
@@ -31,8 +76,8 @@ def init_db():
             id_asiento INTEGER,
             fecha TEXT,
             cuenta TEXT,
-            debe REAL,
-            haber REAL,
+            debe REAL DEFAULT 0,
+            haber REAL DEFAULT 0,
             glosa TEXT,
             origen TEXT,
             archivo TEXT
@@ -44,7 +89,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             modulo TEXT,
             nombre_archivo TEXT,
-            registros INTEGER,
+            registros INTEGER DEFAULT 0,
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -118,18 +163,52 @@ def init_db():
             cuit TEXT,
             tipo TEXT,
             numero TEXT,
-            debe REAL,
-            haber REAL,
-            saldo REAL,
+            debe REAL DEFAULT 0,
+            haber REAL DEFAULT 0,
+            saldo REAL DEFAULT 0,
             origen TEXT,
             archivo TEXT,
             fecha_carga TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
+    # Compatibilidad con bases antiguas
+    agregar_columna_si_no_existe(conn, "libro_diario", "archivo", "TEXT")
+    agregar_columna_si_no_existe(conn, "historial_cargas", "registros", "INTEGER DEFAULT 0")
+
+    # Índices para mejorar velocidad
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_libro_diario_archivo
+        ON libro_diario(archivo)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_libro_diario_origen
+        ON libro_diario(origen)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_ventas_archivo
+        ON ventas_comprobantes(archivo)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cta_cte_cliente
+        ON cuenta_corriente_clientes(cliente)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_comprobantes_procesados
+        ON comprobantes_procesados(modulo, codigo, numero, cliente_proveedor)
+    """)
+
     conn.commit()
     conn.close()
 
+
+# ======================================================
+# FUNCIONES GENERALES
+# ======================================================
 
 def registrar_carga(modulo, archivo, registros):
     ejecutar_query("""
@@ -188,6 +267,34 @@ def eliminar_todo_diario():
     ejecutar_query("DELETE FROM libro_diario")
 
 
+def eliminar_diferencias_redondeo():
+    ejecutar_query("""
+        DELETE FROM libro_diario
+        WHERE cuenta = 'DIFERENCIA POR REDONDEO'
+    """)
+
+
+def limpiar_errores():
+    ejecutar_query("DELETE FROM errores_carga")
+
+
+def limpiar_comprobantes_procesados():
+    ejecutar_query("DELETE FROM comprobantes_procesados")
+
+
+def limpiar_base_pruebas():
+    ejecutar_query("DELETE FROM libro_diario")
+    ejecutar_query("DELETE FROM historial_cargas")
+    ejecutar_query("DELETE FROM comprobantes_procesados")
+    ejecutar_query("DELETE FROM errores_carga")
+    ejecutar_query("DELETE FROM ventas_comprobantes")
+    ejecutar_query("DELETE FROM cuenta_corriente_clientes")
+
+
+# ======================================================
+# COMPROBANTES
+# ======================================================
+
 def comprobante_ya_procesado(modulo, codigo, numero, cliente_proveedor):
     df = ejecutar_query("""
         SELECT id
@@ -208,6 +315,39 @@ def registrar_comprobante(modulo, fecha, codigo, numero, cliente_proveedor, tota
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (modulo, fecha, codigo, numero, cliente_proveedor, total, archivo))
 
+
+def tipo_comprobante_existe(codigo):
+    df = ejecutar_query("""
+        SELECT codigo
+        FROM tipos_comprobantes
+        WHERE codigo = ?
+    """, (str(codigo),), fetch=True)
+
+    return not df.empty
+
+
+def obtener_tipo_comprobante_config(codigo):
+    df = ejecutar_query("""
+        SELECT descripcion, signo
+        FROM tipos_comprobantes
+        WHERE codigo = ?
+    """, (str(codigo).strip(),), fetch=True)
+
+    if df.empty:
+        return None
+
+    descripcion = str(df.iloc[0]["descripcion"])
+    signo = int(df.iloc[0]["signo"])
+
+    return {
+        "descripcion": descripcion,
+        "signo": signo
+    }
+
+
+# ======================================================
+# ERRORES
+# ======================================================
 
 def registrar_error(modulo, archivo, fila, motivo, contenido):
     try:
@@ -239,32 +379,9 @@ def obtener_errores_por_archivo(archivo):
     """, (archivo,), fetch=True)
 
 
-def limpiar_errores():
-    ejecutar_query("DELETE FROM errores_carga")
-
-
-def limpiar_comprobantes_procesados():
-    ejecutar_query("DELETE FROM comprobantes_procesados")
-
-
-def limpiar_base_pruebas():
-    ejecutar_query("DELETE FROM libro_diario")
-    ejecutar_query("DELETE FROM historial_cargas")
-    ejecutar_query("DELETE FROM comprobantes_procesados")
-    ejecutar_query("DELETE FROM errores_carga")
-    ejecutar_query("DELETE FROM ventas_comprobantes")
-    ejecutar_query("DELETE FROM cuenta_corriente_clientes")
-
-
-def tipo_comprobante_existe(codigo):
-    df = ejecutar_query("""
-        SELECT codigo
-        FROM tipos_comprobantes
-        WHERE codigo = ?
-    """, (str(codigo),), fetch=True)
-
-    return not df.empty
-
+# ======================================================
+# VENTAS
+# ======================================================
 
 def registrar_venta(fecha, anio, mes, codigo, tipo, punto_venta, numero, cliente, cuit, neto, iva, total, archivo):
     ejecutar_query("""
@@ -280,9 +397,3 @@ def registrar_cta_cte_cliente(fecha, cliente, cuit, tipo, numero, debe, haber, s
         (fecha, cliente, cuit, tipo, numero, debe, haber, saldo, origen, archivo)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (fecha, cliente, cuit, tipo, numero, debe, haber, saldo, origen, archivo))
-
-def eliminar_diferencias_redondeo():
-    ejecutar_query("""
-        DELETE FROM libro_diario
-        WHERE cuenta = 'DIFERENCIA POR REDONDEO'
-    """)

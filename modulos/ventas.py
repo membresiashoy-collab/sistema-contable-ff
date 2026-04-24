@@ -1,187 +1,17 @@
 import streamlit as st
 import pandas as pd
-from io import BytesIO
 
-from database import (
-    ejecutar_query,
-    registrar_carga,
-    proximo_asiento,
-    archivo_ya_cargado,
-    comprobante_ya_procesado,
-    registrar_comprobante,
-    registrar_error,
-    tipo_comprobante_existe,
-    registrar_venta,
-    registrar_cta_cte_cliente
-)
+from database import ejecutar_query, archivo_ya_cargado
+from services.ventas_service import procesar_csv_ventas
 
+from core.fechas import ordenar_dataframe_por_fecha, fecha_para_ordenar, formatear_fecha
+from core.exportadores import exportar_excel
+from core.ui import preparar_vista
+from core.numeros import moneda
 
-# ======================================================
-# FUNCIONES AUXILIARES
-# ======================================================
-
-def limpiar_num(v):
-    """
-    Convierte números del CSV ARCA/AFIP a float.
-    Soporta formatos:
-    - 103305,76
-    - 103.305,76
-    - 103305.76
-    - 103305
-    """
-    try:
-        if pd.isna(v):
-            return 0.0
-
-        if isinstance(v, (int, float)):
-            return float(v)
-
-        valor = str(v).strip()
-
-        if valor == "" or valor.lower() == "nan":
-            return 0.0
-
-        valor = valor.replace("$", "").replace(" ", "")
-
-        if "," in valor:
-            valor = valor.replace(".", "").replace(",", ".")
-        else:
-            if valor.count(".") > 1:
-                valor = valor.replace(".", "")
-
-        return float(valor)
-
-    except Exception:
-        return 0.0
-
-
-def limpiar_texto(v):
-    try:
-        if pd.isna(v):
-            return ""
-
-        texto = str(v).strip()
-
-        if texto.lower() in ["nan", "none"]:
-            return ""
-
-        if texto.endswith(".0"):
-            texto = texto[:-2]
-
-        return texto
-
-    except Exception:
-        return ""
-
-
-def formatear_fecha(fecha):
-    try:
-        f = pd.to_datetime(fecha, dayfirst=True, errors="coerce")
-
-        if pd.isna(f):
-            return str(fecha)
-
-        return f.strftime("%d/%m/%Y")
-
-    except Exception:
-        return str(fecha)
-
-
-def obtener_anio_mes(fecha):
-    try:
-        f = pd.to_datetime(fecha, dayfirst=True, errors="coerce")
-
-        if pd.isna(f):
-            return None, None
-
-        return int(f.year), int(f.month)
-
-    except Exception:
-        return None, None
-
-
-def obtener_tipo_comprobante(codigo):
-    df = ejecutar_query("""
-        SELECT descripcion, signo
-        FROM tipos_comprobantes
-        WHERE codigo = ?
-    """, (str(codigo).strip(),), fetch=True)
-
-    if df.empty:
-        return None, None
-
-    descripcion = str(df.iloc[0]["descripcion"]).upper()
-    signo = int(df.iloc[0]["signo"])
-
-    if "CREDITO" in descripcion or "CRÉDITO" in descripcion:
-        return "NC", signo
-
-    if "DEBITO" in descripcion or "DÉBITO" in descripcion:
-        return "ND", signo
-
-    return "FACTURA", signo
-
-
-def construir_numero_comprobante(fila):
-    """
-    En CSV ARCA/AFIP generalmente:
-    columna 2 = punto de venta
-    columna 3 = número desde
-    columna 4 = número hasta
-    """
-    punto_venta = limpiar_texto(fila.iloc[2])
-    numero_desde = limpiar_texto(fila.iloc[3])
-    numero_hasta = limpiar_texto(fila.iloc[4])
-
-    numero = f"{punto_venta}-{numero_desde}"
-
-    if numero_hasta not in ["", "nan", "None"] and numero_hasta != numero_desde:
-        numero = f"{punto_venta}-{numero_desde}/{numero_hasta}"
-
-    return punto_venta, numero
-
-
-def insertar_movimiento(asiento, fecha, cuenta, debe, haber, glosa, archivo):
-    ejecutar_query("""
-        INSERT INTO libro_diario
-        (id_asiento, fecha, cuenta, debe, haber, glosa, origen, archivo)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        asiento,
-        fecha,
-        cuenta,
-        round(float(debe), 2),
-        round(float(haber), 2),
-        glosa,
-        "VENTAS",
-        archivo
-    ))
-
-
-def exportar_excel(diccionario_df):
-    output = BytesIO()
-
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        for nombre_hoja, df in diccionario_df.items():
-            df.to_excel(writer, index=False, sheet_name=nombre_hoja[:31])
-
-    output.seek(0)
-    return output
-
-
-def preparar_vista(df):
-    df_vista = df.copy()
-    df_vista.index = range(1, len(df_vista) + 1)
-    df_vista.index.name = "N°"
-    return df_vista
-
-
-# ======================================================
-# PANTALLA PRINCIPAL DE VENTAS
-# ======================================================
 
 def mostrar_ventas():
-    st.title("📤 Ventas PRO V4")
+    st.title("📤 Ventas PRO V5")
 
     tab1, tab2, tab3, tab4 = st.tabs([
         "Cargar CSV",
@@ -202,10 +32,6 @@ def mostrar_ventas():
     with tab4:
         mostrar_cuenta_corriente_clientes()
 
-
-# ======================================================
-# TAB 1 - CARGA CSV VENTAS
-# ======================================================
 
 def cargar_csv_ventas():
     st.info(
@@ -231,303 +57,48 @@ def cargar_csv_ventas():
             dtype=str
         )
 
-        # Orden cronológico antes de procesar
-        df["_fecha_orden"] = pd.to_datetime(df.iloc[:, 0], dayfirst=True, errors="coerce")
-        df = df.sort_values(by="_fecha_orden").drop(columns=["_fecha_orden"])
+        df = ordenar_dataframe_por_fecha(df, columna_indice=0)
 
         st.subheader("Vista previa")
-
-        df_vista = preparar_vista(df.head(20))
-        st.dataframe(df_vista, use_container_width=True)
+        st.dataframe(preparar_vista(df.head(20)), use_container_width=True)
 
         st.caption(f"Registros detectados: {len(df)}")
 
         if not st.button("Procesar Ventas"):
             return
 
-        asiento = proximo_asiento()
-
-        procesados = 0
-        errores = 0
-        facturas = 0
-        notas_credito = 0
-        notas_debito = 0
-        duplicados = 0
-        errores_matematicos = 0
-        errores_codigo = 0
-        ajustes_centavos = 0
-
-        for numero_fila, (_, fila) in enumerate(df.iterrows(), start=2):
-
-            try:
-                fecha = formatear_fecha(fila.iloc[0])
-                anio, mes = obtener_anio_mes(fila.iloc[0])
-
-                codigo = limpiar_texto(fila.iloc[1])
-                punto_venta, numero = construir_numero_comprobante(fila)
-
-                cuit = limpiar_texto(fila.iloc[7])
-                cliente = limpiar_texto(fila.iloc[8])
-
-                if cliente == "":
-                    cliente = "CONSUMIDOR FINAL"
-
-                cliente_clave = cuit if cuit != "" else cliente
-
-                neto = limpiar_num(fila.iloc[22])
-                iva = limpiar_num(fila.iloc[26])
-                total = limpiar_num(fila.iloc[27])
-
-                contenido_fila = fila.to_dict()
-
-                # ------------------------------------------
-                # Validación de código de comprobante
-                # ------------------------------------------
-                if not tipo_comprobante_existe(codigo):
-                    errores += 1
-                    errores_codigo += 1
-
-                    registrar_error(
-                        "VENTAS",
-                        archivo.name,
-                        numero_fila,
-                        f"Código de comprobante inexistente: {codigo}",
-                        contenido_fila
-                    )
-                    continue
-
-                tipo, signo = obtener_tipo_comprobante(codigo)
-
-                if tipo is None:
-                    errores += 1
-                    errores_codigo += 1
-
-                    registrar_error(
-                        "VENTAS",
-                        archivo.name,
-                        numero_fila,
-                        f"No se pudo interpretar el comprobante: {codigo}",
-                        contenido_fila
-                    )
-                    continue
-
-                # ------------------------------------------
-                # Control de duplicado individual
-                # ------------------------------------------
-                if comprobante_ya_procesado("VENTAS", codigo, numero, cliente_clave):
-                    errores += 1
-                    duplicados += 1
-
-                    registrar_error(
-                        "VENTAS",
-                        archivo.name,
-                        numero_fila,
-                        f"Comprobante duplicado: código {codigo}, número {numero}, cliente/CUIT {cliente_clave}",
-                        contenido_fila
-                    )
-                    continue
-
-                # ------------------------------------------
-                # Validación matemática
-                # ------------------------------------------
-                # Caso Factura B / sin IVA discriminado:
-                # si IVA = 0, el total se toma como neto.
-                if iva == 0:
-                    neto = total
-
-                diferencia_original = round(total - (neto + iva), 2)
-
-                # Si la diferencia es grande, no se procesa.
-                if abs(diferencia_original) > 5:
-                    errores += 1
-                    errores_matematicos += 1
-
-                    registrar_error(
-                        "VENTAS",
-                        archivo.name,
-                        numero_fila,
-                        (
-                            f"Diferencia matemática mayor a $5. "
-                            f"Neto: {neto}, IVA: {iva}, Total: {total}, "
-                            f"Diferencia: {diferencia_original}"
-                        ),
-                        contenido_fila
-                    )
-                    continue
-
-                # Si la diferencia es mínima, NO se toca el IVA.
-                # Se respeta el total del CSV y se ajusta el neto contable.
-                if diferencia_original != 0:
-                    neto = round(total - iva, 2)
-                    ajustes_centavos += 1
-
-                # Aplicación de signo según comprobante
-                neto_s = round(neto * signo, 2)
-                iva_s = round(iva * signo, 2)
-                total_s = round(total * signo, 2)
-
-                glosa = f"{tipo} {numero} - {cliente}"
-
-                # ------------------------------------------
-                # Asiento contable
-                # ------------------------------------------
-                # Factura / ND:
-                #   Debe: Deudores por ventas
-                #   Haber: Ventas
-                #   Haber: IVA Débito Fiscal
-                #
-                # NC:
-                #   Debe: Ventas
-                #   Debe: IVA Débito Fiscal
-                #   Haber: Deudores por ventas
-                # ------------------------------------------
-
-                debe_total = total_s if total_s > 0 else 0
-                haber_total = abs(total_s) if total_s < 0 else 0
-
-                debe_venta = abs(neto_s) if neto_s < 0 else 0
-                haber_venta = neto_s if neto_s > 0 else 0
-
-                debe_iva = abs(iva_s) if iva_s < 0 else 0
-                haber_iva = iva_s if iva_s > 0 else 0
-
-                insertar_movimiento(
-                    asiento,
-                    fecha,
-                    "DEUDORES POR VENTAS",
-                    debe_total,
-                    haber_total,
-                    glosa,
-                    archivo.name
-                )
-
-                insertar_movimiento(
-                    asiento,
-                    fecha,
-                    "VENTAS",
-                    debe_venta,
-                    haber_venta,
-                    glosa,
-                    archivo.name
-                )
-
-                if iva_s != 0:
-                    insertar_movimiento(
-                        asiento,
-                        fecha,
-                        "IVA DEBITO FISCAL",
-                        debe_iva,
-                        haber_iva,
-                        glosa,
-                        archivo.name
-                    )
-
-                # ------------------------------------------
-                # Registro comprobante procesado
-                # ------------------------------------------
-                registrar_comprobante(
-                    "VENTAS",
-                    fecha,
-                    codigo,
-                    numero,
-                    cliente_clave,
-                    total_s,
-                    archivo.name
-                )
-
-                # ------------------------------------------
-                # Registro Libro IVA Ventas
-                # ------------------------------------------
-                registrar_venta(
-                    fecha,
-                    anio,
-                    mes,
-                    codigo,
-                    tipo,
-                    punto_venta,
-                    numero,
-                    cliente,
-                    cuit,
-                    neto_s,
-                    iva_s,
-                    total_s,
-                    archivo.name
-                )
-
-                # ------------------------------------------
-                # Registro Cuenta Corriente Clientes
-                # ------------------------------------------
-                registrar_cta_cte_cliente(
-                    fecha,
-                    cliente,
-                    cuit,
-                    tipo,
-                    numero,
-                    total_s if total_s > 0 else 0,
-                    abs(total_s) if total_s < 0 else 0,
-                    0,
-                    "VENTAS",
-                    archivo.name
-                )
-
-                asiento += 1
-                procesados += 1
-
-                if tipo == "FACTURA":
-                    facturas += 1
-                elif tipo == "NC":
-                    notas_credito += 1
-                elif tipo == "ND":
-                    notas_debito += 1
-
-            except Exception as e:
-                errores += 1
-
-                registrar_error(
-                    "VENTAS",
-                    archivo.name,
-                    numero_fila,
-                    f"Error inesperado: {str(e)}",
-                    fila.to_dict()
-                )
-
-        if procesados > 0:
-            registrar_carga("VENTAS", archivo.name, procesados)
+        resultado = procesar_csv_ventas(archivo.name, df)
 
         st.success("Proceso finalizado")
 
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            st.metric("Procesados", procesados)
-            st.metric("Facturas", facturas)
+            st.metric("Procesados", resultado["procesados"])
+            st.metric("Facturas", resultado["facturas"])
 
         with col2:
-            st.metric("Notas de Crédito", notas_credito)
-            st.metric("Notas de Débito", notas_debito)
+            st.metric("Notas de Crédito", resultado["notas_credito"])
+            st.metric("Notas de Débito", resultado["notas_debito"])
 
         with col3:
-            st.metric("Errores", errores)
-            st.metric("Duplicados", duplicados)
+            st.metric("Errores", resultado["errores"])
+            st.metric("Duplicados", resultado["duplicados"])
 
         st.divider()
 
         st.subheader("Detalle de auditoría")
-        st.write(f"Errores matemáticos: {errores_matematicos}")
-        st.write(f"Códigos inexistentes: {errores_codigo}")
-        st.write(f"Duplicados detectados: {duplicados}")
-        st.write(f"Ajustes técnicos de centavos sobre neto: {ajustes_centavos}")
+        st.write(f"Errores matemáticos: {resultado['errores_matematicos']}")
+        st.write(f"Códigos inexistentes: {resultado['errores_codigo']}")
+        st.write(f"Duplicados detectados: {resultado['duplicados']}")
+        st.write(f"Ajustes técnicos de centavos sobre neto: {resultado['ajustes_centavos']}")
 
-        if errores > 0:
+        if resultado["errores"] > 0:
             st.warning("Se detectaron errores. Revisar Estado de Cargas / Auditoría.")
 
     except Exception as e:
         st.error(f"No se pudo leer el archivo: {str(e)}")
 
-
-# ======================================================
-# TAB 2 - LIBRO IVA VENTAS
-# ======================================================
 
 def mostrar_libro_iva_ventas():
     st.subheader("📘 Libro IVA Ventas")
@@ -546,12 +117,19 @@ def mostrar_libro_iva_ventas():
             total,
             archivo
         FROM ventas_comprobantes
-        ORDER BY anio, mes, fecha, numero
     """, fetch=True)
 
     if df.empty:
         st.info("No hay ventas cargadas.")
         return
+
+    df["fecha_orden"] = df["fecha"].apply(fecha_para_ordenar)
+    df["fecha"] = df["fecha"].apply(formatear_fecha)
+
+    df = df.sort_values(
+        by=["anio", "mes", "fecha_orden", "numero"],
+        ascending=True
+    )
 
     col1, col2, col3 = st.columns(3)
 
@@ -577,17 +155,17 @@ def mostrar_libro_iva_ventas():
     if cliente != "Todos":
         df = df[df["cliente"] == cliente]
 
-    df_vista = preparar_vista(df)
-    st.dataframe(df_vista, use_container_width=True)
+    df_vista = df.drop(columns=["fecha_orden"])
+    st.dataframe(preparar_vista(df_vista), use_container_width=True)
 
     c1, c2, c3 = st.columns(3)
 
-    c1.metric("Neto", f"$ {df['neto'].sum():,.2f}")
-    c2.metric("IVA Débito Fiscal", f"$ {df['iva'].sum():,.2f}")
-    c3.metric("Total", f"$ {df['total'].sum():,.2f}")
+    c1.metric("Neto", moneda(df["neto"].sum()))
+    c2.metric("IVA Débito Fiscal", moneda(df["iva"].sum()))
+    c3.metric("Total", moneda(df["total"].sum()))
 
     excel = exportar_excel({
-        "Libro IVA Ventas": df
+        "Libro IVA Ventas": df_vista
     })
 
     st.download_button(
@@ -597,10 +175,6 @@ def mostrar_libro_iva_ventas():
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-
-# ======================================================
-# TAB 3 - RESUMEN / ESTADÍSTICAS
-# ======================================================
 
 def mostrar_resumen_ventas():
     st.subheader("📊 Resumen / Estadísticas de Ventas")
@@ -623,6 +197,8 @@ def mostrar_resumen_ventas():
     if df.empty:
         st.info("No hay ventas cargadas.")
         return
+
+    df["fecha"] = df["fecha"].apply(formatear_fecha)
 
     resumen_mensual = df.groupby(["anio", "mes"], as_index=False).agg({
         "neto": "sum",
@@ -659,9 +235,9 @@ def mostrar_resumen_ventas():
 
     col1, col2, col3, col4 = st.columns(4)
 
-    col1.metric("Total Neto", f"$ {df['neto'].sum():,.2f}")
-    col2.metric("IVA Débito", f"$ {df['iva'].sum():,.2f}")
-    col3.metric("Total Facturado", f"$ {df['total'].sum():,.2f}")
+    col1.metric("Total Neto", moneda(df["neto"].sum()))
+    col2.metric("IVA Débito", moneda(df["iva"].sum()))
+    col3.metric("Total Facturado", moneda(df["total"].sum()))
     col4.metric("Comprobantes", len(df))
 
     st.divider()
@@ -689,10 +265,6 @@ def mostrar_resumen_ventas():
     )
 
 
-# ======================================================
-# TAB 4 - CUENTA CORRIENTE CLIENTES
-# ======================================================
-
 def mostrar_cuenta_corriente_clientes():
     st.subheader("💰 Cuenta corriente de clientes")
 
@@ -716,6 +288,9 @@ def mostrar_cuenta_corriente_clientes():
         st.info("No hay movimientos de cuenta corriente.")
         return
 
+    df["fecha_orden"] = df["fecha"].apply(fecha_para_ordenar)
+    df["fecha"] = df["fecha"].apply(formatear_fecha)
+
     resumen = df.groupby(["cliente", "cuit"], as_index=False).agg({
         "debe": "sum",
         "haber": "sum"
@@ -736,7 +311,6 @@ def mostrar_cuenta_corriente_clientes():
         df = df[df["cliente"] == cliente]
 
     df = df.copy()
-    df["fecha_orden"] = pd.to_datetime(df["fecha"], dayfirst=True, errors="coerce")
     df = df.sort_values(by=["cliente", "fecha_orden", "id"])
 
     df["saldo_acumulado"] = (
@@ -744,14 +318,14 @@ def mostrar_cuenta_corriente_clientes():
         - df.groupby("cliente")["haber"].cumsum()
     )
 
-    df = df.drop(columns=["fecha_orden"])
+    df_vista = df.drop(columns=["fecha_orden"])
 
     st.subheader("Detalle de movimientos")
-    st.dataframe(preparar_vista(df), use_container_width=True)
+    st.dataframe(preparar_vista(df_vista), use_container_width=True)
 
     excel = exportar_excel({
         "Resumen Cta Cte": resumen,
-        "Detalle Cta Cte": df
+        "Detalle Cta Cte": df_vista
     })
 
     st.download_button(

@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
-from core.database import ejecutar_query
+from database import ejecutar_query
+from core.ui import preparar_vista
+from core.numeros import moneda
 
 
 def mostrar_estados():
@@ -17,10 +19,7 @@ def mostrar_estados():
 
     df["saldo"] = df["debe"] - df["haber"]
 
-    # ---------------------------
-    # ESTADO DE RESULTADOS
-    # ---------------------------
-    st.subheader("📈 Estado de Resultados")
+    st.subheader("📈 Estado de Resultados Básico")
 
     ingresos = df[df["cuenta"].str.contains("VENTAS", na=False)]["haber"].sum()
     costos = df[df["cuenta"].str.contains("COMPRAS", na=False)]["debe"].sum()
@@ -28,18 +27,15 @@ def mostrar_estados():
     resultado = ingresos - costos
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Ingresos", f"$ {ingresos:,.2f}")
-    c2.metric("Costos", f"$ {costos:,.2f}")
-    c3.metric("Resultado", f"$ {resultado:,.2f}")
+    c1.metric("Ingresos", moneda(ingresos))
+    c2.metric("Costos / Compras", moneda(costos))
+    c3.metric("Resultado", moneda(resultado))
 
     st.divider()
 
-    # ---------------------------
-    # BALANCE SIMPLE
-    # ---------------------------
-    st.subheader("📊 Balance General (Simple)")
+    st.subheader("📊 Balance General Básico")
 
     balance = df.groupby("cuenta")[["debe", "haber"]].sum().reset_index()
     balance["saldo"] = balance["debe"] - balance["haber"]
 
-    st.dataframe(balance, use_container_width=True)
+    st.dataframe(preparar_vista(balance), use_container_width=True)

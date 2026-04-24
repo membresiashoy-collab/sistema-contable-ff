@@ -1,19 +1,16 @@
 import streamlit as st
 import pandas as pd
-from database import ejecutar_query, eliminar_todo_diario, eliminar_diferencias_redondeo
 
+from database import (
+    ejecutar_query,
+    eliminar_todo_diario,
+    eliminar_diferencias_redondeo
+)
 
-def formatear_fecha(fecha):
-    try:
-        fecha_convertida = pd.to_datetime(fecha, dayfirst=True, errors="coerce")
-
-        if pd.isna(fecha_convertida):
-            return fecha
-
-        return fecha_convertida.strftime("%d/%m/%Y")
-
-    except Exception:
-        return fecha
+from core.fechas import fecha_para_ordenar, formatear_fecha
+from core.numeros import moneda
+from core.ui import preparar_vista
+from core.exportadores import exportar_excel
 
 
 def insertar_espacios_entre_asientos(df):
@@ -62,16 +59,12 @@ def mostrar_diario():
         st.info("Sin movimientos.")
         return
 
-    # --------------------------------------------------
-    # Control de movimientos viejos de redondeo
-    # --------------------------------------------------
     df_redondeo = df[df["cuenta"] == "DIFERENCIA POR REDONDEO"]
 
     if not df_redondeo.empty:
         st.error(
             f"Se detectaron {len(df_redondeo)} movimientos antiguos en la cuenta "
-            "'DIFERENCIA POR REDONDEO'. Estos movimientos corresponden a pruebas "
-            "anteriores y deben eliminarse."
+            "'DIFERENCIA POR REDONDEO'. Estos movimientos corresponden a pruebas anteriores."
         )
 
         if "confirmar_eliminar_redondeo" not in st.session_state:
@@ -99,14 +92,13 @@ def mostrar_diario():
 
         st.divider()
 
-    # Filtramos para que no se vean mientras existan
     df = df[df["cuenta"] != "DIFERENCIA POR REDONDEO"].copy()
 
     if df.empty:
         st.info("No hay movimientos contables luego de excluir redondeos antiguos.")
         return
 
-    df["fecha_orden"] = pd.to_datetime(df["fecha"], dayfirst=True, errors="coerce")
+    df["fecha_orden"] = df["fecha"].apply(fecha_para_ordenar)
     df["fecha"] = df["fecha"].apply(formatear_fecha)
 
     st.subheader("Filtros")
@@ -148,9 +140,7 @@ def mostrar_diario():
     diferencia = round(total_debe - total_haber, 2)
 
     df_vista_con_espacios = insertar_espacios_entre_asientos(df_vista)
-
-    df_vista_con_espacios.index = range(1, len(df_vista_con_espacios) + 1)
-    df_vista_con_espacios.index.name = "N°"
+    df_vista_con_espacios = preparar_vista(df_vista_con_espacios)
 
     st.subheader("Movimientos contables")
     st.dataframe(df_vista_con_espacios, use_container_width=True)
@@ -159,9 +149,9 @@ def mostrar_diario():
 
     c1, c2, c3 = st.columns(3)
 
-    c1.metric("Total Debe", f"$ {total_debe:,.2f}")
-    c2.metric("Total Haber", f"$ {total_haber:,.2f}")
-    c3.metric("Diferencia", f"$ {diferencia:,.2f}")
+    c1.metric("Total Debe", moneda(total_debe))
+    c2.metric("Total Haber", moneda(total_haber))
+    c3.metric("Diferencia", moneda(diferencia))
 
     if diferencia != 0:
         st.error("El Libro Diario no está cuadrando.")
@@ -175,7 +165,19 @@ def mostrar_diario():
     resumen = df.groupby("origen")[["debe", "haber"]].sum().reset_index()
     resumen["diferencia"] = resumen["debe"] - resumen["haber"]
 
-    st.dataframe(resumen, use_container_width=True)
+    st.dataframe(preparar_vista(resumen), use_container_width=True)
+
+    excel = exportar_excel({
+        "Libro Diario": df_vista,
+        "Resumen por Origen": resumen
+    })
+
+    st.download_button(
+        "Descargar Libro Diario Excel",
+        data=excel,
+        file_name="libro_diario.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
     st.divider()
 
