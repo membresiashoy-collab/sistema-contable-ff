@@ -90,16 +90,42 @@ def init_db():
         )
     """)
 
-    conn.commit()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ventas_comprobantes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha TEXT,
+            anio INTEGER,
+            mes INTEGER,
+            codigo TEXT,
+            tipo TEXT,
+            punto_venta TEXT,
+            numero TEXT,
+            cliente TEXT,
+            cuit TEXT,
+            neto REAL,
+            iva REAL,
+            total REAL,
+            archivo TEXT,
+            fecha_carga TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
-    # Compatibilidad con bases viejas
-    columnas_ld = pd.read_sql_query("PRAGMA table_info(libro_diario)", conn)["name"].tolist()
-    if "archivo" not in columnas_ld:
-        cur.execute("ALTER TABLE libro_diario ADD COLUMN archivo TEXT")
-
-    columnas_hist = pd.read_sql_query("PRAGMA table_info(historial_cargas)", conn)["name"].tolist()
-    if "registros" not in columnas_hist:
-        cur.execute("ALTER TABLE historial_cargas ADD COLUMN registros INTEGER DEFAULT 0")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cuenta_corriente_clientes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha TEXT,
+            cliente TEXT,
+            cuit TEXT,
+            tipo TEXT,
+            numero TEXT,
+            debe REAL,
+            haber REAL,
+            saldo REAL,
+            origen TEXT,
+            archivo TEXT,
+            fecha_carga TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
     conn.commit()
     conn.close()
@@ -144,25 +170,12 @@ def obtener_historial():
 
 
 def eliminar_carga(nombre):
-    ejecutar_query("""
-        DELETE FROM libro_diario
-        WHERE archivo = ?
-    """, (nombre,))
-
-    ejecutar_query("""
-        DELETE FROM comprobantes_procesados
-        WHERE archivo = ?
-    """, (nombre,))
-
-    ejecutar_query("""
-        DELETE FROM errores_carga
-        WHERE archivo = ?
-    """, (nombre,))
-
-    ejecutar_query("""
-        DELETE FROM historial_cargas
-        WHERE nombre_archivo = ?
-    """, (nombre,))
+    ejecutar_query("DELETE FROM libro_diario WHERE archivo = ?", (nombre,))
+    ejecutar_query("DELETE FROM comprobantes_procesados WHERE archivo = ?", (nombre,))
+    ejecutar_query("DELETE FROM errores_carga WHERE archivo = ?", (nombre,))
+    ejecutar_query("DELETE FROM ventas_comprobantes WHERE archivo = ?", (nombre,))
+    ejecutar_query("DELETE FROM cuenta_corriente_clientes WHERE archivo = ?", (nombre,))
+    ejecutar_query("DELETE FROM historial_cargas WHERE nombre_archivo = ?", (nombre,))
 
 
 def limpiar_historial():
@@ -226,6 +239,23 @@ def obtener_errores_por_archivo(archivo):
     """, (archivo,), fetch=True)
 
 
+def limpiar_errores():
+    ejecutar_query("DELETE FROM errores_carga")
+
+
+def limpiar_comprobantes_procesados():
+    ejecutar_query("DELETE FROM comprobantes_procesados")
+
+
+def limpiar_base_pruebas():
+    ejecutar_query("DELETE FROM libro_diario")
+    ejecutar_query("DELETE FROM historial_cargas")
+    ejecutar_query("DELETE FROM comprobantes_procesados")
+    ejecutar_query("DELETE FROM errores_carga")
+    ejecutar_query("DELETE FROM ventas_comprobantes")
+    ejecutar_query("DELETE FROM cuenta_corriente_clientes")
+
+
 def tipo_comprobante_existe(codigo):
     df = ejecutar_query("""
         SELECT codigo
@@ -234,3 +264,19 @@ def tipo_comprobante_existe(codigo):
     """, (str(codigo),), fetch=True)
 
     return not df.empty
+
+
+def registrar_venta(fecha, anio, mes, codigo, tipo, punto_venta, numero, cliente, cuit, neto, iva, total, archivo):
+    ejecutar_query("""
+        INSERT INTO ventas_comprobantes
+        (fecha, anio, mes, codigo, tipo, punto_venta, numero, cliente, cuit, neto, iva, total, archivo)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (fecha, anio, mes, codigo, tipo, punto_venta, numero, cliente, cuit, neto, iva, total, archivo))
+
+
+def registrar_cta_cte_cliente(fecha, cliente, cuit, tipo, numero, debe, haber, saldo, origen, archivo):
+    ejecutar_query("""
+        INSERT INTO cuenta_corriente_clientes
+        (fecha, cliente, cuit, tipo, numero, debe, haber, saldo, origen, archivo)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (fecha, cliente, cuit, tipo, numero, debe, haber, saldo, origen, archivo))
