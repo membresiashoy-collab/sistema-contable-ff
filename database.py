@@ -10,9 +10,9 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # BORRAR TABLA VIEJA MAL CREADA
-    cursor.execute("DROP TABLE IF EXISTS historial_cargas")
-
+    # ===============================
+    # LIBRO DIARIO
+    # ===============================
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS libro_diario (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,20 +22,27 @@ def init_db():
         debe REAL,
         haber REAL,
         glosa TEXT,
-        origen TEXT
+        origen TEXT,
+        archivo TEXT
     )
     """)
 
+    # ===============================
+    # HISTORIAL DE CARGAS
+    # ===============================
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS historial_cargas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         modulo TEXT,
-        nombre_archivo TEXT,
+        nombre_archivo TEXT UNIQUE,
         registros INTEGER
     )
     """)
 
+    # ===============================
+    # TIPOS COMPROBANTES
+    # ===============================
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS tipos_comprobantes (
         codigo TEXT,
@@ -44,6 +51,9 @@ def init_db():
     )
     """)
 
+    # ===============================
+    # PLAN DE CUENTAS
+    # ===============================
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS plan_cuentas (
         codigo TEXT,
@@ -55,13 +65,21 @@ def init_db():
     conn.close()
 
 
+# ===================================
+# QUERY GENERAL
+# ===================================
 def ejecutar_query(query, params=(), fetch=False):
+
     conn = sqlite3.connect(DB_PATH)
 
     if fetch:
-        df = pd.read_sql_query(query, conn, params=params)
-        conn.close()
-        return df
+        try:
+            df = pd.read_sql_query(query, conn, params=params)
+            conn.close()
+            return df
+        except:
+            conn.close()
+            return pd.DataFrame()
 
     cursor = conn.cursor()
     cursor.execute(query, params)
@@ -69,26 +87,85 @@ def ejecutar_query(query, params=(), fetch=False):
     conn.close()
 
 
-def registrar_carga(modulo, archivo, registros):
-    ejecutar_query("""
-    INSERT INTO historial_cargas
-    (modulo, nombre_archivo, registros)
-    VALUES (?, ?, ?)
-    """, (modulo, archivo, registros))
-
-
+# ===================================
+# PROXIMO ASIENTO
+# ===================================
 def proximo_asiento():
-    df = ejecutar_query(
-        "SELECT MAX(id_asiento) as maximo FROM libro_diario",
-        fetch=True
-    )
 
-    if df.empty or df.iloc[0]["maximo"] is None:
+    df = ejecutar_query("""
+        SELECT MAX(id_asiento) AS maximo
+        FROM libro_diario
+    """, fetch=True)
+
+    if df.empty:
+        return 1
+
+    if df.iloc[0]["maximo"] is None:
         return 1
 
     return int(df.iloc[0]["maximo"]) + 1
 
 
+# ===================================
+# REGISTRAR CARGA
+# ===================================
+def registrar_carga(modulo, archivo, registros):
+
+    ejecutar_query("""
+        INSERT INTO historial_cargas
+        (modulo, nombre_archivo, registros)
+        VALUES (?, ?, ?)
+    """, (modulo, archivo, registros))
+
+
+# ===================================
+# VERIFICAR ARCHIVO DUPLICADO
+# ===================================
+def archivo_ya_cargado(nombre_archivo):
+
+    df = ejecutar_query("""
+        SELECT *
+        FROM historial_cargas
+        WHERE nombre_archivo = ?
+    """, (nombre_archivo,), fetch=True)
+
+    return not df.empty
+
+
+# ===================================
+# ELIMINAR CARGA + DATOS
+# ===================================
+def eliminar_carga(nombre_archivo):
+
+    ejecutar_query("""
+        DELETE FROM libro_diario
+        WHERE archivo = ?
+    """, (nombre_archivo,))
+
+    ejecutar_query("""
+        DELETE FROM historial_cargas
+        WHERE nombre_archivo = ?
+    """, (nombre_archivo,))
+
+
+# ===================================
+# HISTORIAL
+# ===================================
+def obtener_historial():
+
+    return ejecutar_query("""
+        SELECT fecha,
+               modulo,
+               nombre_archivo,
+               registros
+        FROM historial_cargas
+        ORDER BY id DESC
+    """, fetch=True)
+
+
+# ===================================
+# LIMPIAR TODO
+# ===================================
 def eliminar_todo_diario():
     ejecutar_query("DELETE FROM libro_diario")
 
