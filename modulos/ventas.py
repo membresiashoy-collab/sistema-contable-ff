@@ -28,7 +28,12 @@ def mostrar_ventas():
             encoding="latin-1"
         )
 
-        st.dataframe(df.head().reset_index(drop=True) + 0)
+        # PREVISUALIZACIÓN CORREGIDA (arranca en 1)
+        preview = df.head().reset_index(drop=True)
+        preview.index = preview.index + 1
+
+        st.subheader("Vista previa")
+        st.dataframe(preview, use_container_width=True)
 
         if st.button("Procesar Ventas"):
 
@@ -40,7 +45,6 @@ def mostrar_ventas():
                 try:
                     fecha = str(fila.iloc[0])
                     cliente = str(fila.iloc[8])
-
                     descripcion = str(fila.iloc[2])
 
                     neto = limpiar_num(fila.iloc[22])
@@ -60,11 +64,11 @@ def mostrar_ventas():
 
                     glosa = f"{mov['tipo']} - {cliente}"
 
-                    # Cliente
+                    # DEUDORES POR VENTAS
                     ejecutar_query("""
-                    INSERT INTO libro_diario
-                    (id_asiento,fecha,cuenta,debe,haber,glosa,origen)
-                    VALUES (?,?,?,?,?,?,?)
+                        INSERT INTO libro_diario
+                        (id_asiento, fecha, cuenta, debe, haber, glosa, origen)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (
                         asiento,
                         fecha,
@@ -75,11 +79,11 @@ def mostrar_ventas():
                         "VENTAS"
                     ))
 
-                    # Ventas
+                    # VENTAS
                     ejecutar_query("""
-                    INSERT INTO libro_diario
-                    (id_asiento,fecha,cuenta,debe,haber,glosa,origen)
-                    VALUES (?,?,?,?,?,?,?)
+                        INSERT INTO libro_diario
+                        (id_asiento, fecha, cuenta, debe, haber, glosa, origen)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (
                         asiento,
                         fecha,
@@ -90,12 +94,12 @@ def mostrar_ventas():
                         "VENTAS"
                     ))
 
-                    # IVA
+                    # IVA DÉBITO FISCAL
                     if iva != 0:
                         ejecutar_query("""
-                        INSERT INTO libro_diario
-                        (id_asiento,fecha,cuenta,debe,haber,glosa,origen)
-                        VALUES (?,?,?,?,?,?,?)
+                            INSERT INTO libro_diario
+                            (id_asiento, fecha, cuenta, debe, haber, glosa, origen)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
                         """, (
                             asiento,
                             fecha,
