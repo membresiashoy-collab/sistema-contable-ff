@@ -2,97 +2,88 @@ import sqlite3
 import pandas as pd
 import os
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.path.join(BASE_DIR, "contabilidad_ff.db")
-
-
-def conectar():
-    return sqlite3.connect(DB_PATH)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "..", "contabilidad_ff.db")
 
 
 def init_db():
-    with conectar() as conn:
-        cur = conn.cursor()
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
 
-        cur.execute("""
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS libro_diario (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             id_asiento INTEGER,
             fecha TEXT,
             cuenta TEXT,
-            debe REAL DEFAULT 0,
-            haber REAL DEFAULT 0,
+            debe REAL,
+            haber REAL,
             glosa TEXT,
-            origen TEXT,
-            fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            origen TEXT
         )
         """)
 
-        cur.execute("""
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS plan_cuentas (
-            codigo TEXT PRIMARY KEY,
+            codigo TEXT,
             nombre TEXT
         )
         """)
 
-        cur.execute("""
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS tipos_comprobantes (
-            codigo INTEGER PRIMARY KEY,
+            codigo TEXT,
             descripcion TEXT,
             signo INTEGER
         )
         """)
 
-        cur.execute("""
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS historial_cargas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fecha_carga TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             modulo TEXT,
             nombre_archivo TEXT,
-            registros_procesados INTEGER
+            registros INTEGER
         )
         """)
 
-        conn.commit()
-
 
 def ejecutar_query(query, params=(), fetch=False):
-    with conectar() as conn:
-        if fetch:
-            try:
-                return pd.read_sql_query(query, conn, params=params)
-            except:
-                return pd.DataFrame()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
 
-        cur = conn.cursor()
-        cur.execute(query, params)
-        conn.commit()
+    if fetch:
+        try:
+            df = pd.read_sql_query(query, conn, params=params)
+            conn.close()
+            return df
+        except:
+            conn.close()
+            return pd.DataFrame()
 
-
-def proximo_asiento():
-    df = ejecutar_query(
-        "SELECT MAX(id_asiento) as maximo FROM libro_diario",
-        fetch=True
-    )
-
-    if df.empty or pd.isna(df.iloc[0]["maximo"]):
-        return 1
-
-    return int(df.iloc[0]["maximo"]) + 1
+    cursor.execute(query, params)
+    conn.commit()
+    conn.close()
 
 
-def registrar_carga(modulo, archivo, cantidad):
+def registrar_carga(modulo, archivo, registros):
     ejecutar_query("""
-        INSERT INTO historial_cargas
-        (modulo, nombre_archivo, registros_procesados)
-        VALUES (?, ?, ?)
-    """, (modulo, archivo, cantidad))
-
-
-def registrar_archivo(nombre, tipo, cantidad):
-    registrar_carga(tipo, nombre, cantidad)
+    INSERT INTO historial_cargas (modulo, nombre_archivo, registros)
+    VALUES (?, ?, ?)
+    """, (modulo, archivo, registros))
 
 
 def eliminar_todo_diario():
     ejecutar_query("DELETE FROM libro_diario")
     ejecutar_query("DELETE FROM sqlite_sequence WHERE name='libro_diario'")
+
+
+def limpiar_historial():
+    ejecutar_query("DELETE FROM historial_cargas")
+
+
+def proximo_asiento():
+    df = ejecutar_query("SELECT MAX(id_asiento) as max FROM libro_diario", fetch=True)
+    if df.empty or df.iloc[0]["max"] is None:
+        return 1
+    return int(df.iloc[0]["max"]) + 1
