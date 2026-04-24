@@ -1,4 +1,4 @@
-pandas
 streamlit
+pandas
 xlsxwriter
-fpdf2
+openpyxl

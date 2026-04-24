@@ -1,30 +1,53 @@
 import streamlit as st
-import sys
 import os
+import sys
 
-# CONFIGURACIÓN DE RUTAS (Soluciona el ImportError)
-# Agrega la carpeta actual al camino de búsqueda de Python
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
-# Ahora las importaciones funcionarán correctamente
-from database import init_db
-from modulos import ventas, reportes, auditoria, configuracion
+from core.database import init_db
+from modulos import ventas, compras, reportes, auditoria, configuracion
 
-st.set_page_config(page_title="Sistema Contable FF", layout="wide")
+st.set_page_config(
+    page_title="Sistema Contable FF",
+    page_icon="📊",
+    layout="wide"
+)
 
-# Inicializar base de datos
 init_db()
 
-st.sidebar.title("Navegación")
-opcion = st.sidebar.radio("Ir a:", ["Ventas", "Libro Diario", "Estado de Cargas", "Configuración"])
+st.sidebar.title("📌 Sistema Contable FF")
+st.sidebar.caption("Versión Profesional")
 
-if opcion == "Ventas":
+menu = st.sidebar.radio(
+    "Menú",
+    [
+        "Dashboard",
+        "Ventas",
+        "Compras",
+        "Libro Diario",
+        "Estado de Cargas",
+        "Configuración"
+    ]
+)
+
+if menu == "Dashboard":
+    st.title("📊 Dashboard")
+    st.success("Sistema listo para operar.")
+
+elif menu == "Ventas":
     ventas.mostrar_ventas()
-elif opcion == "Libro Diario":
+
+elif menu == "Compras":
+    compras.mostrar_compras()
+
+elif menu == "Libro Diario":
     reportes.mostrar_diario()
-elif opcion == "Estado de Cargas":
+
+elif menu == "Estado de Cargas":
     auditoria.mostrar_estado()
-elif opcion == "Configuración":
+
+elif menu == "Configuración":
     configuracion.mostrar_configuracion()
