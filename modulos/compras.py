@@ -1,8 +1,14 @@
 import streamlit as st
 import pandas as pd
+from datetime import date
 
 from database import ejecutar_query, archivo_ya_cargado
-from services.compras_service import procesar_csv_compras
+from services.compras_service import (
+    procesar_csv_compras_arca,
+    procesar_compra_manual,
+    es_csv_arca_compras,
+    asegurar_columnas_compras_v2
+)
 
 from core.fechas import ordenar_dataframe_por_fecha, fecha_para_ordenar, formatear_fecha
 from core.exportadores import exportar_excel
@@ -10,70 +16,115 @@ from core.ui import preparar_vista
 from core.numeros import moneda
 
 
-def normalizar_columna(nombre):
-    return str(nombre).lower().strip()
+# ======================================================
+# CONSULTAS AUXILIARES
+# ======================================================
+
+def obtener_categorias_activas():
+    return ejecutar_query("""
+        SELECT 
+            categoria,
+            cuenta_codigo,
+            cuenta_nombre,
+            cuenta_proveedor_codigo,
+            cuenta_proveedor_nombre,
+            tipo_categoria
+        FROM categorias_compra
+        WHERE activo = 1
+        ORDER BY categoria
+    """, fetch=True)
 
 
-def buscar_columna(columnas, palabras_clave, indice_defecto=0):
-    columnas_norm = [normalizar_columna(c) for c in columnas]
-
-    for palabra in palabras_clave:
-        palabra = palabra.lower()
-
-        for i, col in enumerate(columnas_norm):
-            if palabra in col:
-                return columnas[i]
-
-    if len(columnas) > indice_defecto:
-        return columnas[indice_defecto]
-
-    return columnas[0]
+def obtener_tipos_comprobantes():
+    return ejecutar_query("""
+        SELECT codigo, descripcion, signo
+        FROM tipos_comprobantes
+        ORDER BY codigo
+    """, fetch=True)
 
 
-def indice_columna(opciones, valor):
-    try:
-        return opciones.index(valor)
-    except Exception:
-        return 0
+def mostrar_resumen_resultado(resultado):
+    st.success("Proceso finalizado")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("Procesados", resultado["procesados"])
+        st.metric("Facturas", resultado["facturas"])
+
+    with col2:
+        st.metric("Notas de Crédito", resultado["notas_credito"])
+        st.metric("Notas de Débito", resultado["notas_debito"])
+
+    with col3:
+        st.metric("Errores", resultado["errores"])
+        st.metric("Duplicados", resultado["duplicados"])
+
+    st.divider()
+
+    st.subheader("Detalle de auditoría")
+    st.write(f"Errores matemáticos: {resultado['errores_matematicos']}")
+    st.write(f"Códigos inexistentes: {resultado['errores_codigo']}")
+    st.write(f"Duplicados detectados: {resultado['duplicados']}")
+    st.write(f"Ajustes técnicos de centavos sobre neto: {resultado['ajustes_centavos']}")
+
+    if resultado["errores"] > 0:
+        st.warning("Se detectaron errores. Revisar Estado de Cargas / Auditoría.")
 
 
-def mostrar_ventas_mensaje_columnas():
-    st.warning(
-        "Como los CSV de compras pueden variar según el origen, "
-        "este módulo permite mapear manualmente las columnas antes de procesar."
-    )
-
+# ======================================================
+# PANTALLA PRINCIPAL
+# ======================================================
 
 def mostrar_compras():
-    st.title("📥 Compras PRO V1")
+    asegurar_columnas_compras_v2()
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "Cargar CSV",
+    st.title("📥 Compras PRO V2")
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Cargar CSV ARCA",
+        "Carga Manual",
         "Libro IVA Compras",
         "Resumen / Estadísticas",
         "Cuenta corriente proveedores"
     ])
 
     with tab1:
-        cargar_csv_compras()
+        cargar_csv_compras_arca()
 
     with tab2:
-        mostrar_libro_iva_compras()
+        cargar_compra_manual()
 
     with tab3:
-        mostrar_resumen_compras()
+        mostrar_libro_iva_compras()
 
     with tab4:
+        mostrar_resumen_compras()
+
+    with tab5:
         mostrar_cuenta_corriente_proveedores()
 
 
-def cargar_csv_compras():
+# ======================================================
+# TAB 1 - CSV ARCA
+# ======================================================
+
+def cargar_csv_compras_arca():
     st.info(
-        "Carga CSV de compras, genera asientos contables, guarda Libro IVA Compras "
-        "y actualiza cuenta corriente de proveedores."
+        "Este módulo procesa CSV ARCA/AFIP Compras, usando categoría contable, "
+        "crédito fiscal computable, percepciones, impuestos internos y otros tributos."
     )
 
-    archivo = st.file_uploader("Subir CSV Compras", type=["csv"])
+    df_categorias = obtener_categorias_activas()
+
+    if df_categorias.empty:
+        st.error(
+            "Primero cargá las Categorías de Compra desde Configuración. "
+            "Sin categoría no se puede determinar la cuenta contable principal."
+        )
+        return
+
+    archivo = st.file_uploader("Subir CSV Compras ARCA/AFIP", type=["csv"])
 
     if not archivo:
         return
@@ -91,165 +142,220 @@ def cargar_csv_compras():
             dtype=str
         )
 
-        df = ordenar_dataframe_por_fecha(df, columna_indice=0)
+        try:
+            df = ordenar_dataframe_por_fecha(df, columna_indice=0)
+        except Exception:
+            pass
 
         st.subheader("Vista previa")
         st.dataframe(preparar_vista(df.head(20)), use_container_width=True)
         st.caption(f"Registros detectados: {len(df)}")
 
-        st.divider()
-
-        st.subheader("Mapeo de columnas")
-        mostrar_ventas_mensaje_columnas()
-
-        columnas = df.columns.tolist()
-        columnas_opcionales = ["No usar"] + columnas
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            fecha_col = st.selectbox(
-                "Fecha",
-                columnas,
-                index=indice_columna(
-                    columnas,
-                    buscar_columna(columnas, ["fecha"], 0)
-                )
+        if es_csv_arca_compras(df):
+            st.success("Formato detectado: CSV ARCA/AFIP Compras.")
+        else:
+            st.error(
+                "El archivo no parece tener el formato ARCA/AFIP Compras esperado. "
+                "Revisá que tenga columnas como Fecha de Emisión, Tipo de Comprobante, "
+                "Punto de Venta, Número de Comprobante, Importe Total."
             )
-
-            codigo_col = st.selectbox(
-                "Código comprobante",
-                columnas,
-                index=indice_columna(
-                    columnas,
-                    buscar_columna(columnas, ["tipo", "código", "codigo", "comprobante"], 1)
-                )
-            )
-
-            punto_venta_col = st.selectbox(
-                "Punto de venta",
-                columnas,
-                index=indice_columna(
-                    columnas,
-                    buscar_columna(columnas, ["punto", "pto"], 2)
-                )
-            )
-
-        with col2:
-            numero_desde_col = st.selectbox(
-                "Número desde / comprobante",
-                columnas,
-                index=indice_columna(
-                    columnas,
-                    buscar_columna(columnas, ["número desde", "numero desde", "nro desde", "comprobante"], 3)
-                )
-            )
-
-            numero_hasta_col = st.selectbox(
-                "Número hasta",
-                columnas_opcionales,
-                index=indice_columna(
-                    columnas_opcionales,
-                    buscar_columna(columnas_opcionales, ["número hasta", "numero hasta", "nro hasta"], 0)
-                )
-            )
-
-            cuit_col = st.selectbox(
-                "CUIT proveedor",
-                columnas,
-                index=indice_columna(
-                    columnas,
-                    buscar_columna(columnas, ["cuit", "documento", "doc"], 7 if len(columnas) > 7 else 0)
-                )
-            )
-
-        with col3:
-            proveedor_col = st.selectbox(
-                "Proveedor / Razón social",
-                columnas,
-                index=indice_columna(
-                    columnas,
-                    buscar_columna(columnas, ["denominación", "denominacion", "razón", "razon", "proveedor", "nombre"], 8 if len(columnas) > 8 else 0)
-                )
-            )
-
-            neto_col = st.selectbox(
-                "Neto gravado",
-                columnas,
-                index=indice_columna(
-                    columnas,
-                    buscar_columna(columnas, ["neto gravado", "neto"], 22 if len(columnas) > 22 else 0)
-                )
-            )
-
-            iva_col = st.selectbox(
-                "IVA",
-                columnas,
-                index=indice_columna(
-                    columnas,
-                    buscar_columna(columnas, ["iva"], 26 if len(columnas) > 26 else 0)
-                )
-            )
-
-        total_col = st.selectbox(
-            "Total comprobante",
-            columnas,
-            index=indice_columna(
-                columnas,
-                buscar_columna(columnas, ["importe total", "total"], 27 if len(columnas) > 27 else 0)
-            )
-        )
-
-        columnas_mapeadas = {
-            "fecha": fecha_col,
-            "codigo": codigo_col,
-            "punto_venta": punto_venta_col,
-            "numero_desde": numero_desde_col,
-            "numero_hasta": numero_hasta_col,
-            "cuit": cuit_col,
-            "proveedor": proveedor_col,
-            "neto": neto_col,
-            "iva": iva_col,
-            "total": total_col
-        }
-
-        st.divider()
-
-        if not st.button("Procesar Compras"):
             return
 
-        resultado = procesar_csv_compras(archivo.name, df, columnas_mapeadas)
+        st.divider()
 
-        st.success("Proceso finalizado")
+        st.subheader("Clasificación contable de la carga")
+
+        categoria = st.selectbox(
+            "Seleccionar categoría contable para estas compras",
+            df_categorias["categoria"].tolist()
+        )
+
+        fila_categoria = df_categorias[df_categorias["categoria"] == categoria].iloc[0]
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.write("Cuenta principal:")
+            st.write(f"**{fila_categoria['cuenta_codigo']} - {fila_categoria['cuenta_nombre']}**")
+
+        with col2:
+            st.write("Cuenta proveedor / acreedor:")
+            st.write(f"**{fila_categoria['cuenta_proveedor_codigo']} - {fila_categoria['cuenta_proveedor_nombre']}**")
+
+        st.warning(
+            "La categoría seleccionada se aplicará a todos los comprobantes del archivo. "
+            "Si el archivo mezcla compras de bienes, servicios y bienes de uso, conviene separarlo "
+            "o cargar esos casos manualmente."
+        )
+
+        if not st.button("Procesar Compras ARCA"):
+            return
+
+        resultado = procesar_csv_compras_arca(
+            archivo.name,
+            df,
+            categoria
+        )
+
+        mostrar_resumen_resultado(resultado)
+
+    except Exception as e:
+        st.error(f"No se pudo leer o procesar el archivo: {str(e)}")
+
+
+# ======================================================
+# TAB 2 - CARGA MANUAL
+# ======================================================
+
+def cargar_compra_manual():
+    st.info(
+        "Carga manual de comprobantes de compra. Útil para casos puntuales, "
+        "bienes de uso, servicios específicos o comprobantes no incluidos en CSV."
+    )
+
+    df_categorias = obtener_categorias_activas()
+
+    if df_categorias.empty:
+        st.error("Primero cargá las Categorías de Compra desde Configuración.")
+        return
+
+    df_tipos = obtener_tipos_comprobantes()
+
+    if df_tipos.empty:
+        st.error("Primero cargá los Tipos de Comprobantes desde Configuración.")
+        return
+
+    with st.form("form_compra_manual"):
+        st.subheader("Datos del comprobante")
 
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            st.metric("Procesados", resultado["procesados"])
-            st.metric("Facturas", resultado["facturas"])
+            fecha = st.date_input("Fecha de emisión", value=date.today())
 
         with col2:
-            st.metric("Notas de Crédito", resultado["notas_credito"])
-            st.metric("Notas de Débito", resultado["notas_debito"])
+            opciones_tipo = [
+                f"{row['codigo']} - {row['descripcion']}"
+                for _, row in df_tipos.iterrows()
+            ]
+            tipo_sel = st.selectbox("Tipo de comprobante", opciones_tipo)
 
         with col3:
-            st.metric("Errores", resultado["errores"])
-            st.metric("Duplicados", resultado["duplicados"])
+            categoria = st.selectbox(
+                "Categoría contable",
+                df_categorias["categoria"].tolist()
+            )
+
+        codigo = tipo_sel.split(" - ")[0].strip()
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            punto_venta = st.text_input("Punto de venta", value="1")
+
+        with col2:
+            numero_comprobante = st.text_input("Número de comprobante")
+
+        with col3:
+            moneda_original = st.text_input("Moneda", value="PES")
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            cuit = st.text_input("CUIT proveedor")
+
+        with col2:
+            proveedor = st.text_input("Proveedor / Razón social")
+
+        with col3:
+            tipo_cambio = st.number_input("Tipo de cambio", min_value=0.0, value=1.0, step=0.01)
 
         st.divider()
 
-        st.subheader("Detalle de auditoría")
-        st.write(f"Errores matemáticos: {resultado['errores_matematicos']}")
-        st.write(f"Códigos inexistentes: {resultado['errores_codigo']}")
-        st.write(f"Duplicados detectados: {resultado['duplicados']}")
-        st.write(f"Ajustes técnicos de centavos sobre neto: {resultado['ajustes_centavos']}")
+        st.subheader("Importes fiscales")
 
-        if resultado["errores"] > 0:
-            st.warning("Se detectaron errores. Revisar Estado de Cargas / Auditoría.")
+        col1, col2, col3 = st.columns(3)
 
-    except Exception as e:
-        st.error(f"No se pudo leer el archivo: {str(e)}")
+        with col1:
+            total_neto_gravado = st.number_input("Total Neto Gravado", value=0.0, step=0.01)
+            importe_no_gravado = st.number_input("Importe No Gravado", value=0.0, step=0.01)
+            importe_exento = st.number_input("Importe Exento", value=0.0, step=0.01)
 
+        with col2:
+            iva_total = st.number_input("Total IVA facturado", value=0.0, step=0.01)
+            credito_fiscal = st.number_input("Crédito Fiscal Computable", value=0.0, step=0.01)
+            percepcion_iva = st.number_input("Percepción IVA", value=0.0, step=0.01)
+
+        with col3:
+            percepcion_iibb = st.number_input("Percepción IIBB", value=0.0, step=0.01)
+            percepcion_otros = st.number_input("Percepción otros imp. nacionales", value=0.0, step=0.01)
+            impuestos_municipales = st.number_input("Impuestos municipales", value=0.0, step=0.01)
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            impuestos_internos = st.number_input("Impuestos internos", value=0.0, step=0.01)
+
+        with col2:
+            otros_tributos = st.number_input("Otros tributos", value=0.0, step=0.01)
+
+        with col3:
+            total = st.number_input("Importe Total", value=0.0, step=0.01)
+
+        total_sugerido = (
+            total_neto_gravado
+            + importe_no_gravado
+            + importe_exento
+            + iva_total
+            + percepcion_iva
+            + percepcion_iibb
+            + percepcion_otros
+            + impuestos_municipales
+            + impuestos_internos
+            + otros_tributos
+        )
+
+        st.caption(f"Total sugerido según componentes: {moneda(total_sugerido)}")
+
+        guardar = st.form_submit_button("Guardar compra manual")
+
+        if guardar:
+            if numero_comprobante == "" or proveedor == "":
+                st.warning("Completá número de comprobante y proveedor.")
+            elif total <= 0:
+                st.warning("El total debe ser mayor a cero.")
+            else:
+                datos = {
+                    "fecha": fecha.strftime("%Y-%m-%d"),
+                    "codigo": codigo,
+                    "punto_venta": punto_venta,
+                    "numero_comprobante": numero_comprobante,
+                    "cuit": cuit,
+                    "proveedor": proveedor,
+                    "categoria_compra": categoria,
+                    "total_neto_gravado": total_neto_gravado,
+                    "importe_no_gravado": importe_no_gravado,
+                    "importe_exento": importe_exento,
+                    "iva_total": iva_total,
+                    "credito_fiscal_computable": credito_fiscal,
+                    "percepcion_iva": percepcion_iva,
+                    "percepcion_iibb": percepcion_iibb,
+                    "percepcion_otros_imp_nac": percepcion_otros,
+                    "impuestos_municipales": impuestos_municipales,
+                    "impuestos_internos": impuestos_internos,
+                    "otros_tributos": otros_tributos,
+                    "total": total,
+                    "moneda": moneda_original,
+                    "tipo_cambio": tipo_cambio
+                }
+
+                resultado = procesar_compra_manual(datos)
+                mostrar_resumen_resultado(resultado)
+
+
+# ======================================================
+# TAB 3 - LIBRO IVA COMPRAS
+# ======================================================
 
 def mostrar_libro_iva_compras():
     st.subheader("📘 Libro IVA Compras")
@@ -263,8 +369,20 @@ def mostrar_libro_iva_compras():
             numero,
             proveedor,
             cuit,
+            categoria_compra,
+            cuenta_principal_nombre,
             neto,
-            iva,
+            importe_no_gravado,
+            importe_exento,
+            iva_total,
+            credito_fiscal_computable,
+            iva_no_computable,
+            percepcion_iva,
+            percepcion_iibb,
+            percepcion_otros_imp_nac,
+            impuestos_municipales,
+            impuestos_internos,
+            otros_tributos,
             total,
             archivo
         FROM compras_comprobantes
@@ -307,13 +425,15 @@ def mostrar_libro_iva_compras():
         df = df[df["proveedor"] == proveedor]
 
     df_vista = df.drop(columns=["fecha_orden"])
+
     st.dataframe(preparar_vista(df_vista), use_container_width=True)
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
 
-    c1.metric("Neto", moneda(df["neto"].sum()))
-    c2.metric("IVA Crédito Fiscal", moneda(df["iva"].sum()))
-    c3.metric("Total", moneda(df["total"].sum()))
+    c1.metric("Neto Gravado", moneda(df["neto"].sum()))
+    c2.metric("IVA Total", moneda(df["iva_total"].sum()))
+    c3.metric("Crédito Fiscal Computable", moneda(df["credito_fiscal_computable"].sum()))
+    c4.metric("Total Compras", moneda(df["total"].sum()))
 
     excel = exportar_excel({
         "Libro IVA Compras": df_vista
@@ -327,6 +447,10 @@ def mostrar_libro_iva_compras():
     )
 
 
+# ======================================================
+# TAB 4 - RESUMEN
+# ======================================================
+
 def mostrar_resumen_compras():
     st.subheader("📊 Resumen / Estadísticas de Compras")
 
@@ -338,10 +462,11 @@ def mostrar_resumen_compras():
             tipo,
             proveedor,
             cuit,
+            categoria_compra,
             neto,
-            iva,
-            total,
-            archivo
+            iva_total,
+            credito_fiscal_computable,
+            total
         FROM compras_comprobantes
     """, fetch=True)
 
@@ -349,11 +474,10 @@ def mostrar_resumen_compras():
         st.info("No hay compras cargadas.")
         return
 
-    df["fecha"] = df["fecha"].apply(formatear_fecha)
-
     resumen_mensual = df.groupby(["anio", "mes"], as_index=False).agg({
         "neto": "sum",
-        "iva": "sum",
+        "iva_total": "sum",
+        "credito_fiscal_computable": "sum",
         "total": "sum",
         "tipo": "count"
     })
@@ -362,15 +486,16 @@ def mostrar_resumen_compras():
         "tipo": "cantidad_comprobantes"
     })
 
-    resumen_tipo = df.groupby(["tipo"], as_index=False).agg({
+    resumen_categoria = df.groupby(["categoria_compra"], as_index=False).agg({
         "neto": "sum",
-        "iva": "sum",
+        "iva_total": "sum",
+        "credito_fiscal_computable": "sum",
         "total": "sum",
-        "proveedor": "count"
+        "tipo": "count"
     })
 
-    resumen_tipo = resumen_tipo.rename(columns={
-        "proveedor": "cantidad"
+    resumen_categoria = resumen_categoria.rename(columns={
+        "tipo": "cantidad"
     })
 
     ranking_proveedores = df.groupby(["proveedor", "cuit"], as_index=False).agg({
@@ -387,24 +512,24 @@ def mostrar_resumen_compras():
     col1, col2, col3, col4 = st.columns(4)
 
     col1.metric("Total Neto", moneda(df["neto"].sum()))
-    col2.metric("IVA Crédito", moneda(df["iva"].sum()))
-    col3.metric("Total Compras", moneda(df["total"].sum()))
-    col4.metric("Comprobantes", len(df))
+    col2.metric("IVA Total", moneda(df["iva_total"].sum()))
+    col3.metric("Crédito Fiscal Computable", moneda(df["credito_fiscal_computable"].sum()))
+    col4.metric("Total Compras", moneda(df["total"].sum()))
 
     st.divider()
 
     st.subheader("Resumen mensual")
     st.dataframe(preparar_vista(resumen_mensual), use_container_width=True)
 
-    st.subheader("Resumen por tipo de comprobante")
-    st.dataframe(preparar_vista(resumen_tipo), use_container_width=True)
+    st.subheader("Resumen por categoría")
+    st.dataframe(preparar_vista(resumen_categoria), use_container_width=True)
 
     st.subheader("Ranking de proveedores")
     st.dataframe(preparar_vista(ranking_proveedores), use_container_width=True)
 
     excel = exportar_excel({
         "Resumen Mensual": resumen_mensual,
-        "Resumen Tipo": resumen_tipo,
+        "Resumen Categoria": resumen_categoria,
         "Ranking Proveedores": ranking_proveedores
     })
 
@@ -415,6 +540,10 @@ def mostrar_resumen_compras():
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
+
+# ======================================================
+# TAB 5 - CUENTA CORRIENTE PROVEEDORES
+# ======================================================
 
 def mostrar_cuenta_corriente_proveedores():
     st.subheader("💰 Cuenta corriente de proveedores")
