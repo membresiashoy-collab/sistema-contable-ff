@@ -12,7 +12,15 @@ def interpretar_comprobante(descripcion, neto, iva, total):
         tipo = "ND"
         signo = 1
 
-    # Si no hay IVA informado
+    elif "CREDITO" in desc:
+        tipo = "NC"
+        signo = -1
+
+    elif "DEBITO" in desc:
+        tipo = "ND"
+        signo = 1
+
+    # Si IVA no informado
     if iva == 0:
         neto = total
 
