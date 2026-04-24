@@ -1,34 +1,34 @@
 import streamlit as st
-import pandas as pd
-from core.database import ejecutar_query
+from database import ejecutar_query
 
 
 def mostrar_configuracion():
-    st.title("⚙️ Configuración del Sistema")
+    st.title("⚙️ Configuración")
 
-    st.subheader("📚 Plan de Cuentas")
-    df_cuentas = ejecutar_query("SELECT * FROM plan_cuentas", fetch=True)
-    st.dataframe(df_cuentas, use_container_width=True)
+    st.subheader("Tipos de Comprobantes")
 
-    st.subheader("📄 Tipos de Comprobantes")
-    df_comp = ejecutar_query("SELECT * FROM tipos_comprobantes", fetch=True)
-    st.dataframe(df_comp, use_container_width=True)
+    df = ejecutar_query("""
+        SELECT *
+        FROM tipos_comprobantes
+        ORDER BY codigo
+    """, fetch=True)
 
-    st.subheader("📥 Cargar Plan de Cuentas")
+    if df.empty:
+        st.info("Sin datos cargados.")
+    else:
+        st.dataframe(df, use_container_width=True)
 
-    archivo = st.file_uploader("Subir CSV", type=["csv"])
+    st.divider()
 
-    if archivo:
-        if st.button("Guardar Plan"):
-            df = pd.read_csv(archivo, sep=None, engine="python", encoding="latin-1")
+    st.subheader("Plan de Cuentas")
 
-            ejecutar_query("DELETE FROM plan_cuentas")
+    df2 = ejecutar_query("""
+        SELECT *
+        FROM plan_cuentas
+        ORDER BY codigo
+    """, fetch=True)
 
-            for _, fila in df.iterrows():
-                ejecutar_query(
-                    "INSERT INTO plan_cuentas VALUES (?, ?)",
-                    (str(fila.iloc[0]), str(fila.iloc[1]).upper())
-                )
-
-            st.success("Plan de cuentas actualizado")
-            st.rerun()
+    if df2.empty:
+        st.info("Sin plan cargado.")
+    else:
+        st.dataframe(df2, use_container_width=True)

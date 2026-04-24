@@ -1,6 +1,5 @@
 import streamlit as st
-import pandas as pd
-from core.database import ejecutar_query, eliminar_todo_diario
+from database import ejecutar_query, eliminar_todo_diario
 
 
 def mostrar_diario():
@@ -27,7 +26,7 @@ def mostrar_diario():
 
     st.divider()
 
-    if st.button("🧹 LIMPIAR LIBRO DIARIO", type="primary"):
+    if st.button("🧹 LIMPIAR LIBRO DIARIO"):
         eliminar_todo_diario()
-        st.success("Libro Diario eliminado correctamente.")
+        st.success("Libro Diario limpiado.")
         st.rerun()

@@ -1,7 +1,15 @@
 import streamlit as st
 import pandas as pd
-from core.database import ejecutar_query, registrar_carga, proximo_asiento
-from core.reglas_contables import interpretar_comprobante
+from database import ejecutar_query, registrar_carga, proximo_asiento
+
+
+def limpiar_num(v):
+    try:
+        if pd.isna(v):
+            return 0.0
+        return float(str(v).replace(".", "").replace(",", "."))
+    except:
+        return 0.0
 
 
 def mostrar_compras():
@@ -18,26 +26,23 @@ def mostrar_compras():
                 encoding="latin-1"
             )
 
+            st.subheader("Vista previa")
             st.dataframe(df.head(), use_container_width=True)
 
             if st.button("Procesar Compras"):
+
                 asiento = proximo_asiento()
-                cantidad = 0
+                procesados = 0
 
                 for _, fila in df.iterrows():
                     try:
                         fecha = str(fila.iloc[0])
-                        tipo = fila.iloc[1]
 
-                        total = float(str(fila.iloc[2]).replace(",", "."))
-                        iva = float(str(fila.iloc[3]).replace(",", ".")) if len(fila) > 3 else 0
+                        total = limpiar_num(fila.iloc[2])
+                        iva = limpiar_num(fila.iloc[3]) if len(fila) > 3 else 0
 
-                        datos = interpretar_comprobante(tipo, 0, iva, total)
+                        neto = total - iva if iva > 0 else total
 
-                        neto = datos["neto"]
-                        iva = datos["iva"]
-
-                        # GASTOS / COMPRAS
                         ejecutar_query("""
                         INSERT INTO libro_diario
                         (id_asiento, fecha, cuenta, debe, haber, glosa, origen)
@@ -48,11 +53,10 @@ def mostrar_compras():
                             "COMPRAS",
                             neto,
                             0,
-                            f"Compra {tipo}",
+                            "Compra",
                             "COMPRAS"
                         ))
 
-                        # IVA CREDITO
                         if iva > 0:
                             ejecutar_query("""
                             INSERT INTO libro_diario
@@ -64,11 +68,10 @@ def mostrar_compras():
                                 "IVA CREDITO FISCAL",
                                 iva,
                                 0,
-                                f"Compra {tipo}",
+                                "Compra",
                                 "COMPRAS"
                             ))
 
-                        # PROVEEDORES
                         ejecutar_query("""
                         INSERT INTO libro_diario
                         (id_asiento, fecha, cuenta, debe, haber, glosa, origen)
@@ -79,18 +82,18 @@ def mostrar_compras():
                             "PROVEEDORES",
                             0,
                             total,
-                            f"Compra {tipo}",
+                            "Compra",
                             "COMPRAS"
                         ))
 
                         asiento += 1
-                        cantidad += 1
+                        procesados += 1
 
                     except:
                         continue
 
-                registrar_carga("COMPRAS", archivo.name, cantidad)
-                st.success(f"Se procesaron {cantidad} compras.")
+                registrar_carga("COMPRAS", archivo.name, procesados)
+                st.success(f"Se procesaron {procesados} compras.")
 
         except Exception as e:
             st.error(f"Error: {e}")

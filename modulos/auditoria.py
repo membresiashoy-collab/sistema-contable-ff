@@ -1,5 +1,5 @@
 import streamlit as st
-from core.database import ejecutar_query, limpiar_historial
+from database import ejecutar_query, limpiar_historial
 
 
 def mostrar_estado():
@@ -21,7 +21,7 @@ def mostrar_estado():
 
     st.divider()
 
-    if st.button("🧹 LIMPIAR HISTORIAL", type="primary"):
+    if st.button("🧹 LIMPIAR HISTORIAL"):
         limpiar_historial()
-        st.success("Historial eliminado correctamente.")
+        st.success("Historial eliminado.")
         st.rerun()
