@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Entornos / secretos
+.env
+.env.local
+
+# Bases de datos locales / sensibles
+*.db
+*.sqlite
+*.sqlite3
+
+# Carpeta data: se conserva la carpeta, no la base
+data/*
+!data/.gitkeep
+
+# Backups: se conservan las carpetas, no los backups reales
+backups/*
+!backups/.gitkeep
+!backups/sqlite/
+!backups/sqlite/.gitkeep
+!backups/exportaciones/
+!backups/exportaciones/.gitkeep
+
+# Archivos temporales
+*.tmp
+*.log
+
+# Sistema operativo
+.DS_Store
+Thumbs.db

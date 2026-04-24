@@ -1,19 +1,41 @@
 import sqlite3
 import pandas as pd
-import os
 import json
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "contabilidad_ff.db")
+from config import DB_PATH, DB_ENGINE, asegurar_directorios
 
+
+# ======================================================
+# CONEXIÓN BASE DE DATOS
+# ======================================================
 
 def conectar():
+    """
+    Conexión centralizada a la base de datos.
+
+    Hoy usa SQLite.
+    Más adelante puede adaptarse a PostgreSQL sin romper módulos.
+    """
+
+    asegurar_directorios()
+
+    if DB_ENGINE != "sqlite":
+        raise NotImplementedError(
+            "Por ahora el sistema usa SQLite. "
+            "La arquitectura ya queda preparada para PostgreSQL más adelante."
+        )
+
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
 def ejecutar_query(sql, params=(), fetch=False):
+    """
+    Ejecuta consultas SQL.
+    Si fetch=True devuelve un DataFrame.
+    """
+
     conn = conectar()
 
     if fetch:
@@ -28,6 +50,11 @@ def ejecutar_query(sql, params=(), fetch=False):
 
 
 def ejecutar_transaccion(operaciones):
+    """
+    Ejecuta varias operaciones SQL como una sola transacción.
+    Si una falla, se revierte todo.
+    """
+
     conn = conectar()
     cur = conn.cursor()
 
@@ -45,12 +72,33 @@ def ejecutar_transaccion(operaciones):
         conn.close()
 
 
-def columna_existe(conn, tabla, columna):
-    columnas = pd.read_sql_query(
-        f"PRAGMA table_info({tabla})",
-        conn
-    )["name"].tolist()
+# ======================================================
+# UTILIDADES DE ESTRUCTURA
+# ======================================================
 
+def tabla_existe(conn, tabla):
+    df = pd.read_sql_query("""
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name = ?
+    """, conn, params=(tabla,))
+
+    return not df.empty
+
+
+def columnas_tabla(conn, tabla):
+    try:
+        return pd.read_sql_query(
+            f"PRAGMA table_info({tabla})",
+            conn
+        )["name"].tolist()
+    except Exception:
+        return []
+
+
+def columna_existe(conn, tabla, columna):
+    columnas = columnas_tabla(conn, tabla)
     return columna in columnas
 
 
@@ -59,31 +107,11 @@ def agregar_columna_si_no_existe(conn, tabla, columna, definicion):
         conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {definicion}")
 
 
-def init_db():
-    conn = conectar()
-    cur = conn.cursor()
-
-    # ======================================================
-    # REPARACIÓN DE TABLAS DE SEGURIDAD MAL CREADAS
-    # ======================================================
-
-    def columnas_tabla(tabla):
-        try:
-            return pd.read_sql_query(
-                f"PRAGMA table_info({tabla})",
-                conn
-            )["name"].tolist()
-        except Exception:
-            return []
-
-    def tabla_existe(tabla):
-        df = pd.read_sql_query("""
-            SELECT name
-            FROM sqlite_master
-            WHERE type = 'table'
-              AND name = ?
-        """, conn, params=(tabla,))
-        return not df.empty
+def reparar_tablas_seguridad(conn, cur):
+    """
+    Repara tablas de seguridad si alguna quedó creada con estructura vieja.
+    No toca ventas, compras ni libro diario.
+    """
 
     tablas_seguridad_esperadas = {
         "roles": ["rol", "descripcion"],
@@ -95,8 +123,8 @@ def init_db():
     }
 
     for tabla, columnas_requeridas in tablas_seguridad_esperadas.items():
-        if tabla_existe(tabla):
-            columnas_actuales = columnas_tabla(tabla)
+        if tabla_existe(conn, tabla):
+            columnas_actuales = columnas_tabla(conn, tabla)
 
             estructura_ok = all(
                 columna in columnas_actuales
@@ -105,6 +133,17 @@ def init_db():
 
             if not estructura_ok:
                 cur.execute(f"DROP TABLE IF EXISTS {tabla}")
+
+
+# ======================================================
+# INICIALIZACIÓN GENERAL
+# ======================================================
+
+def init_db():
+    conn = conectar()
+    cur = conn.cursor()
+
+    reparar_tablas_seguridad(conn, cur)
 
     # ======================================================
     # SEGURIDAD / MULTIEMPRESA
@@ -235,7 +274,7 @@ def init_db():
     """)
 
     # ======================================================
-    # TABLAS CONTABLES
+    # TABLAS CONTABLES BASE
     # ======================================================
 
     cur.execute("""
@@ -477,7 +516,7 @@ def init_db():
 
 
 # ======================================================
-# FUNCIONES GENERALES
+# FUNCIONES GENERALES COMPATIBLES CON MÓDULOS ACTUALES
 # ======================================================
 
 def registrar_carga(modulo, archivo, registros):
