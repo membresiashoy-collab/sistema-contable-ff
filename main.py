@@ -34,16 +34,35 @@ menu = st.sidebar.radio(
 if menu == "Dashboard":
     st.title("📊 Dashboard General")
 
-    df = ejecutar_query("SELECT * FROM libro_diario", fetch=True)
+    df = ejecutar_query(
+        "SELECT * FROM libro_diario",
+        fetch=True
+    )
 
     if df.empty:
-        st.info("Sin movimientos cargados.")
+        st.info("Sin movimientos.")
     else:
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
 
-        c1.metric("Asientos", df["id_asiento"].nunique())
-        c2.metric("Debe", f"$ {df['debe'].sum():,.2f}")
-        c3.metric("Haber", f"$ {df['haber'].sum():,.2f}")
+        c1.metric(
+            "Asientos",
+            df["id_asiento"].nunique()
+        )
+
+        c2.metric(
+            "Debe",
+            f"$ {df['debe'].sum():,.2f}"
+        )
+
+        c3.metric(
+            "Haber",
+            f"$ {df['haber'].sum():,.2f}"
+        )
+
+        c4.metric(
+            "Cuentas",
+            df["cuenta"].nunique()
+        )
 
 elif menu == "Ventas":
     ventas.mostrar_ventas()
