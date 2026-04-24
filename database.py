@@ -28,13 +28,6 @@ def ejecutar_query(sql, params=(), fetch=False):
 
 
 def ejecutar_transaccion(operaciones):
-    """
-    Ejecuta una lista de operaciones en una sola transacción.
-    Cada operación debe ser una tupla:
-        (sql, params)
-
-    Si algo falla, no se guarda nada de esa tanda.
-    """
     conn = conectar()
     cur = conn.cursor()
 
@@ -172,11 +165,48 @@ def init_db():
         )
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS compras_comprobantes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha TEXT,
+            anio INTEGER,
+            mes INTEGER,
+            codigo TEXT,
+            tipo TEXT,
+            punto_venta TEXT,
+            numero TEXT,
+            proveedor TEXT,
+            cuit TEXT,
+            neto REAL,
+            iva REAL,
+            total REAL,
+            archivo TEXT,
+            fecha_carga TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cuenta_corriente_proveedores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha TEXT,
+            proveedor TEXT,
+            cuit TEXT,
+            tipo TEXT,
+            numero TEXT,
+            debe REAL DEFAULT 0,
+            haber REAL DEFAULT 0,
+            saldo REAL DEFAULT 0,
+            origen TEXT,
+            archivo TEXT,
+            fecha_carga TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     # Compatibilidad con bases antiguas
     agregar_columna_si_no_existe(conn, "libro_diario", "archivo", "TEXT")
     agregar_columna_si_no_existe(conn, "historial_cargas", "registros", "INTEGER DEFAULT 0")
 
-    # Índices para mejorar velocidad
+    # Índices
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_libro_diario_archivo
         ON libro_diario(archivo)
@@ -193,8 +223,18 @@ def init_db():
     """)
 
     cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_compras_archivo
+        ON compras_comprobantes(archivo)
+    """)
+
+    cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_cta_cte_cliente
         ON cuenta_corriente_clientes(cliente)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cta_cte_proveedor
+        ON cuenta_corriente_proveedores(proveedor)
     """)
 
     cur.execute("""
@@ -254,6 +294,8 @@ def eliminar_carga(nombre):
     ejecutar_query("DELETE FROM errores_carga WHERE archivo = ?", (nombre,))
     ejecutar_query("DELETE FROM ventas_comprobantes WHERE archivo = ?", (nombre,))
     ejecutar_query("DELETE FROM cuenta_corriente_clientes WHERE archivo = ?", (nombre,))
+    ejecutar_query("DELETE FROM compras_comprobantes WHERE archivo = ?", (nombre,))
+    ejecutar_query("DELETE FROM cuenta_corriente_proveedores WHERE archivo = ?", (nombre,))
     ejecutar_query("DELETE FROM historial_cargas WHERE nombre_archivo = ?", (nombre,))
 
 
@@ -289,6 +331,8 @@ def limpiar_base_pruebas():
     ejecutar_query("DELETE FROM errores_carga")
     ejecutar_query("DELETE FROM ventas_comprobantes")
     ejecutar_query("DELETE FROM cuenta_corriente_clientes")
+    ejecutar_query("DELETE FROM compras_comprobantes")
+    ejecutar_query("DELETE FROM cuenta_corriente_proveedores")
 
 
 # ======================================================
