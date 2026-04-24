@@ -21,10 +21,20 @@ from services.sesion_service import (
 
 from modulos import ventas, compras, reportes, auditoria, configuracion, seguridad
 
+
+# ======================================================
+# CONFIGURACIÓN GENERAL STREAMLIT
+# ======================================================
+
 st.set_page_config(
     page_title="Sistema Contable FF",
     layout="wide"
 )
+
+
+# ======================================================
+# INICIALIZACIÓN GENERAL
+# ======================================================
 
 init_db()
 inicializar_seguridad()
@@ -43,8 +53,10 @@ def obtener_sid_url():
         try:
             params = st.experimental_get_query_params()
             valor = params.get("sid", [""])
+
             if isinstance(valor, list):
                 return valor[0]
+
             return valor
         except Exception:
             return ""
@@ -136,10 +148,12 @@ def restaurar_sesion_desde_url():
         return
 
     st.session_state["session_token"] = token
+
     cargar_usuario_en_estado(
         sesion["usuario"],
         empresa_id_preferida=sesion.get("empresa_id", 1)
     )
+
     actualizar_actividad(token)
 
 
@@ -163,6 +177,7 @@ def validar_sesion_actual():
         return False
 
     actualizar_actividad(token)
+
     return True
 
 
@@ -241,10 +256,13 @@ def pantalla_cambio_password():
         if guardar:
             if nueva.strip() == "":
                 st.warning("La contraseña no puede estar vacía.")
+
             elif nueva != repetir:
                 st.warning("Las contraseñas no coinciden.")
+
             elif len(nueva) < 8:
                 st.warning("Usá una contraseña de al menos 8 caracteres.")
+
             else:
                 cambiar_password(usuario["id"], nueva)
                 st.success("Contraseña actualizada. Volvé a ingresar.")
@@ -254,7 +272,7 @@ def pantalla_cambio_password():
 
 
 # ======================================================
-# MENÚ / EMPRESA
+# EMPRESA ACTIVA
 # ======================================================
 
 def selector_empresa_sidebar():
@@ -289,6 +307,10 @@ def selector_empresa_sidebar():
         int(fila["id"])
     )
 
+
+# ======================================================
+# MENÚ PRINCIPAL
+# ======================================================
 
 def menu_principal():
     usuario = st.session_state["usuario"]
@@ -375,7 +397,4 @@ else:
         if not pantalla_cambio_password():
             menu_principal()
     else:
-        pantalla_login()git status --short
-git add config.py main.py services/sesion_service.py
-git commit -m "V7.2 sesion persistente con vencimiento por inactividad"
-git push origin main
+        pantalla_login()

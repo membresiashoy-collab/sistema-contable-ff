@@ -4,6 +4,26 @@ import unicodedata
 
 from database import ejecutar_query
 
+from services.datos_base_service import (
+    obtener_estado_datos_base,
+    inicializar_datos_base
+)
+
+from services.backups_service import crear_backup_sqlite
+
+from services.actividades_service import (
+    asegurar_tablas_actividades,
+    contar_actividades,
+    leer_nomenclador_actividades,
+    cargar_nomenclador_actividades,
+    buscar_actividades,
+    obtener_empresas_para_actividades,
+    obtener_actividades_empresa,
+    asignar_actividad_empresa,
+    marcar_actividad_principal,
+    quitar_actividad_empresa
+)
+
 
 # ======================================================
 # FUNCIONES AUXILIARES
@@ -147,6 +167,14 @@ def normalizar_categorias_compra_df(df):
 
 def init_tablas_configuracion():
     ejecutar_query("""
+        CREATE TABLE IF NOT EXISTS tipos_comprobantes (
+            codigo TEXT PRIMARY KEY,
+            descripcion TEXT,
+            signo INTEGER
+        )
+    """)
+
+    ejecutar_query("""
         CREATE TABLE IF NOT EXISTS plan_cuentas (
             codigo TEXT,
             nombre TEXT
@@ -189,6 +217,8 @@ def init_tablas_configuracion():
             activo INTEGER DEFAULT 1
         )
     """)
+
+    asegurar_tablas_actividades()
 
 
 # ======================================================
@@ -467,11 +497,13 @@ def mostrar_configuracion():
 
     st.title("⚙️ Configuración")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Tipos de Comprobantes",
         "Plan de Cuentas",
         "Categorías de Compra",
-        "Conceptos Fiscales Compra"
+        "Conceptos Fiscales Compra",
+        "Inicialización",
+        "Actividades ARCA"
     ])
 
     with tab1:
@@ -485,6 +517,12 @@ def mostrar_configuracion():
 
     with tab4:
         mostrar_conceptos_fiscales_compra()
+
+    with tab5:
+        mostrar_inicializacion_sistema()
+
+    with tab6:
+        mostrar_actividades_arca()
 
 
 # ======================================================
@@ -935,4 +973,276 @@ def mostrar_conceptos_fiscales_compra():
             else:
                 eliminar_concepto_fiscal_compra(concepto_eliminar.strip())
                 st.success("Concepto fiscal eliminado.")
+                st.rerun()
+
+
+# ======================================================
+# TAB 5 - INICIALIZACIÓN DEL SISTEMA
+# ======================================================
+
+def mostrar_inicializacion_sistema():
+    st.subheader("Inicialización del sistema")
+
+    st.info(
+        "Esta opción carga una configuración base mínima para comenzar a trabajar. "
+        "No reemplaza datos existentes: solo completa datos faltantes."
+    )
+
+    estado = obtener_estado_datos_base()
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("Tipos comprobantes", estado["tipos_comprobantes"])
+    col2.metric("Plan cuentas", estado["plan_cuentas_detallado"])
+    col3.metric("Categorías compra", estado["categorias_compra"])
+    col4.metric("Conceptos fiscales", estado["conceptos_fiscales_compra"])
+
+    st.divider()
+
+    st.warning(
+        "Usá esta opción cuando la base esté vacía o cuando quieras completar "
+        "configuraciones faltantes. El sistema creará un backup antes de cargar."
+    )
+
+    if "confirmar_inicializar_datos_base" not in st.session_state:
+        st.session_state["confirmar_inicializar_datos_base"] = False
+
+    if st.button("Cargar / completar datos base"):
+        st.session_state["confirmar_inicializar_datos_base"] = True
+
+    if st.session_state["confirmar_inicializar_datos_base"]:
+        st.warning("¿Confirmás cargar la configuración base del sistema?")
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            if st.button("Sí, cargar datos base"):
+                crear_backup_sqlite("antes_cargar_datos_base")
+
+                resultado = inicializar_datos_base()
+
+                st.success("Datos base cargados correctamente.")
+                st.write("Resultado:")
+                st.json(resultado)
+
+                st.session_state["confirmar_inicializar_datos_base"] = False
+                st.rerun()
+
+        with c2:
+            if st.button("Cancelar"):
+                st.session_state["confirmar_inicializar_datos_base"] = False
+                st.rerun()
+
+
+# ======================================================
+# TAB 6 - ACTIVIDADES ARCA
+# ======================================================
+
+def mostrar_actividades_arca():
+    st.subheader("Actividades Económicas ARCA")
+
+    st.info(
+        "Desde esta pantalla podés cargar el nomenclador de actividades económicas "
+        "y vincular una o varias actividades a cada empresa."
+    )
+
+    total_actividades = contar_actividades()
+
+    st.metric("Actividades cargadas", total_actividades)
+
+    st.divider()
+
+    st.subheader("Cargar nomenclador desde TXT / CSV")
+
+    archivo = st.file_uploader(
+        "Subir archivo ACTIVIDADES_ECONOMICAS_F883.txt",
+        type=["txt", "csv"],
+        key="upload_actividades_arca"
+    )
+
+    if archivo:
+        try:
+            df_actividades = leer_nomenclador_actividades(archivo)
+
+            st.success(f"Archivo leído correctamente. Actividades detectadas: {len(df_actividades)}")
+            st.dataframe(preparar_vista(df_actividades.head(50)), use_container_width=True)
+
+            reemplazar = st.checkbox(
+                "Reemplazar nomenclador actual",
+                value=False,
+                help="Si está marcado, borra el nomenclador actual antes de cargar el nuevo."
+            )
+
+            if "confirmar_cargar_actividades" not in st.session_state:
+                st.session_state["confirmar_cargar_actividades"] = False
+
+            if st.button("Cargar nomenclador ARCA"):
+                st.session_state["confirmar_cargar_actividades"] = True
+
+            if st.session_state["confirmar_cargar_actividades"]:
+                st.warning("¿Confirmás cargar el nomenclador de actividades?")
+
+                c1, c2 = st.columns(2)
+
+                with c1:
+                    if st.button("Sí, cargar actividades"):
+                        crear_backup_sqlite("antes_cargar_actividades_arca")
+
+                        resultado = cargar_nomenclador_actividades(
+                            df_actividades,
+                            reemplazar=reemplazar
+                        )
+
+                        st.success("Nomenclador cargado correctamente.")
+                        st.json(resultado)
+
+                        st.session_state["confirmar_cargar_actividades"] = False
+                        st.rerun()
+
+                with c2:
+                    if st.button("Cancelar carga actividades"):
+                        st.session_state["confirmar_cargar_actividades"] = False
+                        st.rerun()
+
+        except Exception as e:
+            st.error(f"No se pudo leer el archivo: {str(e)}")
+
+    st.divider()
+
+    st.subheader("Buscar actividades")
+
+    filtro = st.text_input(
+        "Buscar por código o descripción",
+        key="buscar_actividad_arca"
+    )
+
+    df_busqueda = buscar_actividades(filtro, limite=300)
+
+    if df_busqueda.empty:
+        st.info("No hay actividades para mostrar.")
+    else:
+        st.dataframe(preparar_vista(df_busqueda), use_container_width=True)
+
+    st.divider()
+
+    st.subheader("Asignar actividades a empresas")
+
+    df_empresas = obtener_empresas_para_actividades()
+
+    if df_empresas.empty:
+        st.warning("No hay empresas activas cargadas.")
+        return
+
+    empresas_opciones = df_empresas["id"].tolist()
+
+    empresa_id = st.selectbox(
+        "Empresa",
+        empresas_opciones,
+        format_func=lambda x: df_empresas[df_empresas["id"] == x].iloc[0]["nombre"],
+        key="empresa_actividades_select"
+    )
+
+    fila_empresa = df_empresas[df_empresas["id"] == empresa_id].iloc[0]
+    st.caption(f"Empresa seleccionada: {fila_empresa['nombre']}")
+
+    df_asignadas = obtener_actividades_empresa(empresa_id)
+
+    st.subheader("Actividades asignadas")
+
+    if df_asignadas.empty:
+        st.info("Esta empresa todavía no tiene actividades asignadas.")
+    else:
+        st.dataframe(preparar_vista(df_asignadas), use_container_width=True)
+
+    st.divider()
+
+    st.subheader("Agregar actividad a la empresa")
+
+    filtro_asignar = st.text_input(
+        "Buscar actividad para asignar",
+        key="filtro_asignar_actividad"
+    )
+
+    df_opciones = buscar_actividades(filtro_asignar, limite=200)
+
+    if df_opciones.empty:
+        st.info("Buscá una actividad para asignarla.")
+    else:
+        opciones_actividades = df_opciones["codigo"].tolist()
+
+        codigo_seleccionado = st.selectbox(
+            "Actividad",
+            opciones_actividades,
+            format_func=lambda x: (
+                f"{x} - "
+                f"{df_opciones[df_opciones['codigo'] == x].iloc[0]['descripcion']}"
+            ),
+            key="actividad_a_asignar"
+        )
+
+        principal = st.checkbox(
+            "Marcar como actividad principal",
+            value=df_asignadas.empty,
+            key="actividad_principal_check"
+        )
+
+        if st.button("Asignar actividad a empresa"):
+            resultado = asignar_actividad_empresa(
+                empresa_id,
+                codigo_seleccionado,
+                principal=principal
+            )
+
+            if resultado["ok"]:
+                st.success(resultado["mensaje"])
+            else:
+                st.error(resultado["mensaje"])
+
+            st.rerun()
+
+    if not df_asignadas.empty:
+        st.divider()
+
+        st.subheader("Administrar actividades asignadas")
+
+        codigos_asignados = df_asignadas["codigo_actividad"].tolist()
+
+        codigo_admin = st.selectbox(
+            "Actividad asignada",
+            codigos_asignados,
+            format_func=lambda x: (
+                f"{x} - "
+                f"{df_asignadas[df_asignadas['codigo_actividad'] == x].iloc[0]['descripcion']}"
+            ),
+            key="actividad_admin"
+        )
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if st.button("Marcar como principal"):
+                resultado = marcar_actividad_principal(
+                    empresa_id,
+                    codigo_admin
+                )
+
+                if resultado["ok"]:
+                    st.success(resultado["mensaje"])
+                else:
+                    st.error(resultado["mensaje"])
+
+                st.rerun()
+
+        with col2:
+            if st.button("Quitar actividad"):
+                resultado = quitar_actividad_empresa(
+                    empresa_id,
+                    codigo_admin
+                )
+
+                if resultado["ok"]:
+                    st.success(resultado["mensaje"])
+                else:
+                    st.error(resultado["mensaje"])
+
                 st.rerun()
