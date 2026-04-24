@@ -73,6 +73,78 @@ def limpiar_valor(v):
         return ""
 
 
+def normalizar_conceptos_fiscales_df(df):
+    df = normalizar_columnas(df)
+
+    renombres = {}
+
+    if "concepto_fiscal" in df.columns and "concepto" not in df.columns:
+        renombres["concepto_fiscal"] = "concepto"
+
+    if "tratamiento_default" in df.columns and "tratamiento" not in df.columns:
+        renombres["tratamiento_default"] = "tratamiento"
+
+    if "cuenta" in df.columns and "cuenta_codigo" not in df.columns:
+        renombres["cuenta"] = "cuenta_codigo"
+
+    if "detalle" in df.columns and "cuenta_nombre" not in df.columns:
+        renombres["detalle"] = "cuenta_nombre"
+
+    df = df.rename(columns=renombres)
+
+    if "concepto" not in df.columns:
+        df["concepto"] = ""
+
+    if "cuenta_codigo" not in df.columns:
+        df["cuenta_codigo"] = ""
+
+    if "cuenta_nombre" not in df.columns:
+        df["cuenta_nombre"] = ""
+
+    if "tratamiento" not in df.columns:
+        df["tratamiento"] = ""
+
+    return df
+
+
+def normalizar_categorias_compra_df(df):
+    df = normalizar_columnas(df)
+
+    renombres = {}
+
+    if "categoria_compra" in df.columns and "categoria" not in df.columns:
+        renombres["categoria_compra"] = "categoria"
+
+    if "cuenta_principal_codigo" in df.columns and "cuenta_codigo" not in df.columns:
+        renombres["cuenta_principal_codigo"] = "cuenta_codigo"
+
+    if "cuenta_principal_nombre" in df.columns and "cuenta_nombre" not in df.columns:
+        renombres["cuenta_principal_nombre"] = "cuenta_nombre"
+
+    if "proveedor_codigo" in df.columns and "cuenta_proveedor_codigo" not in df.columns:
+        renombres["proveedor_codigo"] = "cuenta_proveedor_codigo"
+
+    if "proveedor_nombre" in df.columns and "cuenta_proveedor_nombre" not in df.columns:
+        renombres["proveedor_nombre"] = "cuenta_proveedor_nombre"
+
+    df = df.rename(columns=renombres)
+
+    columnas_necesarias = [
+        "categoria",
+        "cuenta_codigo",
+        "cuenta_nombre",
+        "cuenta_proveedor_codigo",
+        "cuenta_proveedor_nombre",
+        "tipo_categoria"
+    ]
+
+    for col in columnas_necesarias:
+        if col not in df.columns:
+            df[col] = ""
+
+    return df
+
+
 def init_tablas_configuracion():
     ejecutar_query("""
         CREATE TABLE IF NOT EXISTS plan_cuentas (
@@ -120,7 +192,7 @@ def init_tablas_configuracion():
 
 
 # ======================================================
-# BASE - PLAN DE CUENTAS
+# PLAN DE CUENTAS
 # ======================================================
 
 def obtener_plan_simple():
@@ -224,7 +296,7 @@ def eliminar_cuenta(cuenta):
 
 
 # ======================================================
-# BASE - CATEGORÍAS DE COMPRA
+# CATEGORÍAS DE COMPRA
 # ======================================================
 
 def obtener_categorias_compra():
@@ -247,6 +319,8 @@ def borrar_categorias_compra():
 
 
 def reemplazar_categorias_compra(df):
+    df = normalizar_categorias_compra_df(df)
+
     borrar_categorias_compra()
 
     for _, fila in df.iterrows():
@@ -308,7 +382,7 @@ def eliminar_categoria_compra(categoria):
 
 
 # ======================================================
-# BASE - CONCEPTOS FISCALES
+# CONCEPTOS FISCALES COMPRA
 # ======================================================
 
 def obtener_conceptos_fiscales_compra():
@@ -329,6 +403,8 @@ def borrar_conceptos_fiscales_compra():
 
 
 def reemplazar_conceptos_fiscales_compra(df):
+    df = normalizar_conceptos_fiscales_df(df)
+
     borrar_conceptos_fiscales_compra()
 
     for _, fila in df.iterrows():
@@ -665,13 +741,13 @@ def mostrar_categorias_compra():
 
     if archivo:
         df = leer_csv_configuracion(archivo)
-        df = normalizar_columnas(df)
+        df = normalizar_categorias_compra_df(df)
 
         st.write("Vista previa del archivo:")
         st.dataframe(preparar_vista(df.head(20)), use_container_width=True)
 
-        if "categoria" not in df.columns:
-            st.error("El archivo debe tener al menos la columna 'categoria'.")
+        if "categoria" not in df.columns or df["categoria"].fillna("").astype(str).str.strip().eq("").all():
+            st.error("El archivo debe tener una columna de categoría. Se acepta 'categoria' o 'categoria_compra'.")
         else:
             if st.button("Reemplazar categorías de compra"):
                 reemplazar_categorias_compra(df)
@@ -779,13 +855,13 @@ def mostrar_conceptos_fiscales_compra():
 
     if archivo:
         df = leer_csv_configuracion(archivo)
-        df = normalizar_columnas(df)
+        df = normalizar_conceptos_fiscales_df(df)
 
         st.write("Vista previa del archivo:")
         st.dataframe(preparar_vista(df.head(20)), use_container_width=True)
 
-        if "concepto" not in df.columns:
-            st.error("El archivo debe tener al menos la columna 'concepto'.")
+        if "concepto" not in df.columns or df["concepto"].fillna("").astype(str).str.strip().eq("").all():
+            st.error("El archivo debe tener una columna de concepto. Se acepta 'concepto' o 'concepto_fiscal'.")
         else:
             if st.button("Reemplazar conceptos fiscales de compra"):
                 reemplazar_conceptos_fiscales_compra(df)
