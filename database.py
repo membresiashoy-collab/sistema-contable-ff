@@ -34,6 +34,7 @@ def ejecutar_transaccion(operaciones):
     try:
         for sql, params in operaciones:
             cur.execute(sql, params)
+
         conn.commit()
 
     except Exception as e:
@@ -61,6 +62,49 @@ def agregar_columna_si_no_existe(conn, tabla, columna, definicion):
 def init_db():
     conn = conectar()
     cur = conn.cursor()
+
+    # ======================================================
+    # REPARACIÓN DE TABLAS DE SEGURIDAD MAL CREADAS
+    # ======================================================
+
+    def columnas_tabla(tabla):
+        try:
+            return pd.read_sql_query(
+                f"PRAGMA table_info({tabla})",
+                conn
+            )["name"].tolist()
+        except Exception:
+            return []
+
+    def tabla_existe(tabla):
+        df = pd.read_sql_query("""
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name = ?
+        """, conn, params=(tabla,))
+        return not df.empty
+
+    tablas_seguridad_esperadas = {
+        "roles": ["rol", "descripcion"],
+        "permisos": ["permiso", "descripcion", "modulo"],
+        "rol_permisos": ["rol", "permiso"],
+        "usuarios": ["usuario", "password_hash", "rol", "activo"],
+        "empresas": ["nombre", "activo"],
+        "usuario_empresas": ["usuario_id", "empresa_id"]
+    }
+
+    for tabla, columnas_requeridas in tablas_seguridad_esperadas.items():
+        if tabla_existe(tabla):
+            columnas_actuales = columnas_tabla(tabla)
+
+            estructura_ok = all(
+                columna in columnas_actuales
+                for columna in columnas_requeridas
+            )
+
+            if not estructura_ok:
+                cur.execute(f"DROP TABLE IF EXISTS {tabla}")
 
     # ======================================================
     # SEGURIDAD / MULTIEMPRESA
@@ -191,7 +235,7 @@ def init_db():
     """)
 
     # ======================================================
-    # TABLAS CONTABLES EXISTENTES
+    # TABLAS CONTABLES
     # ======================================================
 
     cur.execute("""
@@ -371,7 +415,7 @@ def init_db():
     """)
 
     # ======================================================
-    # COLUMNAS NUEVAS COMPATIBLES
+    # COLUMNAS COMPATIBLES PARA MULTIEMPRESA
     # ======================================================
 
     tablas_empresa = [
@@ -398,7 +442,7 @@ def init_db():
         "comprobante_clave": "TEXT",
         "estado": "TEXT DEFAULT 'CONTABILIZADO'",
         "usuario_creacion": "INTEGER",
-        "fecha_creacion": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        "fecha_creacion": "TIMESTAMP"
     }
 
     for columna, definicion in columnas_diario.items():
@@ -412,12 +456,17 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_libro_diario_archivo ON libro_diario(archivo)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_libro_diario_origen ON libro_diario(origen)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_libro_diario_comprobante ON libro_diario(comprobante_clave)")
+
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ventas_empresa ON ventas_comprobantes(empresa_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_compras_empresa ON compras_comprobantes(empresa_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_compras_cuit ON compras_comprobantes(cuit)")
+
     cur.execute("CREATE INDEX IF NOT EXISTS idx_proveedores_config ON proveedores_configuracion(empresa_id, cuit)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_clientes_config ON clientes_configuracion(empresa_id, cuit)")
+
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cta_cte_cliente ON cuenta_corriente_clientes(cliente)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cta_cte_proveedor ON cuenta_corriente_proveedores(proveedor)")
+
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_comprobantes_procesados
         ON comprobantes_procesados(modulo, codigo, numero, cliente_proveedor)
@@ -499,6 +548,10 @@ def eliminar_diferencias_redondeo():
 
 def limpiar_errores():
     ejecutar_query("DELETE FROM errores_carga")
+
+
+def limpiar_comprobantes_procesados():
+    ejecutar_query("DELETE FROM comprobantes_procesados")
 
 
 def limpiar_base_pruebas():
