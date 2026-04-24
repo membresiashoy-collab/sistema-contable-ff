@@ -38,6 +38,10 @@ DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 # Cantidad máxima de backups SQLite a conservar
 MAX_BACKUPS_SQLITE = int(os.getenv("MAX_BACKUPS_SQLITE", "20"))
 
+# Seguridad / sesión
+# Tiempo máximo de inactividad antes de cerrar sesión automáticamente
+SESSION_TIMEOUT_MINUTES = int(os.getenv("SESSION_TIMEOUT_MINUTES", "60"))
+
 
 def asegurar_directorios():
     """

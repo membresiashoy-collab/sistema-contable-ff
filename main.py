@@ -9,6 +9,16 @@ from services.seguridad_service import (
     cambiar_password
 )
 
+from services.sesion_service import (
+    inicializar_tabla_sesiones,
+    crear_sesion,
+    obtener_sesion_valida,
+    actualizar_actividad,
+    actualizar_empresa_sesion,
+    cerrar_sesion,
+    limpiar_sesiones_vencidas
+)
+
 from modulos import ventas, compras, reportes, auditoria, configuracion, seguridad
 
 st.set_page_config(
@@ -18,7 +28,52 @@ st.set_page_config(
 
 init_db()
 inicializar_seguridad()
+inicializar_tabla_sesiones()
+limpiar_sesiones_vencidas()
 
+
+# ======================================================
+# UTILIDADES DE QUERY PARAMS
+# ======================================================
+
+def obtener_sid_url():
+    try:
+        return st.query_params.get("sid", "")
+    except Exception:
+        try:
+            params = st.experimental_get_query_params()
+            valor = params.get("sid", [""])
+            if isinstance(valor, list):
+                return valor[0]
+            return valor
+        except Exception:
+            return ""
+
+
+def poner_sid_url(token):
+    try:
+        st.query_params["sid"] = token
+    except Exception:
+        try:
+            st.experimental_set_query_params(sid=token)
+        except Exception:
+            pass
+
+
+def limpiar_sid_url():
+    try:
+        if "sid" in st.query_params:
+            del st.query_params["sid"]
+    except Exception:
+        try:
+            st.experimental_set_query_params()
+        except Exception:
+            pass
+
+
+# ======================================================
+# ESTADO DE SESIÓN
+# ======================================================
 
 def iniciar_estado():
     if "autenticado" not in st.session_state:
@@ -36,10 +91,99 @@ def iniciar_estado():
     if "empresa_nombre" not in st.session_state:
         st.session_state["empresa_nombre"] = "Empresa Demo"
 
+    if "session_token" not in st.session_state:
+        st.session_state["session_token"] = ""
+
+
+def cargar_usuario_en_estado(datos_usuario, empresa_id_preferida=None):
+    st.session_state["autenticado"] = True
+    st.session_state["usuario"] = datos_usuario
+    st.session_state["permisos"] = obtener_permisos_usuario(datos_usuario["id"])
+
+    empresas = obtener_empresas_usuario(datos_usuario["id"])
+
+    if not empresas.empty:
+        opciones = empresas["id"].tolist()
+
+        if empresa_id_preferida in opciones:
+            empresa_id = empresa_id_preferida
+        else:
+            empresa_id = int(empresas.iloc[0]["id"])
+
+        fila = empresas[empresas["id"] == empresa_id].iloc[0]
+
+        st.session_state["empresa_id"] = int(fila["id"])
+        st.session_state["empresa_nombre"] = str(fila["nombre"])
+
+
+def restaurar_sesion_desde_url():
+    """
+    Si el usuario refresca la página, intenta recuperar la sesión usando el token.
+    """
+
+    if st.session_state.get("autenticado"):
+        return
+
+    token = obtener_sid_url()
+
+    if not token:
+        return
+
+    sesion = obtener_sesion_valida(token)
+
+    if sesion is None:
+        limpiar_sid_url()
+        return
+
+    st.session_state["session_token"] = token
+    cargar_usuario_en_estado(
+        sesion["usuario"],
+        empresa_id_preferida=sesion.get("empresa_id", 1)
+    )
+    actualizar_actividad(token)
+
+
+def validar_sesion_actual():
+    """
+    Verifica que la sesión actual siga activa.
+    Si venció, fuerza cierre de sesión.
+    """
+
+    token = st.session_state.get("session_token", "")
+
+    if not token:
+        return False
+
+    sesion = obtener_sesion_valida(token)
+
+    if sesion is None:
+        st.session_state.clear()
+        limpiar_sid_url()
+        st.warning("La sesión venció por inactividad. Ingresá nuevamente.")
+        return False
+
+    actualizar_actividad(token)
+    return True
+
+
+def cerrar_sesion_actual():
+    token = st.session_state.get("session_token", "")
+
+    if token:
+        cerrar_sesion(token)
+
+    st.session_state.clear()
+    limpiar_sid_url()
+    st.rerun()
+
 
 def tiene_permiso(permiso):
     return permiso in st.session_state.get("permisos", set())
 
+
+# ======================================================
+# LOGIN
+# ======================================================
 
 def pantalla_login():
     st.title("🔐 Sistema Contable FF")
@@ -59,15 +203,23 @@ def pantalla_login():
                 st.error("Usuario o contraseña incorrectos.")
                 return
 
-            st.session_state["autenticado"] = True
-            st.session_state["usuario"] = datos
-            st.session_state["permisos"] = obtener_permisos_usuario(datos["id"])
-
             empresas = obtener_empresas_usuario(datos["id"])
 
+            empresa_id = 1
+            empresa_nombre = "Empresa Demo"
+
             if not empresas.empty:
-                st.session_state["empresa_id"] = int(empresas.iloc[0]["id"])
-                st.session_state["empresa_nombre"] = str(empresas.iloc[0]["nombre"])
+                empresa_id = int(empresas.iloc[0]["id"])
+                empresa_nombre = str(empresas.iloc[0]["nombre"])
+
+            token = crear_sesion(datos["id"], empresa_id)
+
+            st.session_state["session_token"] = token
+            st.session_state["empresa_id"] = empresa_id
+            st.session_state["empresa_nombre"] = empresa_nombre
+
+            cargar_usuario_en_estado(datos, empresa_id_preferida=empresa_id)
+            poner_sid_url(token)
 
             st.rerun()
 
@@ -96,11 +248,14 @@ def pantalla_cambio_password():
             else:
                 cambiar_password(usuario["id"], nueva)
                 st.success("Contraseña actualizada. Volvé a ingresar.")
-                st.session_state.clear()
-                st.rerun()
+                cerrar_sesion_actual()
 
     return True
 
+
+# ======================================================
+# MENÚ / EMPRESA
+# ======================================================
 
 def selector_empresa_sidebar():
     usuario = st.session_state["usuario"]
@@ -128,6 +283,11 @@ def selector_empresa_sidebar():
 
     st.session_state["empresa_id"] = int(fila["id"])
     st.session_state["empresa_nombre"] = str(fila["nombre"])
+
+    actualizar_empresa_sesion(
+        st.session_state.get("session_token", ""),
+        int(fila["id"])
+    )
 
 
 def menu_principal():
@@ -171,8 +331,7 @@ def menu_principal():
     st.sidebar.divider()
 
     if st.sidebar.button("Cerrar sesión"):
-        st.session_state.clear()
-        st.rerun()
+        cerrar_sesion_actual()
 
     st.caption(f"Empresa activa: **{st.session_state['empresa_nombre']}**")
 
@@ -202,10 +361,21 @@ def menu_principal():
         seguridad.mostrar_seguridad()
 
 
+# ======================================================
+# EJECUCIÓN
+# ======================================================
+
 iniciar_estado()
+restaurar_sesion_desde_url()
 
 if not st.session_state["autenticado"]:
     pantalla_login()
 else:
-    if not pantalla_cambio_password():
-        menu_principal()
+    if validar_sesion_actual():
+        if not pantalla_cambio_password():
+            menu_principal()
+    else:
+        pantalla_login()git status --short
+git add config.py main.py services/sesion_service.py
+git commit -m "V7.2 sesion persistente con vencimiento por inactividad"
+git push origin main
