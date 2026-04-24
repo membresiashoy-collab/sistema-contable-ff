@@ -30,6 +30,19 @@ def limpiar_num(v):
         return 0.0
 
 
+def formatear_fecha(fecha):
+    try:
+        fecha_convertida = pd.to_datetime(fecha, dayfirst=True, errors="coerce")
+
+        if pd.isna(fecha_convertida):
+            return str(fecha)
+
+        return fecha_convertida.strftime("%d/%m/%Y")
+
+    except Exception:
+        return str(fecha)
+
+
 def obtener_tipo_comprobante(codigo):
     df = ejecutar_query("""
         SELECT descripcion, signo
@@ -94,8 +107,17 @@ def mostrar_ventas():
             encoding="latin-1"
         )
 
+        # Orden cronológico antes de procesar
+        df["_fecha_orden"] = pd.to_datetime(df.iloc[:, 0], dayfirst=True, errors="coerce")
+        df = df.sort_values(by="_fecha_orden").drop(columns=["_fecha_orden"])
+
         st.subheader("Vista previa")
-        st.dataframe(df.head(20), use_container_width=True)
+
+        df_vista = df.head(20).copy()
+        df_vista.index = range(1, len(df_vista) + 1)
+        df_vista.index.name = "N°"
+
+        st.dataframe(df_vista, use_container_width=True)
 
         st.caption(f"Registros detectados: {len(df)}")
 
@@ -117,7 +139,7 @@ def mostrar_ventas():
             numero_fila = indice + 2
 
             try:
-                fecha = str(fila.iloc[0]).strip()
+                fecha = formatear_fecha(fila.iloc[0])
                 codigo = str(fila.iloc[1]).strip()
                 numero = str(fila.iloc[2]).strip()
 
