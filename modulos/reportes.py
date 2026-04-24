@@ -16,6 +16,38 @@ def formatear_fecha(fecha):
         return fecha
 
 
+def eliminar_diferencias_redondeo():
+    ejecutar_query("""
+        DELETE FROM libro_diario
+        WHERE cuenta = 'DIFERENCIA POR REDONDEO'
+    """)
+
+
+def insertar_espacios_entre_asientos(df):
+    filas = []
+
+    for asiento, grupo in df.groupby("id_asiento", sort=False):
+        filas.append(grupo)
+
+        fila_vacia = pd.DataFrame([{
+            "id_asiento": "",
+            "fecha": "",
+            "cuenta": "",
+            "debe": "",
+            "haber": "",
+            "glosa": "",
+            "origen": "",
+            "archivo": ""
+        }])
+
+        filas.append(fila_vacia)
+
+    if filas:
+        return pd.concat(filas, ignore_index=True)
+
+    return df
+
+
 def mostrar_diario():
     st.title("📓 Libro Diario")
 
@@ -37,27 +69,42 @@ def mostrar_diario():
         st.info("Sin movimientos.")
         return
 
+    cantidad_redondeos = len(df[df["cuenta"] == "DIFERENCIA POR REDONDEO"])
+
+    if cantidad_redondeos > 0:
+        st.warning(
+            f"Hay {cantidad_redondeos} movimientos antiguos en la cuenta "
+            "'DIFERENCIA POR REDONDEO'. Esto corresponde a pruebas anteriores."
+        )
+
+        if st.button("Eliminar movimientos de DIFERENCIA POR REDONDEO"):
+            eliminar_diferencias_redondeo()
+            st.success("Movimientos de diferencia por redondeo eliminados.")
+            st.rerun()
+
+    df = df[df["cuenta"] != "DIFERENCIA POR REDONDEO"].copy()
+
+    if df.empty:
+        st.info("No quedan movimientos contables luego de filtrar redondeos.")
+        return
+
     df["fecha_orden"] = pd.to_datetime(df["fecha"], dayfirst=True, errors="coerce")
     df["fecha"] = df["fecha"].apply(formatear_fecha)
 
     st.subheader("Filtros")
 
-    origenes = ["Todos"] + sorted(df["origen"].dropna().unique().tolist())
+    col1, col2 = st.columns(2)
 
-    origen_seleccionado = st.selectbox(
-        "Filtrar por origen",
-        origenes
-    )
+    with col1:
+        origenes = ["Todos"] + sorted(df["origen"].dropna().unique().tolist())
+        origen_seleccionado = st.selectbox("Filtrar por origen", origenes)
 
     if origen_seleccionado != "Todos":
         df = df[df["origen"] == origen_seleccionado]
 
-    archivos = ["Todos"] + sorted(df["archivo"].dropna().unique().tolist())
-
-    archivo_seleccionado = st.selectbox(
-        "Filtrar por archivo",
-        archivos
-    )
+    with col2:
+        archivos = ["Todos"] + sorted(df["archivo"].dropna().unique().tolist())
+        archivo_seleccionado = st.selectbox("Filtrar por archivo", archivos)
 
     if archivo_seleccionado != "Todos":
         df = df[df["archivo"] == archivo_seleccionado]
@@ -78,25 +125,36 @@ def mostrar_diario():
         "archivo"
     ]].copy()
 
-    df_vista.index = range(1, len(df_vista) + 1)
-    df_vista.index.name = "N°"
+    total_debe = df_vista["debe"].sum()
+    total_haber = df_vista["haber"].sum()
+    diferencia = total_debe - total_haber
+
+    df_vista_con_espacios = insertar_espacios_entre_asientos(df_vista)
+
+    df_vista_con_espacios.index = range(1, len(df_vista_con_espacios) + 1)
+    df_vista_con_espacios.index.name = "N°"
 
     st.subheader("Movimientos contables")
-    st.dataframe(df_vista, use_container_width=True)
+    st.dataframe(df_vista_con_espacios, use_container_width=True)
 
     st.divider()
 
     c1, c2, c3 = st.columns(3)
 
-    c1.metric("Total Debe", f"$ {df_vista['debe'].sum():,.2f}")
-    c2.metric("Total Haber", f"$ {df_vista['haber'].sum():,.2f}")
-    c3.metric("Diferencia", f"$ {(df_vista['debe'].sum() - df_vista['haber'].sum()):,.2f}")
+    c1.metric("Total Debe", f"$ {total_debe:,.2f}")
+    c2.metric("Total Haber", f"$ {total_haber:,.2f}")
+    c3.metric("Diferencia", f"$ {diferencia:,.2f}")
+
+    if round(diferencia, 2) != 0:
+        st.error("El Libro Diario no está cuadrando. Revisar comprobantes o lógica de asientos.")
+    else:
+        st.success("El Libro Diario está cuadrado.")
 
     st.divider()
 
     st.subheader("Resumen por origen")
 
-    resumen = df_vista.groupby("origen")[["debe", "haber"]].sum().reset_index()
+    resumen = df.groupby("origen")[["debe", "haber"]].sum().reset_index()
     resumen["diferencia"] = resumen["debe"] - resumen["haber"]
 
     st.dataframe(resumen, use_container_width=True)
