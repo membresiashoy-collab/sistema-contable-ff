@@ -62,6 +62,138 @@ def init_db():
     conn = conectar()
     cur = conn.cursor()
 
+    # ======================================================
+    # SEGURIDAD / MULTIEMPRESA
+    # ======================================================
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS empresas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            cuit TEXT,
+            razon_social TEXT,
+            domicilio TEXT,
+            actividad TEXT,
+            activo INTEGER DEFAULT 1,
+            fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT UNIQUE NOT NULL,
+            nombre TEXT,
+            email TEXT,
+            password_hash TEXT NOT NULL,
+            rol TEXT DEFAULT 'LECTURA',
+            activo INTEGER DEFAULT 1,
+            debe_cambiar_password INTEGER DEFAULT 0,
+            fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ultimo_login TIMESTAMP
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS roles (
+            rol TEXT PRIMARY KEY,
+            descripcion TEXT
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS permisos (
+            permiso TEXT PRIMARY KEY,
+            descripcion TEXT,
+            modulo TEXT
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS rol_permisos (
+            rol TEXT,
+            permiso TEXT,
+            PRIMARY KEY (rol, permiso)
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS usuario_empresas (
+            usuario_id INTEGER,
+            empresa_id INTEGER,
+            activo INTEGER DEFAULT 1,
+            PRIMARY KEY (usuario_id, empresa_id)
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS auditoria_cambios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            usuario_id INTEGER,
+            empresa_id INTEGER,
+            modulo TEXT,
+            accion TEXT,
+            entidad TEXT,
+            entidad_id TEXT,
+            valor_anterior TEXT,
+            valor_nuevo TEXT,
+            motivo TEXT
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS periodos_contables (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            empresa_id INTEGER DEFAULT 1,
+            anio INTEGER,
+            mes INTEGER,
+            estado TEXT DEFAULT 'ABIERTO',
+            fecha_cierre TIMESTAMP,
+            usuario_cierre INTEGER,
+            UNIQUE(empresa_id, anio, mes)
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS proveedores_configuracion (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            empresa_id INTEGER DEFAULT 1,
+            cuit TEXT,
+            proveedor TEXT,
+            categoria_habitual TEXT,
+            cuenta_principal_codigo TEXT,
+            cuenta_principal_nombre TEXT,
+            cuenta_proveedor_codigo TEXT,
+            cuenta_proveedor_nombre TEXT,
+            tipo_categoria TEXT,
+            observacion TEXT,
+            activo INTEGER DEFAULT 1,
+            fecha_ultima_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(empresa_id, cuit)
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS clientes_configuracion (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            empresa_id INTEGER DEFAULT 1,
+            cuit TEXT,
+            cliente TEXT,
+            categoria_habitual TEXT,
+            cuenta_cliente_codigo TEXT,
+            cuenta_cliente_nombre TEXT,
+            observacion TEXT,
+            activo INTEGER DEFAULT 1,
+            fecha_ultima_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(empresa_id, cuit)
+        )
+    """)
+
+    # ======================================================
+    # TABLAS CONTABLES EXISTENTES
+    # ======================================================
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS libro_diario (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -238,13 +370,52 @@ def init_db():
         )
     """)
 
-    agregar_columna_si_no_existe(conn, "libro_diario", "archivo", "TEXT")
-    agregar_columna_si_no_existe(conn, "historial_cargas", "registros", "INTEGER DEFAULT 0")
+    # ======================================================
+    # COLUMNAS NUEVAS COMPATIBLES
+    # ======================================================
 
+    tablas_empresa = [
+        "libro_diario",
+        "historial_cargas",
+        "comprobantes_procesados",
+        "errores_carga",
+        "ventas_comprobantes",
+        "cuenta_corriente_clientes",
+        "compras_comprobantes",
+        "cuenta_corriente_proveedores",
+        "plan_cuentas",
+        "plan_cuentas_detallado",
+        "categorias_compra",
+        "conceptos_fiscales_compra"
+    ]
+
+    for tabla in tablas_empresa:
+        agregar_columna_si_no_existe(conn, tabla, "empresa_id", "INTEGER DEFAULT 1")
+
+    columnas_diario = {
+        "origen_tabla": "TEXT",
+        "origen_id": "INTEGER",
+        "comprobante_clave": "TEXT",
+        "estado": "TEXT DEFAULT 'CONTABILIZADO'",
+        "usuario_creacion": "INTEGER",
+        "fecha_creacion": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+    }
+
+    for columna, definicion in columnas_diario.items():
+        agregar_columna_si_no_existe(conn, "libro_diario", columna, definicion)
+
+    # ======================================================
+    # ÍNDICES
+    # ======================================================
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_libro_diario_empresa ON libro_diario(empresa_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_libro_diario_archivo ON libro_diario(archivo)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_libro_diario_origen ON libro_diario(origen)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_ventas_archivo ON ventas_comprobantes(archivo)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_compras_archivo ON compras_comprobantes(archivo)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_libro_diario_comprobante ON libro_diario(comprobante_clave)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ventas_empresa ON ventas_comprobantes(empresa_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_compras_empresa ON compras_comprobantes(empresa_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_compras_cuit ON compras_comprobantes(cuit)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_proveedores_config ON proveedores_configuracion(empresa_id, cuit)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cta_cte_cliente ON cuenta_corriente_clientes(cliente)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cta_cte_proveedor ON cuenta_corriente_proveedores(proveedor)")
     cur.execute("""
@@ -447,252 +618,3 @@ def registrar_cta_cte_cliente(fecha, cliente, cuit, tipo, numero, debe, haber, s
         (fecha, cliente, cuit, tipo, numero, debe, haber, saldo, origen, archivo)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (fecha, cliente, cuit, tipo, numero, debe, haber, saldo, origen, archivo))
-
-
-# ======================================================
-# CONFIGURACIÓN - PLAN DE CUENTAS
-# ======================================================
-
-def obtener_plan_cuentas_simple():
-    return ejecutar_query("""
-        SELECT codigo, nombre
-        FROM plan_cuentas
-        ORDER BY codigo
-    """, fetch=True)
-
-
-def obtener_plan_cuentas_detallado():
-    return ejecutar_query("""
-        SELECT cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden
-        FROM plan_cuentas_detallado
-        ORDER BY cuenta
-    """, fetch=True)
-
-
-def reemplazar_plan_cuentas_simple(df):
-    conn = conectar()
-    cur = conn.cursor()
-
-    try:
-        cur.execute("DELETE FROM plan_cuentas")
-
-        for _, fila in df.iterrows():
-            codigo = str(fila["codigo"]).strip()
-            nombre = str(fila["nombre"]).strip()
-
-            if codigo and nombre:
-                cur.execute("""
-                    INSERT INTO plan_cuentas (codigo, nombre)
-                    VALUES (?, ?)
-                """, (codigo, nombre))
-
-        conn.commit()
-
-    except Exception as e:
-        conn.rollback()
-        raise e
-
-    finally:
-        conn.close()
-
-
-def reemplazar_plan_cuentas_detallado(df):
-    conn = conectar()
-    cur = conn.cursor()
-
-    try:
-        cur.execute("DELETE FROM plan_cuentas_detallado")
-        cur.execute("DELETE FROM plan_cuentas")
-
-        for _, fila in df.iterrows():
-            cuenta = str(fila.get("cuenta", "")).strip()
-            detalle = str(fila.get("detalle", "")).strip()
-            imputable = str(fila.get("imputable", "")).strip()
-            ajustable = str(fila.get("ajustable", "")).strip()
-            tipo = str(fila.get("tipo", "")).strip()
-            madre = str(fila.get("madre", "")).strip()
-
-            try:
-                nivel = int(float(fila.get("nivel", 0)))
-            except Exception:
-                nivel = 0
-
-            try:
-                orden = int(float(fila.get("orden", 0)))
-            except Exception:
-                orden = 0
-
-            if cuenta and detalle:
-                cur.execute("""
-                    INSERT OR REPLACE INTO plan_cuentas_detallado
-                    (cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden))
-
-                cur.execute("""
-                    INSERT INTO plan_cuentas (codigo, nombre)
-                    VALUES (?, ?)
-                """, (cuenta, detalle))
-
-        conn.commit()
-
-    except Exception as e:
-        conn.rollback()
-        raise e
-
-    finally:
-        conn.close()
-
-
-def guardar_cuenta_detallada(cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden):
-    ejecutar_query("""
-        INSERT OR REPLACE INTO plan_cuentas_detallado
-        (cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden))
-
-    ejecutar_query("""
-        DELETE FROM plan_cuentas
-        WHERE codigo = ?
-    """, (cuenta,))
-
-    ejecutar_query("""
-        INSERT INTO plan_cuentas (codigo, nombre)
-        VALUES (?, ?)
-    """, (cuenta, detalle))
-
-
-def eliminar_cuenta(cuenta):
-    ejecutar_query("DELETE FROM plan_cuentas_detallado WHERE cuenta = ?", (cuenta,))
-    ejecutar_query("DELETE FROM plan_cuentas WHERE codigo = ?", (cuenta,))
-
-
-# ======================================================
-# CONFIGURACIÓN - CATEGORÍAS DE COMPRA
-# ======================================================
-
-def obtener_categorias_compra():
-    return ejecutar_query("""
-        SELECT categoria, cuenta_codigo, cuenta_nombre,
-               cuenta_proveedor_codigo, cuenta_proveedor_nombre,
-               tipo_categoria, activo
-        FROM categorias_compra
-        ORDER BY categoria
-    """, fetch=True)
-
-
-def reemplazar_categorias_compra(df):
-    conn = conectar()
-    cur = conn.cursor()
-
-    try:
-        cur.execute("DELETE FROM categorias_compra")
-
-        for _, fila in df.iterrows():
-            categoria = str(fila.get("categoria", "")).strip()
-            cuenta_codigo = str(fila.get("cuenta_codigo", "")).strip()
-            cuenta_nombre = str(fila.get("cuenta_nombre", "")).strip()
-            cuenta_proveedor_codigo = str(fila.get("cuenta_proveedor_codigo", "")).strip()
-            cuenta_proveedor_nombre = str(fila.get("cuenta_proveedor_nombre", "")).strip()
-            tipo_categoria = str(fila.get("tipo_categoria", "")).strip()
-
-            if categoria:
-                cur.execute("""
-                    INSERT OR REPLACE INTO categorias_compra
-                    (categoria, cuenta_codigo, cuenta_nombre,
-                     cuenta_proveedor_codigo, cuenta_proveedor_nombre,
-                     tipo_categoria, activo)
-                    VALUES (?, ?, ?, ?, ?, ?, 1)
-                """, (
-                    categoria,
-                    cuenta_codigo,
-                    cuenta_nombre,
-                    cuenta_proveedor_codigo,
-                    cuenta_proveedor_nombre,
-                    tipo_categoria
-                ))
-
-        conn.commit()
-
-    except Exception as e:
-        conn.rollback()
-        raise e
-
-    finally:
-        conn.close()
-
-
-def guardar_categoria_compra(categoria, cuenta_codigo, cuenta_nombre, cuenta_proveedor_codigo, cuenta_proveedor_nombre, tipo_categoria, activo=1):
-    ejecutar_query("""
-        INSERT OR REPLACE INTO categorias_compra
-        (categoria, cuenta_codigo, cuenta_nombre,
-         cuenta_proveedor_codigo, cuenta_proveedor_nombre,
-         tipo_categoria, activo)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (
-        categoria,
-        cuenta_codigo,
-        cuenta_nombre,
-        cuenta_proveedor_codigo,
-        cuenta_proveedor_nombre,
-        tipo_categoria,
-        activo
-    ))
-
-
-def eliminar_categoria_compra(categoria):
-    ejecutar_query("DELETE FROM categorias_compra WHERE categoria = ?", (categoria,))
-
-
-# ======================================================
-# CONFIGURACIÓN - CONCEPTOS FISCALES DE COMPRA
-# ======================================================
-
-def obtener_conceptos_fiscales_compra():
-    return ejecutar_query("""
-        SELECT concepto, cuenta_codigo, cuenta_nombre, tratamiento, activo
-        FROM conceptos_fiscales_compra
-        ORDER BY concepto
-    """, fetch=True)
-
-
-def reemplazar_conceptos_fiscales_compra(df):
-    conn = conectar()
-    cur = conn.cursor()
-
-    try:
-        cur.execute("DELETE FROM conceptos_fiscales_compra")
-
-        for _, fila in df.iterrows():
-            concepto = str(fila.get("concepto", "")).strip()
-            cuenta_codigo = str(fila.get("cuenta_codigo", "")).strip()
-            cuenta_nombre = str(fila.get("cuenta_nombre", "")).strip()
-            tratamiento = str(fila.get("tratamiento", "")).strip()
-
-            if concepto:
-                cur.execute("""
-                    INSERT OR REPLACE INTO conceptos_fiscales_compra
-                    (concepto, cuenta_codigo, cuenta_nombre, tratamiento, activo)
-                    VALUES (?, ?, ?, ?, 1)
-                """, (concepto, cuenta_codigo, cuenta_nombre, tratamiento))
-
-        conn.commit()
-
-    except Exception as e:
-        conn.rollback()
-        raise e
-
-    finally:
-        conn.close()
-
-
-def guardar_concepto_fiscal_compra(concepto, cuenta_codigo, cuenta_nombre, tratamiento, activo=1):
-    ejecutar_query("""
-        INSERT OR REPLACE INTO conceptos_fiscales_compra
-        (concepto, cuenta_codigo, cuenta_nombre, tratamiento, activo)
-        VALUES (?, ?, ?, ?, ?)
-    """, (concepto, cuenta_codigo, cuenta_nombre, tratamiento, activo))
-
-
-def eliminar_concepto_fiscal_compra(concepto):
-    ejecutar_query("DELETE FROM conceptos_fiscales_compra WHERE concepto = ?", (concepto,))
