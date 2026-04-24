@@ -10,6 +10,9 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
+    # BORRAR TABLA VIEJA MAL CREADA
+    cursor.execute("DROP TABLE IF EXISTS historial_cargas")
+
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS libro_diario (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,13 +59,9 @@ def ejecutar_query(query, params=(), fetch=False):
     conn = sqlite3.connect(DB_PATH)
 
     if fetch:
-        try:
-            df = pd.read_sql_query(query, conn, params=params)
-            conn.close()
-            return df
-        except:
-            conn.close()
-            return pd.DataFrame()
+        df = pd.read_sql_query(query, conn, params=params)
+        conn.close()
+        return df
 
     cursor = conn.cursor()
     cursor.execute(query, params)
