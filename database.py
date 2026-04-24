@@ -280,3 +280,9 @@ def registrar_cta_cte_cliente(fecha, cliente, cuit, tipo, numero, debe, haber, s
         (fecha, cliente, cuit, tipo, numero, debe, haber, saldo, origen, archivo)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (fecha, cliente, cuit, tipo, numero, debe, haber, saldo, origen, archivo))
+
+def eliminar_diferencias_redondeo():
+    ejecutar_query("""
+        DELETE FROM libro_diario
+        WHERE cuenta = 'DIFERENCIA POR REDONDEO'
+    """)

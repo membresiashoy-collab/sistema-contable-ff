@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from database import ejecutar_query, eliminar_todo_diario
+from database import ejecutar_query, eliminar_todo_diario, eliminar_diferencias_redondeo
 
 
 def formatear_fecha(fecha):
@@ -16,17 +16,10 @@ def formatear_fecha(fecha):
         return fecha
 
 
-def eliminar_diferencias_redondeo():
-    ejecutar_query("""
-        DELETE FROM libro_diario
-        WHERE cuenta = 'DIFERENCIA POR REDONDEO'
-    """)
-
-
 def insertar_espacios_entre_asientos(df):
     filas = []
 
-    for asiento, grupo in df.groupby("id_asiento", sort=False):
+    for _, grupo in df.groupby("id_asiento", sort=False):
         filas.append(grupo)
 
         fila_vacia = pd.DataFrame([{
@@ -69,23 +62,48 @@ def mostrar_diario():
         st.info("Sin movimientos.")
         return
 
-    cantidad_redondeos = len(df[df["cuenta"] == "DIFERENCIA POR REDONDEO"])
+    # --------------------------------------------------
+    # Control de movimientos viejos de redondeo
+    # --------------------------------------------------
+    df_redondeo = df[df["cuenta"] == "DIFERENCIA POR REDONDEO"]
 
-    if cantidad_redondeos > 0:
-        st.warning(
-            f"Hay {cantidad_redondeos} movimientos antiguos en la cuenta "
-            "'DIFERENCIA POR REDONDEO'. Esto corresponde a pruebas anteriores."
+    if not df_redondeo.empty:
+        st.error(
+            f"Se detectaron {len(df_redondeo)} movimientos antiguos en la cuenta "
+            "'DIFERENCIA POR REDONDEO'. Estos movimientos corresponden a pruebas "
+            "anteriores y deben eliminarse."
         )
 
-        if st.button("Eliminar movimientos de DIFERENCIA POR REDONDEO"):
-            eliminar_diferencias_redondeo()
-            st.success("Movimientos de diferencia por redondeo eliminados.")
-            st.rerun()
+        if "confirmar_eliminar_redondeo" not in st.session_state:
+            st.session_state["confirmar_eliminar_redondeo"] = False
 
+        if st.button("Eliminar movimientos de DIFERENCIA POR REDONDEO"):
+            st.session_state["confirmar_eliminar_redondeo"] = True
+
+        if st.session_state["confirmar_eliminar_redondeo"]:
+            st.warning("¿Confirmás eliminar esos movimientos del Libro Diario?")
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+                if st.button("Sí, eliminar redondeos"):
+                    eliminar_diferencias_redondeo()
+                    st.success("Movimientos de diferencia por redondeo eliminados.")
+                    st.session_state["confirmar_eliminar_redondeo"] = False
+                    st.rerun()
+
+            with c2:
+                if st.button("Cancelar eliminación"):
+                    st.session_state["confirmar_eliminar_redondeo"] = False
+                    st.rerun()
+
+        st.divider()
+
+    # Filtramos para que no se vean mientras existan
     df = df[df["cuenta"] != "DIFERENCIA POR REDONDEO"].copy()
 
     if df.empty:
-        st.info("No quedan movimientos contables luego de filtrar redondeos.")
+        st.info("No hay movimientos contables luego de excluir redondeos antiguos.")
         return
 
     df["fecha_orden"] = pd.to_datetime(df["fecha"], dayfirst=True, errors="coerce")
@@ -127,7 +145,7 @@ def mostrar_diario():
 
     total_debe = df_vista["debe"].sum()
     total_haber = df_vista["haber"].sum()
-    diferencia = total_debe - total_haber
+    diferencia = round(total_debe - total_haber, 2)
 
     df_vista_con_espacios = insertar_espacios_entre_asientos(df_vista)
 
@@ -145,8 +163,8 @@ def mostrar_diario():
     c2.metric("Total Haber", f"$ {total_haber:,.2f}")
     c3.metric("Diferencia", f"$ {diferencia:,.2f}")
 
-    if round(diferencia, 2) != 0:
-        st.error("El Libro Diario no está cuadrando. Revisar comprobantes o lógica de asientos.")
+    if diferencia != 0:
+        st.error("El Libro Diario no está cuadrando.")
     else:
         st.success("El Libro Diario está cuadrado.")
 
