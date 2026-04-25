@@ -1,8 +1,84 @@
-import sqlite3
-import pandas as pd
+import os
 import json
+import shutil
+import sqlite3
+from datetime import datetime
+
+import pandas as pd
 
 from config import DB_PATH, DB_ENGINE, asegurar_directorios
+
+
+# ======================================================
+# CONFIGURACIÓN DE SEGURIDAD DE BASE
+# ======================================================
+
+def ruta_base_datos():
+    """
+    Devuelve la ruta absoluta de la base de datos.
+    Mantiene compatibilidad con config.py.
+    """
+    return DB_PATH
+
+
+def asegurar_carpeta_db():
+    """
+    Asegura que exista la carpeta donde vive la base SQLite.
+    """
+    asegurar_directorios()
+
+    carpeta = os.path.dirname(DB_PATH)
+
+    if carpeta:
+        os.makedirs(carpeta, exist_ok=True)
+
+
+def backup_base_datos(motivo="backup"):
+    """
+    Crea una copia de seguridad del archivo SQLite si existe.
+
+    No borra ni modifica la base original.
+    """
+    asegurar_carpeta_db()
+
+    if not os.path.exists(DB_PATH):
+        return None
+
+    carpeta_backup = os.path.join(os.path.dirname(DB_PATH), "backups")
+    os.makedirs(carpeta_backup, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    nombre_base = os.path.basename(DB_PATH)
+    destino = os.path.join(
+        carpeta_backup,
+        f"{nombre_base}_{motivo}_{timestamp}.bak"
+    )
+
+    shutil.copy2(DB_PATH, destino)
+
+    return destino
+
+
+def operacion_destructiva_permitida(nombre_operacion, confirmar=False):
+    """
+    Evita que funciones peligrosas borren datos por accidente.
+
+    Para borrar masivamente, la función debe llamarse explícitamente con:
+    confirmar=True
+
+    Esto protege contra ejecuciones automáticas desde Streamlit, main.py
+    o inicializadores.
+    """
+    if confirmar is True:
+        backup_base_datos(nombre_operacion)
+        return True
+
+    print(
+        f"[PROTECCIÓN DB] Operación bloqueada: {nombre_operacion}. "
+        "Para ejecutarla debe pasarse confirmar=True."
+    )
+
+    return False
 
 
 # ======================================================
@@ -17,7 +93,7 @@ def conectar():
     Más adelante puede adaptarse a PostgreSQL sin romper módulos.
     """
 
-    asegurar_directorios()
+    asegurar_carpeta_db()
 
     if DB_ENGINE != "sqlite":
         raise NotImplementedError(
@@ -27,6 +103,13 @@ def conectar():
 
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 30000")
+
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+    except Exception:
+        pass
+
     return conn
 
 
@@ -38,15 +121,18 @@ def ejecutar_query(sql, params=(), fetch=False):
 
     conn = conectar()
 
-    if fetch:
-        df = pd.read_sql_query(sql, conn, params=params)
-        conn.close()
-        return df
+    try:
+        if fetch:
+            df = pd.read_sql_query(sql, conn, params=params)
+            return df
 
-    cur = conn.cursor()
-    cur.execute(sql, params)
-    conn.commit()
-    conn.close()
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        conn.commit()
+        return cur
+
+    finally:
+        conn.close()
 
 
 def ejecutar_transaccion(operaciones):
@@ -109,30 +195,46 @@ def agregar_columna_si_no_existe(conn, tabla, columna, definicion):
 
 def reparar_tablas_seguridad(conn, cur):
     """
-    Repara tablas de seguridad si alguna quedó creada con estructura vieja.
-    No toca ventas, compras ni libro diario.
+    Repara tablas de seguridad sin borrar datos.
+
+    Versión segura:
+    - No hace DROP TABLE.
+    - Solo agrega columnas faltantes.
     """
 
-    tablas_seguridad_esperadas = {
-        "roles": ["rol", "descripcion"],
-        "permisos": ["permiso", "descripcion", "modulo"],
-        "rol_permisos": ["rol", "permiso"],
-        "usuarios": ["usuario", "password_hash", "rol", "activo"],
-        "empresas": ["nombre", "activo"],
-        "usuario_empresas": ["usuario_id", "empresa_id"]
-    }
+    if tabla_existe(conn, "roles"):
+        agregar_columna_si_no_existe(conn, "roles", "descripcion", "TEXT")
 
-    for tabla, columnas_requeridas in tablas_seguridad_esperadas.items():
-        if tabla_existe(conn, tabla):
-            columnas_actuales = columnas_tabla(conn, tabla)
+    if tabla_existe(conn, "permisos"):
+        agregar_columna_si_no_existe(conn, "permisos", "descripcion", "TEXT")
+        agregar_columna_si_no_existe(conn, "permisos", "modulo", "TEXT")
 
-            estructura_ok = all(
-                columna in columnas_actuales
-                for columna in columnas_requeridas
-            )
+    if tabla_existe(conn, "rol_permisos"):
+        agregar_columna_si_no_existe(conn, "rol_permisos", "rol", "TEXT")
+        agregar_columna_si_no_existe(conn, "rol_permisos", "permiso", "TEXT")
 
-            if not estructura_ok:
-                cur.execute(f"DROP TABLE IF EXISTS {tabla}")
+    if tabla_existe(conn, "usuarios"):
+        agregar_columna_si_no_existe(conn, "usuarios", "nombre", "TEXT")
+        agregar_columna_si_no_existe(conn, "usuarios", "email", "TEXT")
+        agregar_columna_si_no_existe(conn, "usuarios", "password_hash", "TEXT")
+        agregar_columna_si_no_existe(conn, "usuarios", "rol", "TEXT DEFAULT 'LECTURA'")
+        agregar_columna_si_no_existe(conn, "usuarios", "activo", "INTEGER DEFAULT 1")
+        agregar_columna_si_no_existe(conn, "usuarios", "debe_cambiar_password", "INTEGER DEFAULT 0")
+        agregar_columna_si_no_existe(conn, "usuarios", "fecha_creacion", "TIMESTAMP")
+        agregar_columna_si_no_existe(conn, "usuarios", "ultimo_login", "TIMESTAMP")
+
+    if tabla_existe(conn, "empresas"):
+        agregar_columna_si_no_existe(conn, "empresas", "cuit", "TEXT")
+        agregar_columna_si_no_existe(conn, "empresas", "razon_social", "TEXT")
+        agregar_columna_si_no_existe(conn, "empresas", "domicilio", "TEXT")
+        agregar_columna_si_no_existe(conn, "empresas", "actividad", "TEXT")
+        agregar_columna_si_no_existe(conn, "empresas", "activo", "INTEGER DEFAULT 1")
+        agregar_columna_si_no_existe(conn, "empresas", "fecha_creacion", "TIMESTAMP")
+
+    if tabla_existe(conn, "usuario_empresas"):
+        agregar_columna_si_no_existe(conn, "usuario_empresas", "usuario_id", "INTEGER")
+        agregar_columna_si_no_existe(conn, "usuario_empresas", "empresa_id", "INTEGER")
+        agregar_columna_si_no_existe(conn, "usuario_empresas", "activo", "INTEGER DEFAULT 1")
 
 
 # ======================================================
@@ -140,6 +242,14 @@ def reparar_tablas_seguridad(conn, cur):
 # ======================================================
 
 def init_db():
+    """
+    Inicializa la estructura de la base.
+
+    IMPORTANTE:
+    Esta función NO borra datos.
+    Solo crea tablas faltantes y agrega columnas faltantes.
+    """
+
     conn = conectar()
     cur = conn.cursor()
 
@@ -380,6 +490,18 @@ def init_db():
     """)
 
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS advertencias_carga (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            modulo TEXT,
+            archivo TEXT,
+            fila INTEGER,
+            motivo TEXT,
+            contenido TEXT,
+            fecha_carga TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS ventas_comprobantes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             fecha TEXT,
@@ -453,6 +575,24 @@ def init_db():
         )
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS iva_config_periodo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            empresa_id INTEGER DEFAULT 1,
+            anio INTEGER,
+            mes INTEGER,
+            modo_credito_fiscal TEXT DEFAULT 'SEGUN_PORTAL_IVA',
+            ventas_gravadas REAL DEFAULT 0,
+            ventas_exentas REAL DEFAULT 0,
+            ventas_no_gravadas REAL DEFAULT 0,
+            exportaciones REAL DEFAULT 0,
+            coeficiente_credito_fiscal REAL DEFAULT 1,
+            usar_credito_fiscal TEXT DEFAULT 'SISTEMA',
+            observacion TEXT,
+            fecha_carga TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     # ======================================================
     # COLUMNAS COMPATIBLES PARA MULTIEMPRESA
     # ======================================================
@@ -462,6 +602,7 @@ def init_db():
         "historial_cargas",
         "comprobantes_procesados",
         "errores_carga",
+        "advertencias_carga",
         "ventas_comprobantes",
         "cuenta_corriente_clientes",
         "compras_comprobantes",
@@ -487,6 +628,56 @@ def init_db():
     for columna, definicion in columnas_diario.items():
         agregar_columna_si_no_existe(conn, "libro_diario", columna, definicion)
 
+    columnas_categorias = {
+        "tratamiento_iva": "TEXT DEFAULT 'SEGUN_CONFIG_PERIODO'",
+        "porcentaje_iva_computable": "REAL DEFAULT NULL"
+    }
+
+    for columna, definicion in columnas_categorias.items():
+        agregar_columna_si_no_existe(conn, "categorias_compra", columna, definicion)
+
+    columnas_compras = {
+        "categoria_compra": "TEXT",
+        "cuenta_principal_codigo": "TEXT",
+        "cuenta_principal_nombre": "TEXT",
+        "cuenta_proveedor_codigo": "TEXT",
+        "cuenta_proveedor_nombre": "TEXT",
+        "importe_no_gravado": "REAL DEFAULT 0",
+        "importe_exento": "REAL DEFAULT 0",
+        "iva_total": "REAL DEFAULT 0",
+        "credito_fiscal_computable": "REAL DEFAULT 0",
+        "metodo_credito_fiscal": "TEXT",
+        "coeficiente_iva_aplicado": "REAL DEFAULT 1",
+        "iva_computable_sistema": "REAL DEFAULT 0",
+        "iva_no_computable_sistema": "REAL DEFAULT 0",
+        "iva_computable_csv": "REAL DEFAULT 0",
+        "diferencia_iva_csv_sistema": "REAL DEFAULT 0",
+        "iva_no_computable": "REAL DEFAULT 0",
+        "percepcion_iva": "REAL DEFAULT 0",
+        "percepcion_iibb": "REAL DEFAULT 0",
+        "percepcion_otros_imp_nac": "REAL DEFAULT 0",
+        "impuestos_municipales": "REAL DEFAULT 0",
+        "impuestos_internos": "REAL DEFAULT 0",
+        "otros_tributos": "REAL DEFAULT 0",
+        "moneda": "TEXT",
+        "tipo_cambio": "REAL DEFAULT 1",
+        "neto_iva_0": "REAL DEFAULT 0",
+        "neto_iva_25": "REAL DEFAULT 0",
+        "iva_25": "REAL DEFAULT 0",
+        "neto_iva_5": "REAL DEFAULT 0",
+        "iva_5": "REAL DEFAULT 0",
+        "neto_iva_105": "REAL DEFAULT 0",
+        "iva_105": "REAL DEFAULT 0",
+        "neto_iva_21": "REAL DEFAULT 0",
+        "iva_21": "REAL DEFAULT 0",
+        "neto_iva_27": "REAL DEFAULT 0",
+        "iva_27": "REAL DEFAULT 0",
+        "origen_carga": "TEXT"
+    }
+
+    for columna, definicion in columnas_compras.items():
+        agregar_columna_si_no_existe(conn, "compras_comprobantes", columna, definicion)
+
     # ======================================================
     # ÍNDICES
     # ======================================================
@@ -496,6 +687,7 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_libro_diario_origen ON libro_diario(origen)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_libro_diario_comprobante ON libro_diario(comprobante_clave)")
 
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_historial_archivo ON historial_cargas(nombre_archivo)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ventas_empresa ON ventas_comprobantes(empresa_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_compras_empresa ON compras_comprobantes(empresa_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_compras_cuit ON compras_comprobantes(cuit)")
@@ -558,50 +750,110 @@ def obtener_historial():
 
 
 def eliminar_carga(nombre):
+    """
+    Elimina una carga específica por nombre de archivo.
+
+    Esta función sí es destructiva, pero es puntual y explícita.
+    Crea backup antes de borrar.
+    """
+    backup_base_datos("antes_eliminar_carga")
+
     ejecutar_query("DELETE FROM libro_diario WHERE archivo = ?", (nombre,))
     ejecutar_query("DELETE FROM comprobantes_procesados WHERE archivo = ?", (nombre,))
     ejecutar_query("DELETE FROM errores_carga WHERE archivo = ?", (nombre,))
+    ejecutar_query("DELETE FROM advertencias_carga WHERE archivo = ?", (nombre,))
     ejecutar_query("DELETE FROM ventas_comprobantes WHERE archivo = ?", (nombre,))
     ejecutar_query("DELETE FROM cuenta_corriente_clientes WHERE archivo = ?", (nombre,))
     ejecutar_query("DELETE FROM compras_comprobantes WHERE archivo = ?", (nombre,))
     ejecutar_query("DELETE FROM cuenta_corriente_proveedores WHERE archivo = ?", (nombre,))
     ejecutar_query("DELETE FROM historial_cargas WHERE nombre_archivo = ?", (nombre,))
 
+    return True
 
-def limpiar_historial():
+
+def limpiar_historial(confirmar=False):
+    """
+    Limpieza masiva protegida.
+
+    No se ejecuta salvo que se llame con confirmar=True.
+    """
+    if not operacion_destructiva_permitida("limpiar_historial", confirmar):
+        return False
+
     ejecutar_query("DELETE FROM historial_cargas")
     ejecutar_query("DELETE FROM comprobantes_procesados")
     ejecutar_query("DELETE FROM errores_carga")
+    ejecutar_query("DELETE FROM advertencias_carga")
+
+    return True
 
 
-def eliminar_todo_diario():
+def eliminar_todo_diario(confirmar=False):
+    """
+    Limpieza masiva protegida.
+    """
+    if not operacion_destructiva_permitida("eliminar_todo_diario", confirmar):
+        return False
+
     ejecutar_query("DELETE FROM libro_diario")
+    return True
 
 
 def eliminar_diferencias_redondeo():
+    """
+    Limpieza puntual y no masiva.
+    """
+    backup_base_datos("antes_eliminar_diferencias_redondeo")
+
     ejecutar_query("""
         DELETE FROM libro_diario
         WHERE cuenta = 'DIFERENCIA POR REDONDEO'
     """)
 
+    return True
+
 
 def limpiar_errores():
+    """
+    Limpieza de errores solamente.
+    No borra comprobantes ni libro diario.
+    """
     ejecutar_query("DELETE FROM errores_carga")
+    return True
 
 
-def limpiar_comprobantes_procesados():
+def limpiar_comprobantes_procesados(confirmar=False):
+    """
+    Limpieza masiva protegida porque permite reprocesar duplicados.
+    """
+    if not operacion_destructiva_permitida("limpiar_comprobantes_procesados", confirmar):
+        return False
+
     ejecutar_query("DELETE FROM comprobantes_procesados")
+    return True
 
 
-def limpiar_base_pruebas():
+def limpiar_base_pruebas(confirmar=False):
+    """
+    Limpieza masiva protegida.
+
+    Esta función NO debe llamarse automáticamente desde main.py
+    ni desde inicializadores.
+    """
+    if not operacion_destructiva_permitida("limpiar_base_pruebas", confirmar):
+        return False
+
     ejecutar_query("DELETE FROM libro_diario")
     ejecutar_query("DELETE FROM historial_cargas")
     ejecutar_query("DELETE FROM comprobantes_procesados")
     ejecutar_query("DELETE FROM errores_carga")
+    ejecutar_query("DELETE FROM advertencias_carga")
     ejecutar_query("DELETE FROM ventas_comprobantes")
     ejecutar_query("DELETE FROM cuenta_corriente_clientes")
     ejecutar_query("DELETE FROM compras_comprobantes")
     ejecutar_query("DELETE FROM cuenta_corriente_proveedores")
+
+    return True
 
 
 # ======================================================

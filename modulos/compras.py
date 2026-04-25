@@ -1,6 +1,8 @@
-import streamlit as st
-import pandas as pd
+import json
 from datetime import date
+
+import pandas as pd
+import streamlit as st
 
 from database import ejecutar_query, archivo_ya_cargado
 from services.compras_service import (
@@ -8,6 +10,16 @@ from services.compras_service import (
     procesar_compra_manual,
     es_csv_arca_compras,
     asegurar_columnas_compras_v2
+)
+
+from services.clasificacion_compras_service import (
+    construir_detalle_preclasificacion,
+    construir_resumen_por_proveedor,
+    aplicar_categorias_y_excepciones,
+    resumen_final_por_categoria,
+    guardar_categoria_habitual_proveedores,
+    nombre_archivo_interno,
+    key_segura
 )
 
 from core.fechas import ordenar_dataframe_por_fecha, fecha_para_ordenar, formatear_fecha
@@ -21,55 +33,717 @@ from core.numeros import moneda
 # ======================================================
 
 def obtener_categorias_activas():
-    return ejecutar_query("""
-        SELECT 
-            categoria,
-            cuenta_codigo,
-            cuenta_nombre,
-            cuenta_proveedor_codigo,
-            cuenta_proveedor_nombre,
-            tipo_categoria
-        FROM categorias_compra
-        WHERE activo = 1
-        ORDER BY categoria
-    """, fetch=True)
+    try:
+        return ejecutar_query("""
+            SELECT 
+                categoria,
+                cuenta_codigo,
+                cuenta_nombre,
+                cuenta_proveedor_codigo,
+                cuenta_proveedor_nombre,
+                tipo_categoria,
+                tratamiento_iva,
+                porcentaje_iva_computable
+            FROM categorias_compra
+            WHERE activo = 1
+            ORDER BY categoria
+        """, fetch=True)
+    except Exception:
+        return ejecutar_query("""
+            SELECT 
+                categoria,
+                cuenta_codigo,
+                cuenta_nombre,
+                cuenta_proveedor_codigo,
+                cuenta_proveedor_nombre,
+                tipo_categoria
+            FROM categorias_compra
+            WHERE activo = 1
+            ORDER BY categoria
+        """, fetch=True)
 
 
 def obtener_tipos_comprobantes():
     return ejecutar_query("""
         SELECT codigo, descripcion, signo
         FROM tipos_comprobantes
-        ORDER BY codigo
+        ORDER BY CAST(codigo AS INTEGER)
     """, fetch=True)
+
+
+def archivo_preclasificado_ya_cargado(nombre_archivo):
+    try:
+        df = ejecutar_query("""
+            SELECT id
+            FROM historial_cargas
+            WHERE nombre_archivo = ?
+               OR nombre_archivo LIKE ?
+            LIMIT 1
+        """, (nombre_archivo, f"{nombre_archivo}__%"), fetch=True)
+
+        return not df.empty
+    except Exception:
+        return archivo_ya_cargado(nombre_archivo)
+
+
+def rerun_app():
+    try:
+        st.rerun()
+    except Exception:
+        try:
+            st.experimental_rerun()
+        except Exception:
+            pass
+
+
+# ======================================================
+# ESTADO STREAMLIT
+# ======================================================
+
+def obtener_claves_estado(nombre_archivo):
+    base_key = f"compras_clasificacion_{key_segura(nombre_archivo)}"
+
+    return {
+        "base_key": base_key,
+        "categorias_key": f"{base_key}_categorias",
+        "confirmados_key": f"{base_key}_confirmados",
+        "excepciones_key": f"{base_key}_excepciones",
+        "abiertos_key": f"{base_key}_abiertos",
+        "seleccionados_key": f"{base_key}_seleccionados",
+    }
+
+
+def reset_flag_key(nombre_archivo):
+    return f"reset_clasificacion_compras_{key_segura(nombre_archivo)}"
+
+
+def limpiar_estado_clasificacion(nombre_archivo):
+    estado = obtener_claves_estado(nombre_archivo)
+    base_key = estado["base_key"]
+
+    claves_a_borrar = []
+
+    for clave in list(st.session_state.keys()):
+        clave_texto = str(clave)
+
+        if clave_texto.startswith(base_key):
+            claves_a_borrar.append(clave)
+
+        if clave_texto.startswith(f"categoria_proveedor_{base_key}_"):
+            claves_a_borrar.append(clave)
+
+        if clave_texto.startswith(f"categoria_factura_{base_key}_"):
+            claves_a_borrar.append(clave)
+
+        if clave_texto.startswith(f"ver_facturas_{base_key}_"):
+            claves_a_borrar.append(clave)
+
+        if clave_texto.startswith(f"confirmar_proveedor_{base_key}_"):
+            claves_a_borrar.append(clave)
+
+        if clave_texto.startswith(f"modificar_confirmado_{base_key}_"):
+            claves_a_borrar.append(clave)
+
+    for clave in set(claves_a_borrar):
+        try:
+            del st.session_state[clave]
+        except Exception:
+            pass
+
+
+def aplicar_reset_pendiente(nombre_archivo):
+    """
+    Este reset no aparece como botón visible.
+    Se activa automáticamente cuando Estado de Cargas elimina ese archivo.
+    Sirve para evitar que Streamlit mantenga en memoria una clasificación vieja
+    del mismo archivo recién eliminado.
+    """
+
+    flag = reset_flag_key(nombre_archivo)
+
+    if st.session_state.get(flag, False):
+        limpiar_estado_clasificacion(nombre_archivo)
+
+        try:
+            del st.session_state[flag]
+        except Exception:
+            pass
+
+
+# ======================================================
+# RESULTADOS / AUDITORÍA
+# ======================================================
+
+def resultado_vacio():
+    return {
+        "procesados": 0,
+        "errores": 0,
+        "advertencias": 0,
+        "facturas": 0,
+        "notas_credito": 0,
+        "notas_debito": 0,
+        "duplicados": 0,
+        "errores_matematicos": 0,
+        "errores_codigo": 0,
+        "ajustes_centavos": 0,
+        "iva_no_computable": 0,
+        "diferencias_iva_csv_sistema": 0,
+        "comprobantes_sin_iva_discriminado": 0
+    }
+
+
+def acumular_resultado(total, parcial):
+    for clave, valor in parcial.items():
+        if isinstance(valor, (int, float)):
+            total[clave] = total.get(clave, 0) + valor
+
+    return total
+
+
+def asegurar_tabla_advertencias():
+    try:
+        ejecutar_query("""
+            CREATE TABLE IF NOT EXISTS advertencias_carga (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                modulo TEXT,
+                archivo TEXT,
+                fila INTEGER,
+                motivo TEXT,
+                contenido TEXT,
+                fecha_carga TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    except Exception:
+        pass
+
+
+def obtener_auditoria_archivo(nombre_archivo):
+    asegurar_tabla_advertencias()
+
+    errores = ejecutar_query("""
+        SELECT fecha, modulo, archivo, fila, motivo, contenido
+        FROM errores_carga
+        WHERE archivo = ?
+           OR archivo LIKE ?
+        ORDER BY id DESC
+    """, (nombre_archivo, f"{nombre_archivo}__%"), fetch=True)
+
+    try:
+        advertencias = ejecutar_query("""
+            SELECT fecha_carga AS fecha, modulo, archivo, fila, motivo, contenido
+            FROM advertencias_carga
+            WHERE archivo = ?
+               OR archivo LIKE ?
+            ORDER BY id DESC
+        """, (nombre_archivo, f"{nombre_archivo}__%"), fetch=True)
+    except Exception:
+        advertencias = pd.DataFrame(columns=["fecha", "modulo", "archivo", "fila", "motivo", "contenido"])
+
+    return errores, advertencias
+
+
+def preparar_auditoria_vista(df):
+    if df.empty:
+        return df
+
+    filas = []
+
+    for _, row in df.iterrows():
+        contenido = row.get("contenido", "")
+        normalizado = {}
+
+        try:
+            data = json.loads(contenido)
+            normalizado = data.get("_normalizado", {})
+        except Exception:
+            normalizado = {}
+
+        filas.append({
+            "fecha": row.get("fecha", ""),
+            "archivo": row.get("archivo", ""),
+            "fila": row.get("fila", ""),
+            "motivo": row.get("motivo", ""),
+            "codigo": normalizado.get("codigo", ""),
+            "numero": normalizado.get("numero", ""),
+            "proveedor": normalizado.get("proveedor", ""),
+            "cuit": normalizado.get("cuit", ""),
+            "total": normalizado.get("total", ""),
+            "categoria": normalizado.get("categoria_compra", "")
+        })
+
+    return pd.DataFrame(filas)
+
+
+def mostrar_auditoria_archivo(nombre_archivo):
+    errores, advertencias = obtener_auditoria_archivo(nombre_archivo)
+
+    st.subheader("Auditoría de la carga")
+
+    col1, col2 = st.columns(2)
+    col1.metric("Errores detallados", len(errores))
+    col2.metric("Advertencias detalladas", len(advertencias))
+
+    if errores.empty and advertencias.empty:
+        st.success("No hay errores ni advertencias registradas para esta carga.")
+        return
+
+    if not errores.empty:
+        with st.expander("Ver errores detectados", expanded=True):
+            st.dataframe(
+                preparar_vista(preparar_auditoria_vista(errores)),
+                use_container_width=True
+            )
+
+    if not advertencias.empty:
+        with st.expander("Ver advertencias detectadas", expanded=True):
+            st.dataframe(
+                preparar_vista(preparar_auditoria_vista(advertencias)),
+                use_container_width=True
+            )
 
 
 def mostrar_resumen_resultado(resultado):
     st.success("Proceso finalizado")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("Procesados", resultado.get("procesados", 0))
+    col2.metric("Errores", resultado.get("errores", 0))
+    col3.metric("Advertencias", resultado.get("advertencias", 0))
+    col4.metric("Duplicados omitidos", resultado.get("duplicados", 0))
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("Facturas", resultado.get("facturas", 0))
+    col2.metric("Notas Crédito", resultado.get("notas_credito", 0))
+    col3.metric("Notas Débito", resultado.get("notas_debito", 0))
+    col4.metric("Ajustes centavos", resultado.get("ajustes_centavos", 0))
+
+    with st.expander("Detalle técnico del proceso", expanded=False):
+        st.write(f"Errores matemáticos: {resultado.get('errores_matematicos', 0)}")
+        st.write(f"Códigos inexistentes: {resultado.get('errores_codigo', 0)}")
+        st.write(f"IVA no computable detectado: {resultado.get('iva_no_computable', 0)}")
+        st.write(f"Diferencias IVA Portal/Sistema: {resultado.get('diferencias_iva_csv_sistema', 0)}")
+        st.write(
+            "Comprobantes sin IVA discriminado: "
+            f"{resultado.get('comprobantes_sin_iva_discriminado', 0)}"
+        )
+
+    if resultado.get("errores", 0) > 0:
+        st.warning("Se detectaron errores. Abajo se muestra el detalle.")
+
+    if resultado.get("advertencias", 0) > 0:
+        st.info("Se generaron advertencias. Abajo se muestra el detalle.")
+
+
+# ======================================================
+# CLASIFICACIÓN
+# ======================================================
+
+def inicializar_estado_clasificacion(nombre_archivo, df_detalle_base):
+    estado = obtener_claves_estado(nombre_archivo)
+
+    if estado["categorias_key"] not in st.session_state:
+        resumen = construir_resumen_por_proveedor(df_detalle_base)
+
+        st.session_state[estado["categorias_key"]] = {
+            str(fila["clave_proveedor"]): str(fila["categoria_compra"])
+            for _, fila in resumen.iterrows()
+        }
+
+    if estado["confirmados_key"] not in st.session_state:
+        st.session_state[estado["confirmados_key"]] = set()
+
+    if estado["excepciones_key"] not in st.session_state:
+        st.session_state[estado["excepciones_key"]] = {}
+
+    if estado["abiertos_key"] not in st.session_state:
+        st.session_state[estado["abiertos_key"]] = {}
+
+    if estado["seleccionados_key"] not in st.session_state:
+        st.session_state[estado["seleccionados_key"]] = []
+
+    return estado
+
+
+def obtener_df_final_clasificado(df_detalle_base, estado):
+    categorias_por_proveedor = st.session_state[estado["categorias_key"]]
+    excepciones = st.session_state[estado["excepciones_key"]]
+
+    return aplicar_categorias_y_excepciones(
+        df_detalle_base,
+        categorias_por_proveedor,
+        excepciones
+    )
+
+
+def mostrar_facturas_de_proveedor(
+    clave,
+    df_detalle_base,
+    estado,
+    categorias_disponibles
+):
+    categorias_por_proveedor = st.session_state[estado["categorias_key"]]
+    excepciones = st.session_state[estado["excepciones_key"]]
+
+    categoria_general = categorias_por_proveedor.get(clave, categorias_disponibles[0])
+
+    df_actual = obtener_df_final_clasificado(df_detalle_base, estado)
+    df_proveedor = df_actual[df_actual["clave_proveedor"].astype(str) == clave].copy()
+
+    if df_proveedor.empty:
+        st.info("Este proveedor no tiene comprobantes para mostrar.")
+        return
+
+    st.caption("Facturas del proveedor. Cambiá solo las excepciones.")
+
+    for _, factura in df_proveedor.iterrows():
+        idx_original = int(factura["idx_original"])
+        idx_key = str(idx_original)
+
+        categoria_actual = excepciones.get(idx_key, categoria_general)
+
+        if categoria_actual not in categorias_disponibles:
+            categoria_actual = categoria_general
+
+        col1, col2, col3, col4 = st.columns([1.1, 1.4, 1.2, 2.1])
+
+        with col1:
+            st.write(f"**{factura['fecha']}**")
+            st.caption(f"Cód. {factura['codigo']}")
+
+        with col2:
+            st.write(factura["numero"])
+
+        with col3:
+            st.write(moneda(float(factura["total"])))
+
+        with col4:
+            nueva_categoria = st.selectbox(
+                "Categoría factura",
+                categorias_disponibles,
+                index=categorias_disponibles.index(categoria_actual),
+                key=f"categoria_factura_{estado['base_key']}_{idx_original}",
+                label_visibility="collapsed"
+            )
+
+            if nueva_categoria != categoria_general:
+                excepciones[idx_key] = nueva_categoria
+            else:
+                if idx_key in excepciones:
+                    del excepciones[idx_key]
+
+
+def mostrar_acciones_masivas(
+    pendientes,
+    estado,
+    categorias_disponibles
+):
+    categorias_por_proveedor = st.session_state[estado["categorias_key"]]
+    confirmados = st.session_state[estado["confirmados_key"]]
+
+    if pendientes.empty:
+        return
+
+    opciones = {}
+    etiquetas = []
+
+    for _, fila in pendientes.iterrows():
+        clave = str(fila["clave_proveedor"])
+        etiqueta = (
+            f"{fila['proveedor']} | CUIT {fila['cuit']} | "
+            f"{int(fila['comprobantes'])} comp. | {moneda(float(fila['total']))}"
+        )
+        opciones[etiqueta] = clave
+        etiquetas.append(etiqueta)
+
+    seleccionados_key = estado["seleccionados_key"]
+
+    if seleccionados_key not in st.session_state:
+        st.session_state[seleccionados_key] = []
+
+    st.session_state[seleccionados_key] = [
+        item for item in st.session_state[seleccionados_key]
+        if item in etiquetas
+    ]
+
+    st.subheader("Acciones rápidas")
+
+    b1, b2, b3 = st.columns(3)
+
+    with b1:
+        if st.button("Seleccionar todos visibles"):
+            st.session_state[seleccionados_key] = etiquetas
+            rerun_app()
+
+    with b2:
+        if st.button("Limpiar selección"):
+            st.session_state[seleccionados_key] = []
+            rerun_app()
+
+    with b3:
+        if st.button("Confirmar todos visibles"):
+            for etiqueta in etiquetas:
+                clave = opciones[etiqueta]
+                confirmados.add(clave)
+            rerun_app()
+
+    col1, col2 = st.columns([2, 1])
 
     with col1:
-        st.metric("Procesados", resultado["procesados"])
-        st.metric("Facturas", resultado["facturas"])
+        seleccionados = st.multiselect(
+            "Proveedores seleccionados",
+            etiquetas,
+            key=seleccionados_key
+        )
 
     with col2:
-        st.metric("Notas de Crédito", resultado["notas_credito"])
-        st.metric("Notas de Débito", resultado["notas_debito"])
+        categoria_masiva = st.selectbox(
+            "Categoría para selección",
+            categorias_disponibles,
+            key=f"categoria_masiva_{estado['base_key']}"
+        )
+
+    claves_seleccionadas = [opciones[e] for e in seleccionados]
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        if st.button("Aplicar categoría"):
+            if not claves_seleccionadas:
+                st.warning("Seleccioná al menos un proveedor.")
+            else:
+                for clave in claves_seleccionadas:
+                    categorias_por_proveedor[clave] = categoria_masiva
+                st.success("Categoría aplicada.")
+                rerun_app()
+
+    with c2:
+        if st.button("Aplicar y confirmar"):
+            if not claves_seleccionadas:
+                st.warning("Seleccioná al menos un proveedor.")
+            else:
+                for clave in claves_seleccionadas:
+                    categorias_por_proveedor[clave] = categoria_masiva
+                    confirmados.add(clave)
+                st.success("Categoría aplicada y proveedores confirmados.")
+                rerun_app()
+
+    with c3:
+        if st.button("Confirmar alta confianza"):
+            cantidad = 0
+            for _, fila in pendientes.iterrows():
+                clave = str(fila["clave_proveedor"])
+                confianza = str(fila.get("confianza_sugerencia", ""))
+                origen = str(fila.get("origen_sugerencia", ""))
+
+                if confianza == "ALTA" and origen != "SIN HISTORIAL":
+                    confirmados.add(clave)
+                    cantidad += 1
+
+            if cantidad == 0:
+                st.info("No hay proveedores con sugerencia de alta confianza pendientes.")
+            else:
+                st.success(f"Se confirmaron {cantidad} proveedores.")
+                rerun_app()
+
+
+def aplicar_filtros_pendientes(pendientes):
+    if pendientes.empty:
+        return pendientes
+
+    col1, col2, col3 = st.columns([2, 1, 1])
+
+    with col1:
+        buscar = st.text_input("Buscar proveedor o CUIT", placeholder="Ej: AMERICAN, 3071...")
+
+    with col2:
+        origenes = ["Todos"] + sorted(pendientes["origen_sugerencia"].dropna().unique().tolist())
+        origen = st.selectbox("Origen", origenes)
 
     with col3:
-        st.metric("Errores", resultado["errores"])
-        st.metric("Duplicados", resultado["duplicados"])
+        confianzas = ["Todas"] + sorted(pendientes["confianza_sugerencia"].dropna().unique().tolist())
+        confianza = st.selectbox("Confianza", confianzas)
+
+    df = pendientes.copy()
+
+    if buscar.strip():
+        b = buscar.strip().upper()
+        df = df[
+            df["proveedor"].astype(str).str.upper().str.contains(b, na=False)
+            | df["cuit"].astype(str).str.upper().str.contains(b, na=False)
+        ]
+
+    if origen != "Todos":
+        df = df[df["origen_sugerencia"] == origen]
+
+    if confianza != "Todas":
+        df = df[df["confianza_sugerencia"] == confianza]
+
+    return df
+
+
+def mostrar_panel_clasificacion_proveedores(
+    df_detalle_base,
+    df_categorias,
+    categorias_disponibles,
+    nombre_archivo
+):
+    estado = inicializar_estado_clasificacion(nombre_archivo, df_detalle_base)
+
+    categorias_por_proveedor = st.session_state[estado["categorias_key"]]
+    confirmados = st.session_state[estado["confirmados_key"]]
+    abiertos = st.session_state[estado["abiertos_key"]]
+
+    df_actual = obtener_df_final_clasificado(df_detalle_base, estado)
+    resumen = construir_resumen_por_proveedor(df_actual)
+
+    total_proveedores = len(resumen)
+    total_confirmados = len(confirmados)
+    total_pendientes = max(total_proveedores - total_confirmados, 0)
+    total_comprobantes = int(resumen["comprobantes"].sum()) if not resumen.empty else 0
+    total_importe = float(resumen["total"].sum()) if not resumen.empty else 0
+
+    pendientes = resumen[
+        ~resumen["clave_proveedor"].astype(str).isin(confirmados)
+    ].copy()
+
+    st.subheader("Clasificación rápida de proveedores")
+    st.caption(
+        "Primero resolvé pendientes. El resumen de preclasificación queda al final para controlar antes de procesar."
+    )
+
+    if not pendientes.empty:
+        pendientes_filtrados = aplicar_filtros_pendientes(pendientes)
+
+        mostrar_acciones_masivas(
+            pendientes_filtrados,
+            estado,
+            categorias_disponibles
+        )
+
+        st.markdown("#### Proveedores pendientes")
+
+        if pendientes_filtrados.empty:
+            st.info("No hay proveedores para los filtros seleccionados.")
+        else:
+            for _, fila in pendientes_filtrados.iterrows():
+                clave = str(fila["clave_proveedor"])
+                clave_key = key_segura(clave)
+
+                proveedor = str(fila["proveedor"])
+                cuit = str(fila["cuit"])
+                comprobantes = int(fila["comprobantes"])
+                total = float(fila["total"])
+
+                origen = str(fila.get("origen_sugerencia", "SIN HISTORIAL"))
+                confianza = str(fila.get("confianza_sugerencia", "BAJA"))
+                sugerida = str(fila.get("categoria_sugerida", ""))
+                veces = int(fila.get("veces_usada", 0) or 0)
+
+                categoria_actual = categorias_por_proveedor.get(clave, categorias_disponibles[0])
+
+                if categoria_actual not in categorias_disponibles:
+                    categoria_actual = categorias_disponibles[0]
+
+                st.markdown("<hr style='margin: 0.35rem 0;'>", unsafe_allow_html=True)
+
+                col_info, col_hist, col_categoria, col_facturas, col_confirmar = st.columns(
+                    [2.6, 2.0, 2.2, 1.25, 1.0]
+                )
+
+                with col_info:
+                    st.write(f"**{proveedor}**")
+                    st.caption(f"CUIT: {cuit} | {comprobantes} comp. | {moneda(total)}")
+
+                with col_hist:
+                    st.caption(f"Sugerida: **{sugerida}**")
+                    st.caption(f"{origen} | {confianza} | Usos {veces}")
+
+                with col_categoria:
+                    categoria_seleccionada = st.selectbox(
+                        "Categoría",
+                        categorias_disponibles,
+                        index=categorias_disponibles.index(categoria_actual),
+                        key=f"categoria_proveedor_{estado['base_key']}_{clave_key}",
+                        label_visibility="collapsed"
+                    )
+                    categorias_por_proveedor[clave] = categoria_seleccionada
+
+                with col_facturas:
+                    if st.button(
+                        f"Ver ({comprobantes})",
+                        key=f"ver_facturas_{estado['base_key']}_{clave_key}"
+                    ):
+                        abiertos[clave] = not abiertos.get(clave, False)
+                        rerun_app()
+
+                with col_confirmar:
+                    if st.button(
+                        "OK",
+                        key=f"confirmar_proveedor_{estado['base_key']}_{clave_key}"
+                    ):
+                        confirmados.add(clave)
+                        abiertos[clave] = False
+                        rerun_app()
+
+                if abiertos.get(clave, False):
+                    mostrar_facturas_de_proveedor(
+                        clave,
+                        df_detalle_base,
+                        estado,
+                        categorias_disponibles
+                    )
+    else:
+        st.success("Todos los proveedores fueron confirmados.")
+
+    if confirmados:
+        with st.expander("Proveedores confirmados", expanded=False):
+            confirmados_df = resumen[
+                resumen["clave_proveedor"].astype(str).isin(confirmados)
+            ].copy()
+
+            for _, fila in confirmados_df.iterrows():
+                clave = str(fila["clave_proveedor"])
+                clave_key = key_segura(clave)
+
+                col1, col2, col3, col4 = st.columns([3, 2, 1, 1])
+
+                with col1:
+                    st.write(f"**{fila['proveedor']}**")
+                    st.caption(f"CUIT: {fila['cuit']}")
+
+                with col2:
+                    st.write(str(fila["categoria_compra"]))
+
+                with col3:
+                    st.write(f"{int(fila['comprobantes'])} comp.")
+
+                with col4:
+                    if st.button(
+                        "Modificar",
+                        key=f"modificar_confirmado_{estado['base_key']}_{clave_key}"
+                    ):
+                        confirmados.discard(clave)
+                        rerun_app()
+
+    df_final = obtener_df_final_clasificado(df_detalle_base, estado)
 
     st.divider()
+    st.subheader("Resumen final de preclasificación")
 
-    st.subheader("Detalle de auditoría")
-    st.write(f"Errores matemáticos: {resultado['errores_matematicos']}")
-    st.write(f"Códigos inexistentes: {resultado['errores_codigo']}")
-    st.write(f"Duplicados detectados: {resultado['duplicados']}")
-    st.write(f"Ajustes técnicos de centavos sobre neto: {resultado['ajustes_centavos']}")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Proveedores", total_proveedores)
+    col2.metric("Pendientes", total_pendientes)
+    col3.metric("Confirmados", total_confirmados)
+    col4.metric("Comprobantes", total_comprobantes)
 
-    if resultado["errores"] > 0:
-        st.warning("Se detectaron errores. Revisar Estado de Cargas / Auditoría.")
+    st.caption(f"Importe total del archivo: {moneda(total_importe)}")
+
+    resumen_categoria = resumen_final_por_categoria(df_final)
+    st.dataframe(preparar_vista(resumen_categoria), use_container_width=True)
+
+    return df_final, total_pendientes
 
 
 # ======================================================
@@ -79,7 +753,7 @@ def mostrar_resumen_resultado(resultado):
 def mostrar_compras():
     asegurar_columnas_compras_v2()
 
-    st.title("📥 Compras PRO V2")
+    st.title("📥 Compras")
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Cargar CSV ARCA",
@@ -111,8 +785,8 @@ def mostrar_compras():
 
 def cargar_csv_compras_arca():
     st.info(
-        "Este módulo procesa CSV ARCA/AFIP Compras, usando categoría contable, "
-        "crédito fiscal computable, percepciones, impuestos internos y otros tributos."
+        "Este módulo procesa CSV ARCA/AFIP Compras. "
+        "La clasificación se realiza por proveedor, aprende del historial vigente y permite excepciones por comprobante."
     )
 
     df_categorias = obtener_categorias_activas()
@@ -124,14 +798,21 @@ def cargar_csv_compras_arca():
         )
         return
 
+    categorias_disponibles = df_categorias["categoria"].tolist()
+
     archivo = st.file_uploader("Subir CSV Compras ARCA/AFIP", type=["csv"])
 
     if not archivo:
         return
 
-    if archivo_ya_cargado(archivo.name):
-        st.error("Ese archivo ya fue cargado anteriormente.")
-        return
+    aplicar_reset_pendiente(archivo.name)
+
+    if archivo_preclasificado_ya_cargado(archivo.name):
+        st.info(
+            "Este archivo ya tiene cargas anteriores. "
+            "El sistema permitirá continuar y procesará solamente comprobantes nuevos. "
+            "Los comprobantes ya existentes serán omitidos como duplicados."
+        )
 
     try:
         df = pd.read_csv(
@@ -147,9 +828,9 @@ def cargar_csv_compras_arca():
         except Exception:
             pass
 
-        st.subheader("Vista previa")
-        st.dataframe(preparar_vista(df.head(20)), use_container_width=True)
-        st.caption(f"Registros detectados: {len(df)}")
+        with st.expander("Vista previa del CSV", expanded=False):
+            st.dataframe(preparar_vista(df.head(20)), use_container_width=True)
+            st.caption(f"Registros detectados: {len(df)}")
 
         if es_csv_arca_compras(df):
             st.success("Formato detectado: CSV ARCA/AFIP Compras.")
@@ -163,41 +844,52 @@ def cargar_csv_compras_arca():
 
         st.divider()
 
-        st.subheader("Clasificación contable de la carga")
+        df_detalle_base = construir_detalle_preclasificacion(df, df_categorias)
 
-        categoria = st.selectbox(
-            "Seleccionar categoría contable para estas compras",
-            df_categorias["categoria"].tolist()
+        df_final, pendientes = mostrar_panel_clasificacion_proveedores(
+            df_detalle_base,
+            df_categorias,
+            categorias_disponibles,
+            archivo.name
         )
 
-        fila_categoria = df_categorias[df_categorias["categoria"] == categoria].iloc[0]
+        st.divider()
 
-        col1, col2 = st.columns(2)
+        st.subheader("Procesamiento")
 
-        with col1:
-            st.write("Cuenta principal:")
-            st.write(f"**{fila_categoria['cuenta_codigo']} - {fila_categoria['cuenta_nombre']}**")
+        if pendientes > 0:
+            st.warning("Todavía hay proveedores pendientes de confirmar.")
+            return
 
-        with col2:
-            st.write("Cuenta proveedor / acreedor:")
-            st.write(f"**{fila_categoria['cuenta_proveedor_codigo']} - {fila_categoria['cuenta_proveedor_nombre']}**")
-
-        st.warning(
-            "La categoría seleccionada se aplicará a todos los comprobantes del archivo. "
-            "Si el archivo mezcla compras de bienes, servicios y bienes de uso, conviene separarlo "
-            "o cargar esos casos manualmente."
-        )
+        if df_final["categoria_compra"].isna().any() or (
+            df_final["categoria_compra"].astype(str).str.strip() == ""
+        ).any():
+            st.warning("Hay comprobantes sin categoría. Completá todas las categorías antes de procesar.")
+            return
 
         if not st.button("Procesar Compras ARCA"):
             return
 
-        resultado = procesar_csv_compras_arca(
-            archivo.name,
-            df,
-            categoria
-        )
+        resultado_total = resultado_vacio()
 
-        mostrar_resumen_resultado(resultado)
+        for categoria, df_grupo_final in df_final.groupby("categoria_compra"):
+            indices = df_grupo_final["idx_original"].tolist()
+            df_grupo = df.loc[indices].copy()
+
+            nombre_interno = nombre_archivo_interno(archivo.name, categoria)
+
+            resultado_grupo = procesar_csv_compras_arca(
+                nombre_interno,
+                df_grupo,
+                categoria
+            )
+
+            resultado_total = acumular_resultado(resultado_total, resultado_grupo)
+
+        guardar_categoria_habitual_proveedores(df_final, df_categorias)
+
+        mostrar_resumen_resultado(resultado_total)
+        mostrar_auditoria_archivo(archivo.name)
 
     except Exception as e:
         st.error(f"No se pudo leer o procesar el archivo: {str(e)}")
@@ -377,6 +1069,12 @@ def mostrar_libro_iva_compras():
             iva_total,
             credito_fiscal_computable,
             iva_no_computable,
+            metodo_credito_fiscal,
+            coeficiente_iva_aplicado,
+            iva_computable_sistema,
+            iva_no_computable_sistema,
+            iva_computable_csv,
+            diferencia_iva_csv_sistema,
             percepcion_iva,
             percepcion_iibb,
             percepcion_otros_imp_nac,
@@ -466,6 +1164,7 @@ def mostrar_resumen_compras():
             neto,
             iva_total,
             credito_fiscal_computable,
+            iva_no_computable,
             total
         FROM compras_comprobantes
     """, fetch=True)
@@ -478,6 +1177,7 @@ def mostrar_resumen_compras():
         "neto": "sum",
         "iva_total": "sum",
         "credito_fiscal_computable": "sum",
+        "iva_no_computable": "sum",
         "total": "sum",
         "tipo": "count"
     })
@@ -490,6 +1190,7 @@ def mostrar_resumen_compras():
         "neto": "sum",
         "iva_total": "sum",
         "credito_fiscal_computable": "sum",
+        "iva_no_computable": "sum",
         "total": "sum",
         "tipo": "count"
     })
