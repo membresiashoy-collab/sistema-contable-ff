@@ -1,3 +1,5 @@
+from html import escape
+
 import streamlit as st
 
 from database import init_db
@@ -48,49 +50,56 @@ limpiar_sesiones_vencidas()
 
 MODULOS_UI = {
     "Ventas": {
-        "titulo": "📤 Ventas",
+        "icono": "📤",
+        "titulo": "Ventas",
         "descripcion": (
             "Carga de ventas, Libro IVA Ventas, estadísticas comerciales "
             "y cuenta corriente de clientes."
         )
     },
     "Compras": {
-        "titulo": "📥 Compras",
+        "icono": "📥",
+        "titulo": "Compras",
         "descripcion": (
             "Carga de compras, clasificación contable por proveedor, "
             "Libro IVA Compras y cuenta corriente de proveedores."
         )
     },
     "IVA": {
-        "titulo": "🧾 IVA",
+        "icono": "🧾",
+        "titulo": "IVA",
         "descripcion": (
             "Control de posición mensual de IVA, débito fiscal, crédito fiscal, "
             "percepciones, retenciones y saldos técnicos."
         )
     },
     "Contabilidad": {
-        "titulo": "📚 Contabilidad",
+        "icono": "📚",
+        "titulo": "Contabilidad",
         "descripcion": (
             "Libros y reportes contables: Libro Diario, Libro Mayor, "
             "Balance de Sumas y Saldos y control por origen/archivo."
         )
     },
     "Estado de Cargas": {
-        "titulo": "📋 Estado de Cargas y Auditoría",
+        "icono": "📋",
+        "titulo": "Estado de Cargas y Auditoría",
         "descripcion": (
             "Auditoría de archivos procesados, errores, advertencias, "
             "eliminación controlada de cargas y backups."
         )
     },
     "Configuración": {
-        "titulo": "⚙️ Configuración",
+        "icono": "⚙️",
+        "titulo": "Configuración",
         "descripcion": (
             "Parámetros base del sistema, categorías, cuentas contables, "
             "conceptos fiscales, datos maestros y configuraciones generales."
         )
     },
     "Seguridad": {
-        "titulo": "🔐 Seguridad",
+        "icono": "🔐",
+        "titulo": "Seguridad",
         "descripcion": (
             "Usuarios, roles, permisos y control de acceso al sistema."
         )
@@ -100,22 +109,62 @@ MODULOS_UI = {
 
 def mostrar_encabezado_modulo(menu):
     """
-    Muestra el encabezado principal del módulo activo.
+    Encabezado principal único del sistema.
 
     Regla de arquitectura:
-    - El título principal vive solo en main.py.
+    - El encabezado principal vive solo en main.py.
     - Los archivos dentro de modulos/ no deben usar st.title().
     - Los módulos pueden usar st.subheader(), st.info(), st.tabs(), etc.
+    - Se usa markdown/HTML controlado en vez de st.title() para evitar
+      que Streamlit arrastre visualmente títulos anteriores entre módulos.
     """
 
     datos = MODULOS_UI.get(menu)
 
     if datos is None:
-        st.title(menu)
-        return
+        icono = ""
+        titulo = str(menu)
+        descripcion = ""
+    else:
+        icono = str(datos.get("icono", ""))
+        titulo = str(datos.get("titulo", menu))
+        descripcion = str(datos.get("descripcion", ""))
 
-    st.title(datos["titulo"])
-    st.caption(datos["descripcion"])
+    icono_html = escape(icono)
+    titulo_html = escape(titulo)
+    descripcion_html = escape(descripcion)
+
+    st.markdown(
+        f"""
+        <div style="margin-top: 0.25rem; margin-bottom: 1.35rem;">
+            <div style="
+                display: flex;
+                align-items: center;
+                gap: 0.85rem;
+                margin-bottom: 0.45rem;
+            ">
+                <div style="font-size: 2.35rem; line-height: 1;">{icono_html}</div>
+                <div style="
+                    font-size: 2.65rem;
+                    font-weight: 800;
+                    line-height: 1.1;
+                    letter-spacing: -0.03em;
+                ">
+                    {titulo_html}
+                </div>
+            </div>
+            <div style="
+                color: rgba(250, 250, 250, 0.68);
+                font-size: 0.98rem;
+                line-height: 1.45;
+                margin-left: 0.1rem;
+            ">
+                {descripcion_html}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 
 # ======================================================
