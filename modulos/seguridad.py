@@ -18,7 +18,6 @@ from core.ui import preparar_vista
 
 
 def mostrar_seguridad():
-    st.title("🔐 Seguridad y Multiempresa")
 
     tab1, tab2, tab3, tab4 = st.tabs([
         "Empresas",

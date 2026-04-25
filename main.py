@@ -43,6 +43,82 @@ limpiar_sesiones_vencidas()
 
 
 # ======================================================
+# ENCABEZADOS CENTRALES DE MÓDULOS
+# ======================================================
+
+MODULOS_UI = {
+    "Ventas": {
+        "titulo": "📤 Ventas",
+        "descripcion": (
+            "Carga de ventas, Libro IVA Ventas, estadísticas comerciales "
+            "y cuenta corriente de clientes."
+        )
+    },
+    "Compras": {
+        "titulo": "📥 Compras",
+        "descripcion": (
+            "Carga de compras, clasificación contable por proveedor, "
+            "Libro IVA Compras y cuenta corriente de proveedores."
+        )
+    },
+    "IVA": {
+        "titulo": "🧾 IVA",
+        "descripcion": (
+            "Control de posición mensual de IVA, débito fiscal, crédito fiscal, "
+            "percepciones, retenciones y saldos técnicos."
+        )
+    },
+    "Contabilidad": {
+        "titulo": "📚 Contabilidad",
+        "descripcion": (
+            "Libros y reportes contables: Libro Diario, Libro Mayor, "
+            "Balance de Sumas y Saldos y control por origen/archivo."
+        )
+    },
+    "Estado de Cargas": {
+        "titulo": "📋 Estado de Cargas y Auditoría",
+        "descripcion": (
+            "Auditoría de archivos procesados, errores, advertencias, "
+            "eliminación controlada de cargas y backups."
+        )
+    },
+    "Configuración": {
+        "titulo": "⚙️ Configuración",
+        "descripcion": (
+            "Parámetros base del sistema, categorías, cuentas contables, "
+            "conceptos fiscales, datos maestros y configuraciones generales."
+        )
+    },
+    "Seguridad": {
+        "titulo": "🔐 Seguridad",
+        "descripcion": (
+            "Usuarios, roles, permisos y control de acceso al sistema."
+        )
+    }
+}
+
+
+def mostrar_encabezado_modulo(menu):
+    """
+    Muestra el encabezado principal del módulo activo.
+
+    Regla de arquitectura:
+    - El título principal vive solo en main.py.
+    - Los archivos dentro de modulos/ no deben usar st.title().
+    - Los módulos pueden usar st.subheader(), st.info(), st.tabs(), etc.
+    """
+
+    datos = MODULOS_UI.get(menu)
+
+    if datos is None:
+        st.title(menu)
+        return
+
+    st.title(datos["titulo"])
+    st.caption(datos["descripcion"])
+
+
+# ======================================================
 # UTILIDADES DE QUERY PARAMS
 # ======================================================
 
@@ -333,7 +409,7 @@ def menu_principal():
         opciones.append("IVA")
 
     if tiene_permiso("diario.ver"):
-        opciones.append("Libro Diario")
+        opciones.append("Contabilidad")
 
     if tiene_permiso("auditoria.ver"):
         opciones.append("Estado de Cargas")
@@ -356,6 +432,7 @@ def menu_principal():
         cerrar_sesion_actual()
 
     st.caption(f"Empresa activa: **{st.session_state['empresa_nombre']}**")
+    mostrar_encabezado_modulo(menu)
 
     if menu == "Ventas":
         ventas.mostrar_ventas()
@@ -370,7 +447,7 @@ def menu_principal():
         except Exception:
             st.warning("El módulo IVA todavía no está disponible.")
 
-    elif menu == "Libro Diario":
+    elif menu == "Contabilidad":
         reportes.mostrar_diario()
 
     elif menu == "Estado de Cargas":

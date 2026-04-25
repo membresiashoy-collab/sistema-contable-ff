@@ -753,7 +753,6 @@ def mostrar_panel_clasificacion_proveedores(
 def mostrar_compras():
     asegurar_columnas_compras_v2()
 
-    st.title("📥 Compras")
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Cargar CSV ARCA",

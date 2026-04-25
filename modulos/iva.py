@@ -2,7 +2,6 @@ import streamlit as st
 
 
 def mostrar_iva():
-    st.title("🧾 IVA")
 
     st.info(
         "Este módulo estará destinado a controlar la posición mensual de IVA "

@@ -495,7 +495,6 @@ def seleccionar_cuenta(label, df_plan, key):
 def mostrar_configuracion():
     init_tablas_configuracion()
 
-    st.title("⚙️ Configuración")
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Tipos de Comprobantes",

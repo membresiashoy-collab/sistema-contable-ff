@@ -267,7 +267,6 @@ def eliminar_carga_completa(archivo):
 # ======================================================
 
 def mostrar_estado_cargas():
-    st.title("📦 Estado de Cargas")
 
     df = obtener_historial_agrupado()
 

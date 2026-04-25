@@ -6,7 +6,6 @@ from core.numeros import moneda
 
 
 def mostrar_estados():
-    st.title("📊 Estados Financieros")
 
     df = ejecutar_query("""
         SELECT cuenta, debe, haber
