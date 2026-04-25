@@ -1,4 +1,5 @@
 import json
+import unicodedata
 from datetime import date
 
 import pandas as pd
@@ -29,6 +30,216 @@ from core.numeros import moneda
 
 
 # ======================================================
+# UTILIDADES GENERALES
+# ======================================================
+
+def quitar_acentos(texto):
+    texto = str(texto)
+    texto = unicodedata.normalize("NFD", texto)
+    texto = texto.encode("ascii", "ignore").decode("utf-8")
+    return texto
+
+
+def numero_seguro(valor):
+    try:
+        if pd.isna(valor):
+            return 0.0
+
+        if isinstance(valor, str):
+            valor = valor.strip()
+            valor = valor.replace("$", "")
+            valor = valor.replace(" ", "")
+
+            if "," in valor and "." in valor:
+                valor = valor.replace(".", "").replace(",", ".")
+            elif "," in valor:
+                valor = valor.replace(",", ".")
+
+        return float(valor)
+
+    except Exception:
+        return 0.0
+
+
+def convertir_numero(serie):
+    return serie.apply(numero_seguro)
+
+
+def texto_seguro(valor):
+    if pd.isna(valor):
+        return ""
+
+    return str(valor).strip()
+
+
+def fecha_orden_segura(valor):
+    try:
+        return fecha_para_ordenar(valor)
+    except Exception:
+        return pd.NaT
+
+
+def fecha_formateada_segura(valor):
+    try:
+        return formatear_fecha(valor)
+    except Exception:
+        return valor
+
+
+def calcular_dias_antiguedad(fecha_orden):
+    try:
+        fecha_dt = pd.to_datetime(fecha_orden, errors="coerce")
+
+        if pd.isna(fecha_dt):
+            return None
+
+        return max((pd.Timestamp(date.today()) - fecha_dt).days, 0)
+
+    except Exception:
+        return None
+
+
+def bucket_antiguedad(dias):
+    if dias is None:
+        return "Sin fecha"
+
+    try:
+        dias = int(dias)
+    except Exception:
+        return "Sin fecha"
+
+    if dias <= 30:
+        return "0 a 30 días"
+
+    if dias <= 60:
+        return "31 a 60 días"
+
+    if dias <= 90:
+        return "61 a 90 días"
+
+    return "Más de 90 días"
+
+
+def estado_saldo_proveedor(saldo):
+    saldo = numero_seguro(saldo)
+
+    if abs(saldo) <= 0.01:
+        return "Cancelado"
+
+    if saldo > 0:
+        return "Pendiente"
+
+    return "Anticipo / saldo a favor"
+
+
+def tipo_movimiento_proveedor(debe, haber):
+    debe = numero_seguro(debe)
+    haber = numero_seguro(haber)
+
+    if haber > 0 and debe == 0:
+        return "Compra / deuda"
+
+    if debe > 0 and haber == 0:
+        return "Pago / cancelación"
+
+    if debe > 0 and haber > 0:
+        return "Movimiento mixto"
+
+    return "Sin importe"
+
+
+def humanizar_origen_sugerencia(origen):
+    origen_original = texto_seguro(origen)
+
+    if origen_original == "":
+        return "Sin dato de origen"
+
+    normalizado = quitar_acentos(origen_original).upper().strip()
+
+    if "SIN" in normalizado and "HISTORIAL" in normalizado:
+        return "Sin historial previo"
+
+    if "HISTOR" in normalizado:
+        return "Historial vigente"
+
+    if "PECADO" in normalizado or "PESCADO" in normalizado:
+        return "Historial vigente"
+
+    if "CONFIG" in normalizado or "MANUAL" in normalizado:
+        return "Configuración manual"
+
+    if "EXCEP" in normalizado:
+        return "Excepción por comprobante"
+
+    if "REGLA" in normalizado:
+        return "Regla configurada"
+
+    return origen_original.title()
+
+
+def explicar_origen_sugerencia(origen):
+    origen_visible = humanizar_origen_sugerencia(origen)
+
+    explicaciones = {
+        "Sin historial previo": (
+            "El sistema no encontró compras anteriores vigentes para este proveedor. "
+            "Conviene revisar y confirmar manualmente."
+        ),
+        "Historial vigente": (
+            "La sugerencia surge de compras anteriores confirmadas y vigentes. "
+            "Si se elimina una carga vieja, el historial se recalcula."
+        ),
+        "Configuración manual": (
+            "La sugerencia surge de una configuración manual existente."
+        ),
+        "Excepción por comprobante": (
+            "La categoría fue definida específicamente para un comprobante puntual."
+        ),
+        "Regla configurada": (
+            "La categoría fue sugerida por una regla de clasificación."
+        ),
+        "Sin dato de origen": (
+            "No hay información suficiente para explicar el origen de la sugerencia."
+        )
+    }
+
+    return explicaciones.get(origen_visible, "Origen informado por el motor de clasificación.")
+
+
+def humanizar_confianza_sugerencia(confianza):
+    valor = texto_seguro(confianza)
+
+    if valor == "":
+        return "Sin confianza"
+
+    normalizado = quitar_acentos(valor).upper().strip()
+
+    if normalizado == "ALTA":
+        return "Alta"
+
+    if normalizado == "MEDIA":
+        return "Media"
+
+    if normalizado == "BAJA":
+        return "Baja"
+
+    return valor.title()
+
+
+def explicar_confianza_sugerencia(confianza):
+    visible = humanizar_confianza_sugerencia(confianza)
+
+    explicaciones = {
+        "Alta": "Coincide con historial/configuración suficiente. Puede confirmarse rápido si el proveedor no cambió de naturaleza.",
+        "Media": "Existe una referencia útil, pero conviene revisar antes de confirmar.",
+        "Baja": "No hay evidencia suficiente. Requiere revisión manual.",
+        "Sin confianza": "No se pudo medir confianza para esta sugerencia."
+    }
+
+    return explicaciones.get(visible, "Nivel de confianza informado por el motor de clasificación.")
+
+
+# ======================================================
 # CONSULTAS AUXILIARES
 # ======================================================
 
@@ -48,6 +259,7 @@ def obtener_categorias_activas():
             WHERE activo = 1
             ORDER BY categoria
         """, fetch=True)
+
     except Exception:
         return ejecutar_query("""
             SELECT 
@@ -82,6 +294,7 @@ def archivo_preclasificado_ya_cargado(nombre_archivo):
         """, (nombre_archivo, f"{nombre_archivo}__%"), fetch=True)
 
         return not df.empty
+
     except Exception:
         return archivo_ya_cargado(nombre_archivo)
 
@@ -236,8 +449,11 @@ def obtener_auditoria_archivo(nombre_archivo):
                OR archivo LIKE ?
             ORDER BY id DESC
         """, (nombre_archivo, f"{nombre_archivo}__%"), fetch=True)
+
     except Exception:
-        advertencias = pd.DataFrame(columns=["fecha", "modulo", "archivo", "fila", "motivo", "contenido"])
+        advertencias = pd.DataFrame(
+            columns=["fecha", "modulo", "archivo", "fila", "motivo", "contenido"]
+        )
 
     return errores, advertencias
 
@@ -377,6 +593,18 @@ def obtener_df_final_clasificado(df_detalle_base, estado):
     )
 
 
+def preparar_pendientes_para_ui(pendientes):
+    if pendientes.empty:
+        return pendientes
+
+    df = pendientes.copy()
+
+    df["origen_visible"] = df["origen_sugerencia"].apply(humanizar_origen_sugerencia)
+    df["confianza_visible"] = df["confianza_sugerencia"].apply(humanizar_confianza_sugerencia)
+
+    return df
+
+
 def mostrar_facturas_de_proveedor(
     clave,
     df_detalle_base,
@@ -443,6 +671,7 @@ def mostrar_acciones_masivas(
     confirmados = st.session_state[estado["confirmados_key"]]
 
     if pendientes.empty:
+        st.success("No hay proveedores pendientes para acciones rápidas.")
         return
 
     opciones = {}
@@ -468,11 +697,15 @@ def mostrar_acciones_masivas(
     ]
 
     st.subheader("Acciones rápidas")
+    st.caption(
+        "Usá esta sección cuando quieras clasificar varios proveedores juntos. "
+        "No reemplaza la revisión individual: solo acelera casos claros."
+    )
 
     b1, b2, b3 = st.columns(3)
 
     with b1:
-        if st.button("Seleccionar todos visibles"):
+        if st.button("Seleccionar todos pendientes"):
             st.session_state[seleccionados_key] = etiquetas
             rerun_app()
 
@@ -482,11 +715,23 @@ def mostrar_acciones_masivas(
             rerun_app()
 
     with b3:
-        if st.button("Confirmar todos visibles"):
-            for etiqueta in etiquetas:
-                clave = opciones[etiqueta]
-                confirmados.add(clave)
-            rerun_app()
+        if st.button("Confirmar alta confianza"):
+            cantidad = 0
+
+            for _, fila in pendientes.iterrows():
+                clave = str(fila["clave_proveedor"])
+                confianza = str(fila.get("confianza_sugerencia", ""))
+                origen = str(fila.get("origen_sugerencia", ""))
+
+                if humanizar_confianza_sugerencia(confianza) == "Alta" and humanizar_origen_sugerencia(origen) != "Sin historial previo":
+                    confirmados.add(clave)
+                    cantidad += 1
+
+            if cantidad == 0:
+                st.info("No hay proveedores con sugerencia de alta confianza pendientes.")
+            else:
+                st.success(f"Se confirmaron {cantidad} proveedores de alta confianza.")
+                rerun_app()
 
     col1, col2 = st.columns([2, 1])
 
@@ -506,7 +751,7 @@ def mostrar_acciones_masivas(
 
     claves_seleccionadas = [opciones[e] for e in seleccionados]
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
 
     with c1:
         if st.button("Aplicar categoría"):
@@ -529,56 +774,52 @@ def mostrar_acciones_masivas(
                 st.success("Categoría aplicada y proveedores confirmados.")
                 rerun_app()
 
-    with c3:
-        if st.button("Confirmar alta confianza"):
-            cantidad = 0
-            for _, fila in pendientes.iterrows():
-                clave = str(fila["clave_proveedor"])
-                confianza = str(fila.get("confianza_sugerencia", ""))
-                origen = str(fila.get("origen_sugerencia", ""))
-
-                if confianza == "ALTA" and origen != "SIN HISTORIAL":
-                    confirmados.add(clave)
-                    cantidad += 1
-
-            if cantidad == 0:
-                st.info("No hay proveedores con sugerencia de alta confianza pendientes.")
-            else:
-                st.success(f"Se confirmaron {cantidad} proveedores.")
-                rerun_app()
-
 
 def aplicar_filtros_pendientes(pendientes):
     if pendientes.empty:
         return pendientes
 
+    pendientes = preparar_pendientes_para_ui(pendientes)
+
+    st.subheader("Clasificación individual")
+    st.caption(
+        "Buscá proveedor o CUIT. El listado se actualiza con la coincidencia y permite revisar comprobantes puntuales."
+    )
+
     col1, col2, col3 = st.columns([2, 1, 1])
 
     with col1:
-        buscar = st.text_input("Buscar proveedor o CUIT", placeholder="Ej: AMERICAN, 3071...")
+        buscar = st.text_input(
+            "Buscar proveedor o CUIT",
+            placeholder="Ej: AMERICAN, 3071...",
+            key="compras_buscar_proveedor_cuit"
+        )
 
     with col2:
-        origenes = ["Todos"] + sorted(pendientes["origen_sugerencia"].dropna().unique().tolist())
+        origenes = ["Todos"] + sorted(pendientes["origen_visible"].dropna().unique().tolist())
         origen = st.selectbox("Origen", origenes)
 
     with col3:
-        confianzas = ["Todas"] + sorted(pendientes["confianza_sugerencia"].dropna().unique().tolist())
+        confianzas = ["Todas"] + sorted(pendientes["confianza_visible"].dropna().unique().tolist())
         confianza = st.selectbox("Confianza", confianzas)
 
     df = pendientes.copy()
 
     if buscar.strip():
-        b = buscar.strip().upper()
+        b = quitar_acentos(buscar.strip()).upper()
+        proveedor_normalizado = df["proveedor"].astype(str).apply(lambda x: quitar_acentos(x).upper())
+        cuit_normalizado = df["cuit"].astype(str).apply(lambda x: quitar_acentos(x).upper())
+
         df = df[
-            df["proveedor"].astype(str).str.upper().str.contains(b, na=False)
-            | df["cuit"].astype(str).str.upper().str.contains(b, na=False)
+            proveedor_normalizado.str.contains(b, na=False)
+            | cuit_normalizado.str.contains(b, na=False)
         ]
 
     if origen != "Todos":
-        df = df[df["origen_sugerencia"] == origen]
+        df = df[df["origen_visible"] == origen]
 
     if confianza != "Todas":
-        df = df[df["confianza_sugerencia"] == confianza]
+        df = df[df["confianza_visible"] == confianza]
 
     return df
 
@@ -610,17 +851,19 @@ def mostrar_panel_clasificacion_proveedores(
 
     st.subheader("Clasificación rápida de proveedores")
     st.caption(
-        "Primero resolvé pendientes. El resumen de preclasificación queda al final para controlar antes de procesar."
+        "Primero resolvé pendientes. El resumen final queda al cierre para controlar antes de procesar."
     )
 
     if not pendientes.empty:
-        pendientes_filtrados = aplicar_filtros_pendientes(pendientes)
-
         mostrar_acciones_masivas(
-            pendientes_filtrados,
+            pendientes,
             estado,
             categorias_disponibles
         )
+
+        st.divider()
+
+        pendientes_filtrados = aplicar_filtros_pendientes(pendientes)
 
         st.markdown("#### Proveedores pendientes")
 
@@ -636,8 +879,10 @@ def mostrar_panel_clasificacion_proveedores(
                 comprobantes = int(fila["comprobantes"])
                 total = float(fila["total"])
 
-                origen = str(fila.get("origen_sugerencia", "SIN HISTORIAL"))
-                confianza = str(fila.get("confianza_sugerencia", "BAJA"))
+                origen_raw = str(fila.get("origen_sugerencia", ""))
+                confianza_raw = str(fila.get("confianza_sugerencia", ""))
+                origen = humanizar_origen_sugerencia(origen_raw)
+                confianza = humanizar_confianza_sugerencia(confianza_raw)
                 sugerida = str(fila.get("categoria_sugerida", ""))
                 veces = int(fila.get("veces_usada", 0) or 0)
 
@@ -649,7 +894,7 @@ def mostrar_panel_clasificacion_proveedores(
                 st.markdown("<hr style='margin: 0.35rem 0;'>", unsafe_allow_html=True)
 
                 col_info, col_hist, col_categoria, col_facturas, col_confirmar = st.columns(
-                    [2.6, 2.0, 2.2, 1.25, 1.0]
+                    [2.7, 2.35, 2.15, 1.0, 0.55]
                 )
 
                 with col_info:
@@ -658,7 +903,13 @@ def mostrar_panel_clasificacion_proveedores(
 
                 with col_hist:
                     st.caption(f"Sugerida: **{sugerida}**")
-                    st.caption(f"{origen} | {confianza} | Usos {veces}")
+                    st.caption(
+                        f"Origen: **{origen}** · Confianza: **{confianza}** · Usos: {veces}",
+                        help=(
+                            f"{explicar_origen_sugerencia(origen_raw)}\n\n"
+                            f"{explicar_confianza_sugerencia(confianza_raw)}"
+                        )
+                    )
 
                 with col_categoria:
                     categoria_seleccionada = st.selectbox(
@@ -673,15 +924,17 @@ def mostrar_panel_clasificacion_proveedores(
                 with col_facturas:
                     if st.button(
                         f"Ver ({comprobantes})",
-                        key=f"ver_facturas_{estado['base_key']}_{clave_key}"
+                        key=f"ver_facturas_{estado['base_key']}_{clave_key}",
+                        help="Ver comprobantes del proveedor y cargar excepciones por factura."
                     ):
                         abiertos[clave] = not abiertos.get(clave, False)
                         rerun_app()
 
                 with col_confirmar:
                     if st.button(
-                        "OK",
-                        key=f"confirmar_proveedor_{estado['base_key']}_{clave_key}"
+                        "✓",
+                        key=f"confirmar_proveedor_{estado['base_key']}_{clave_key}",
+                        help="Confirmar proveedor"
                     ):
                         confirmados.add(clave)
                         abiertos[clave] = False
@@ -752,7 +1005,6 @@ def mostrar_panel_clasificacion_proveedores(
 
 def mostrar_compras():
     asegurar_columnas_compras_v2()
-
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Cargar CSV ARCA",
@@ -1242,75 +1494,600 @@ def mostrar_resumen_compras():
 
 
 # ======================================================
-# TAB 5 - CUENTA CORRIENTE PROVEEDORES
+# TAB 5 - CUENTA CORRIENTE PROVEEDORES PRO
 # ======================================================
 
-def mostrar_cuenta_corriente_proveedores():
-    st.subheader("💰 Cuenta corriente de proveedores")
+def leer_cuenta_corriente_proveedores():
+    try:
+        return ejecutar_query("""
+            SELECT 
+                id,
+                fecha,
+                proveedor,
+                cuit,
+                tipo,
+                numero,
+                debe,
+                haber,
+                origen,
+                archivo
+            FROM cuenta_corriente_proveedores
+            ORDER BY proveedor, fecha, id
+        """, fetch=True)
 
-    df = ejecutar_query("""
-        SELECT 
-            id,
-            fecha,
-            proveedor,
-            cuit,
-            tipo,
-            numero,
-            debe,
-            haber,
-            origen,
-            archivo
-        FROM cuenta_corriente_proveedores
-        ORDER BY proveedor, fecha, id
-    """, fetch=True)
+    except Exception:
+        return pd.DataFrame()
+
+
+def preparar_cuenta_corriente_proveedores(df_raw):
+    if df_raw.empty:
+        return pd.DataFrame()
+
+    df = df_raw.copy()
+
+    df["id"] = convertir_numero(df["id"])
+    df["fecha_original"] = df["fecha"].apply(texto_seguro)
+    df["fecha_orden"] = df["fecha_original"].apply(fecha_orden_segura)
+    df["fecha"] = df["fecha_original"].apply(fecha_formateada_segura)
+
+    df["proveedor"] = df["proveedor"].apply(texto_seguro)
+    df["cuit"] = df["cuit"].apply(texto_seguro)
+    df["tipo"] = df["tipo"].apply(texto_seguro)
+    df["numero"] = df["numero"].apply(texto_seguro)
+    df["origen"] = df["origen"].apply(texto_seguro)
+    df["archivo"] = df["archivo"].apply(texto_seguro)
+
+    df["debe"] = convertir_numero(df["debe"])
+    df["haber"] = convertir_numero(df["haber"])
+
+    df["comprobante"] = (
+        df["tipo"].astype(str).str.strip()
+        + " "
+        + df["numero"].astype(str).str.strip()
+    ).str.strip()
+
+    df.loc[df["comprobante"] == "", "comprobante"] = (
+        "Movimiento " + df["id"].astype(int).astype(str)
+    )
+
+    df["comprobante_key"] = (
+        df["proveedor"].astype(str).str.upper().str.strip()
+        + "|"
+        + df["cuit"].astype(str).str.upper().str.strip()
+        + "|"
+        + df["tipo"].astype(str).str.upper().str.strip()
+        + "|"
+        + df["numero"].astype(str).str.upper().str.strip()
+    )
+
+    # En proveedores, el HABER representa deuda generada por la compra
+    # y el DEBE representa pagos/cancelaciones futuras.
+    df["impacto_saldo"] = df["haber"] - df["debe"]
+
+    df["tipo_movimiento"] = df.apply(
+        lambda fila: tipo_movimiento_proveedor(fila["debe"], fila["haber"]),
+        axis=1
+    )
+
+    df["dias_antiguedad"] = df["fecha_orden"].apply(calcular_dias_antiguedad)
+    df["antiguedad"] = df["dias_antiguedad"].apply(bucket_antiguedad)
+
+    df = df.sort_values(
+        by=["proveedor", "cuit", "fecha_orden", "id"],
+        ascending=True,
+        na_position="last"
+    )
+
+    df["saldo_acumulado_proveedor"] = (
+        df
+        .groupby(["proveedor", "cuit"], dropna=False)["impacto_saldo"]
+        .cumsum()
+    )
+
+    return df
+
+
+def construir_resumen_proveedores(df):
+    if df.empty:
+        return pd.DataFrame()
+
+    resumen = (
+        df
+        .groupby(["proveedor", "cuit"], dropna=False)
+        .agg(
+            movimientos=("id", "count"),
+            debe=("debe", "sum"),
+            haber=("haber", "sum"),
+            saldo=("impacto_saldo", "sum"),
+            primer_fecha=("fecha_orden", "min"),
+            ultima_fecha=("fecha_orden", "max")
+        )
+        .reset_index()
+    )
+
+    resumen["estado"] = resumen["saldo"].apply(estado_saldo_proveedor)
+    resumen["dias_antiguedad"] = resumen["primer_fecha"].apply(calcular_dias_antiguedad)
+    resumen["antiguedad"] = resumen["dias_antiguedad"].apply(bucket_antiguedad)
+    resumen["primer_fecha"] = resumen["primer_fecha"].apply(fecha_formateada_segura)
+    resumen["ultima_fecha"] = resumen["ultima_fecha"].apply(fecha_formateada_segura)
+
+    resumen = resumen.sort_values(
+        by=["estado", "saldo", "proveedor"],
+        ascending=[False, False, True]
+    )
+
+    return resumen
+
+
+def construir_resumen_comprobantes_proveedores(df):
+    if df.empty:
+        return pd.DataFrame()
+
+    resumen = (
+        df
+        .groupby(["proveedor", "cuit", "comprobante_key", "comprobante"], dropna=False)
+        .agg(
+            movimientos=("id", "count"),
+            debe=("debe", "sum"),
+            haber=("haber", "sum"),
+            saldo=("impacto_saldo", "sum"),
+            fecha=("fecha_orden", "min"),
+            archivo=("archivo", "first"),
+            origen=("origen", "first")
+        )
+        .reset_index()
+    )
+
+    resumen["estado"] = resumen["saldo"].apply(estado_saldo_proveedor)
+    resumen["dias_antiguedad"] = resumen["fecha"].apply(calcular_dias_antiguedad)
+    resumen["antiguedad"] = resumen["dias_antiguedad"].apply(bucket_antiguedad)
+    resumen["fecha"] = resumen["fecha"].apply(fecha_formateada_segura)
+
+    resumen = resumen.sort_values(
+        by=["estado", "saldo", "fecha", "proveedor"],
+        ascending=[False, False, True, True]
+    )
+
+    return resumen
+
+
+def construir_alertas_cuenta_corriente_proveedores(df, resumen_comprobantes):
+    alertas = []
 
     if df.empty:
+        return pd.DataFrame(columns=["tipo", "cantidad", "detalle"])
+
+    sin_proveedor = df[df["proveedor"].astype(str).str.strip() == ""]
+
+    if not sin_proveedor.empty:
+        alertas.append({
+            "tipo": "Datos incompletos",
+            "cantidad": len(sin_proveedor),
+            "detalle": "Movimientos sin proveedor identificado."
+        })
+
+    sin_cuit = df[df["cuit"].astype(str).str.strip() == ""]
+
+    if not sin_cuit.empty:
+        alertas.append({
+            "tipo": "Datos incompletos",
+            "cantidad": len(sin_cuit),
+            "detalle": "Movimientos sin CUIT. No bloquea, pero dificulta conciliación bancaria futura."
+        })
+
+    sin_fecha = df[df["fecha_orden"].isna()]
+
+    if not sin_fecha.empty:
+        alertas.append({
+            "tipo": "Fecha no interpretable",
+            "cantidad": len(sin_fecha),
+            "detalle": "Movimientos con fecha vacía o no interpretable."
+        })
+
+    sin_numero = resumen_comprobantes[
+        resumen_comprobantes["comprobante"].astype(str).str.startswith("Movimiento ")
+    ]
+
+    if not sin_numero.empty:
+        alertas.append({
+            "tipo": "Comprobante incompleto",
+            "cantidad": len(sin_numero),
+            "detalle": "Movimientos sin tipo o número de comprobante."
+        })
+
+    saldos_a_favor = resumen_comprobantes[resumen_comprobantes["saldo"] < -0.01]
+
+    if not saldos_a_favor.empty:
+        alertas.append({
+            "tipo": "Anticipos / saldos a favor",
+            "cantidad": len(saldos_a_favor),
+            "detalle": "Hay comprobantes o movimientos con saldo negativo. Puede ser anticipo, pago duplicado o imputación futura."
+        })
+
+    pendientes_90 = resumen_comprobantes[
+        (resumen_comprobantes["saldo"] > 0.01)
+        & (resumen_comprobantes["dias_antiguedad"].fillna(0) > 90)
+    ]
+
+    if not pendientes_90.empty:
+        alertas.append({
+            "tipo": "Pendientes antiguos",
+            "cantidad": len(pendientes_90),
+            "detalle": "Hay saldos pendientes con más de 90 días según fecha del comprobante."
+        })
+
+    if df["debe"].sum() == 0:
+        alertas.append({
+            "tipo": "Sin pagos registrados",
+            "cantidad": 0,
+            "detalle": "La cuenta corriente tiene deudas pero no registra pagos. Es normal si todavía no implementamos Banco/Caja."
+        })
+
+    if not alertas:
+        alertas.append({
+            "tipo": "Sin alertas críticas",
+            "cantidad": 0,
+            "detalle": "No se detectaron inconsistencias básicas en la cuenta corriente filtrada."
+        })
+
+    return pd.DataFrame(alertas)
+
+
+def aplicar_filtros_cuenta_corriente_proveedores(df):
+    st.subheader("Filtros")
+
+    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+
+    with col1:
+        busqueda = st.text_input(
+            "Buscar proveedor por nombre, CUIT, comprobante o archivo",
+            key="cc_proveedores_busqueda"
+        ).strip().lower()
+
+    with col2:
+        tipos = ["Todos"] + sorted(df["tipo_movimiento"].dropna().unique().tolist())
+        tipo_sel = st.selectbox(
+            "Tipo movimiento",
+            tipos,
+            key="cc_proveedores_tipo_mov"
+        )
+
+    with col3:
+        antiguedades = [
+            "Todas",
+            "0 a 30 días",
+            "31 a 60 días",
+            "61 a 90 días",
+            "Más de 90 días",
+            "Sin fecha"
+        ]
+
+        antiguedad_sel = st.selectbox(
+            "Antigüedad",
+            antiguedades,
+            key="cc_proveedores_antiguedad"
+        )
+
+    with col4:
+        archivos = ["Todos"] + sorted(
+            df["archivo"]
+            .dropna()
+            .astype(str)
+            .replace("", "Sin archivo")
+            .unique()
+            .tolist()
+        )
+
+        archivo_sel = st.selectbox(
+            "Archivo",
+            archivos,
+            key="cc_proveedores_archivo"
+        )
+
+    df_filtrado = df.copy()
+
+    if busqueda:
+        texto_busqueda = (
+            df_filtrado["proveedor"].astype(str)
+            + " "
+            + df_filtrado["cuit"].astype(str)
+            + " "
+            + df_filtrado["comprobante"].astype(str)
+            + " "
+            + df_filtrado["archivo"].astype(str)
+        ).str.lower()
+
+        df_filtrado = df_filtrado[texto_busqueda.str.contains(busqueda, na=False)]
+
+    if tipo_sel != "Todos":
+        df_filtrado = df_filtrado[df_filtrado["tipo_movimiento"] == tipo_sel]
+
+    if antiguedad_sel != "Todas":
+        df_filtrado = df_filtrado[df_filtrado["antiguedad"] == antiguedad_sel]
+
+    if archivo_sel != "Todos":
+        if archivo_sel == "Sin archivo":
+            df_filtrado = df_filtrado[df_filtrado["archivo"].astype(str).str.strip() == ""]
+        else:
+            df_filtrado = df_filtrado[df_filtrado["archivo"] == archivo_sel]
+
+    return df_filtrado
+
+
+def mostrar_metricas_cuenta_corriente_proveedores(df, resumen_proveedores, resumen_comprobantes):
+    saldo_total = resumen_comprobantes["saldo"].sum() if not resumen_comprobantes.empty else 0.0
+
+    saldo_a_pagar = resumen_comprobantes[
+        resumen_comprobantes["saldo"] > 0.01
+    ]["saldo"].sum() if not resumen_comprobantes.empty else 0.0
+
+    saldo_a_favor = resumen_comprobantes[
+        resumen_comprobantes["saldo"] < -0.01
+    ]["saldo"].sum() if not resumen_comprobantes.empty else 0.0
+
+    comprobantes_pendientes = len(
+        resumen_comprobantes[resumen_comprobantes["saldo"] > 0.01]
+    ) if not resumen_comprobantes.empty else 0
+
+    proveedores = resumen_proveedores["proveedor"].nunique() if not resumen_proveedores.empty else 0
+    movimientos = len(df)
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+
+    c1.metric("Proveedores", proveedores)
+    c2.metric("Movimientos", movimientos)
+    c3.metric("Comprobantes pendientes", comprobantes_pendientes)
+    c4.metric("Saldo a pagar", moneda(saldo_a_pagar))
+    c5.metric("Anticipos / saldos a favor", moneda(abs(saldo_a_favor)))
+
+    st.caption(
+        f"Saldo neto técnico filtrado: **{moneda(saldo_total)}**. "
+        "Los saldos negativos se muestran separados para no mezclar deuda real con anticipos o pagos a cuenta."
+    )
+
+
+def mostrar_cuenta_corriente_proveedores():
+    st.subheader("💰 Cuenta corriente proveedores PRO")
+
+    st.info(
+        "Esta vista muestra saldos de proveedores por entidad y comprobante. "
+        "Es la base para la futura imputación de pagos, banco/caja y conciliación bancaria."
+    )
+
+    df_raw = leer_cuenta_corriente_proveedores()
+
+    if df_raw.empty:
         st.info("No hay movimientos de cuenta corriente de proveedores.")
         return
 
-    df["fecha_orden"] = df["fecha"].apply(fecha_para_ordenar)
-    df["fecha"] = df["fecha"].apply(formatear_fecha)
+    df = preparar_cuenta_corriente_proveedores(df_raw)
 
-    resumen = df.groupby(["proveedor", "cuit"], as_index=False).agg({
-        "debe": "sum",
-        "haber": "sum"
-    })
+    if df.empty:
+        st.info("No hay movimientos preparados para mostrar.")
+        return
 
-    resumen["saldo"] = resumen["haber"] - resumen["debe"]
-    resumen = resumen.sort_values(by="saldo", ascending=False)
+    df_filtrado = aplicar_filtros_cuenta_corriente_proveedores(df)
 
-    st.subheader("Resumen de deuda con proveedores")
-    st.dataframe(preparar_vista(resumen), use_container_width=True)
+    if df_filtrado.empty:
+        st.info("No hay movimientos con los filtros seleccionados.")
+        return
 
-    proveedor = st.selectbox(
-        "Ver detalle de proveedor",
-        ["Todos"] + sorted(df["proveedor"].dropna().unique().tolist())
+    resumen_proveedores = construir_resumen_proveedores(df_filtrado)
+    resumen_comprobantes = construir_resumen_comprobantes_proveedores(df_filtrado)
+
+    mostrar_metricas_cuenta_corriente_proveedores(
+        df_filtrado,
+        resumen_proveedores,
+        resumen_comprobantes
     )
 
-    if proveedor != "Todos":
-        df = df[df["proveedor"] == proveedor]
+    st.divider()
 
-    df = df.copy()
-    df = df.sort_values(by=["proveedor", "fecha_orden", "id"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Resumen por proveedor",
+        "Comprobantes pendientes",
+        "Detalle de movimientos",
+        "Antigüedad",
+        "Alertas"
+    ])
 
-    df["saldo_acumulado"] = (
-        df.groupby("proveedor")["haber"].cumsum()
-        - df.groupby("proveedor")["debe"].cumsum()
+    with tab1:
+        st.subheader("Resumen por proveedor")
+
+        vista = resumen_proveedores[[
+            "proveedor",
+            "cuit",
+            "movimientos",
+            "debe",
+            "haber",
+            "saldo",
+            "estado",
+            "antiguedad",
+            "primer_fecha",
+            "ultima_fecha"
+        ]].copy()
+
+        vista = vista.rename(columns={
+            "proveedor": "Proveedor",
+            "cuit": "CUIT",
+            "movimientos": "Movimientos",
+            "debe": "Pagado / Debe",
+            "haber": "Deuda / Haber",
+            "saldo": "Saldo a pagar",
+            "estado": "Estado",
+            "antiguedad": "Antigüedad",
+            "primer_fecha": "Primer movimiento",
+            "ultima_fecha": "Último movimiento"
+        })
+
+        st.dataframe(preparar_vista(vista), use_container_width=True)
+
+    with tab2:
+        st.subheader("Comprobantes pendientes / saldos abiertos")
+
+        pendientes = resumen_comprobantes[
+            resumen_comprobantes["estado"] != "Cancelado"
+        ].copy()
+
+        if pendientes.empty:
+            st.success("No hay comprobantes pendientes con los filtros seleccionados.")
+        else:
+            vista = pendientes[[
+                "fecha",
+                "proveedor",
+                "cuit",
+                "comprobante",
+                "debe",
+                "haber",
+                "saldo",
+                "estado",
+                "antiguedad",
+                "archivo",
+                "origen"
+            ]].copy()
+
+            vista = vista.rename(columns={
+                "fecha": "Fecha",
+                "proveedor": "Proveedor",
+                "cuit": "CUIT",
+                "comprobante": "Comprobante",
+                "debe": "Pagado / Debe",
+                "haber": "Deuda / Haber",
+                "saldo": "Saldo a pagar",
+                "estado": "Estado",
+                "antiguedad": "Antigüedad",
+                "archivo": "Archivo",
+                "origen": "Origen"
+            })
+
+            st.dataframe(preparar_vista(vista), use_container_width=True)
+
+    with tab3:
+        st.subheader("Detalle de movimientos")
+
+        detalle = df_filtrado[[
+            "fecha",
+            "proveedor",
+            "cuit",
+            "comprobante",
+            "tipo_movimiento",
+            "debe",
+            "haber",
+            "impacto_saldo",
+            "saldo_acumulado_proveedor",
+            "antiguedad",
+            "origen",
+            "archivo"
+        ]].copy()
+
+        detalle = detalle.rename(columns={
+            "fecha": "Fecha",
+            "proveedor": "Proveedor",
+            "cuit": "CUIT",
+            "comprobante": "Comprobante",
+            "tipo_movimiento": "Tipo movimiento",
+            "debe": "Pagado / Debe",
+            "haber": "Deuda / Haber",
+            "impacto_saldo": "Impacto saldo",
+            "saldo_acumulado_proveedor": "Saldo acumulado proveedor",
+            "antiguedad": "Antigüedad",
+            "origen": "Origen",
+            "archivo": "Archivo"
+        })
+
+        st.dataframe(preparar_vista(detalle), use_container_width=True)
+
+    with tab4:
+        st.subheader("Análisis por antigüedad")
+
+        pendientes = resumen_comprobantes[
+            resumen_comprobantes["saldo"] > 0.01
+        ].copy()
+
+        if pendientes.empty:
+            st.success("No hay saldos pendientes para analizar por antigüedad.")
+        else:
+            aging = (
+                pendientes
+                .groupby("antiguedad", dropna=False)
+                .agg(
+                    comprobantes=("comprobante", "count"),
+                    saldo=("saldo", "sum")
+                )
+                .reset_index()
+            )
+
+            orden = {
+                "0 a 30 días": 1,
+                "31 a 60 días": 2,
+                "61 a 90 días": 3,
+                "Más de 90 días": 4,
+                "Sin fecha": 5
+            }
+
+            aging["_orden"] = aging["antiguedad"].map(orden).fillna(99)
+            aging = aging.sort_values("_orden").drop(columns=["_orden"])
+
+            aging = aging.rename(columns={
+                "antiguedad": "Antigüedad",
+                "comprobantes": "Comprobantes",
+                "saldo": "Saldo a pagar"
+            })
+
+            st.dataframe(preparar_vista(aging), use_container_width=True)
+
+            st.caption(
+                "La antigüedad se calcula por fecha del comprobante. "
+                "Más adelante, al incorporar vencimientos, se podrá calcular mora real."
+            )
+
+    with tab5:
+        st.subheader("Alertas de calidad de datos")
+
+        alertas = construir_alertas_cuenta_corriente_proveedores(
+            df_filtrado,
+            resumen_comprobantes
+        )
+
+        st.dataframe(preparar_vista(alertas), use_container_width=True)
+
+    st.divider()
+
+    pendientes_exportar = resumen_comprobantes[
+        resumen_comprobantes["estado"] != "Cancelado"
+    ].copy()
+
+    detalle_exportar = df_filtrado[[
+        "fecha",
+        "proveedor",
+        "cuit",
+        "comprobante",
+        "tipo_movimiento",
+        "debe",
+        "haber",
+        "impacto_saldo",
+        "saldo_acumulado_proveedor",
+        "antiguedad",
+        "origen",
+        "archivo"
+    ]].copy()
+
+    alertas_exportar = construir_alertas_cuenta_corriente_proveedores(
+        df_filtrado,
+        resumen_comprobantes
     )
-
-    df_vista = df.drop(columns=["fecha_orden"])
-
-    st.subheader("Detalle de movimientos")
-    st.dataframe(preparar_vista(df_vista), use_container_width=True)
 
     excel = exportar_excel({
-        "Resumen Cta Cte": resumen,
-        "Detalle Cta Cte": df_vista
+        "Resumen proveedores": resumen_proveedores,
+        "Comprobantes": resumen_comprobantes,
+        "Pendientes": pendientes_exportar,
+        "Movimientos": detalle_exportar,
+        "Alertas": alertas_exportar
     })
 
     st.download_button(
-        "Descargar Cuenta Corriente Proveedores Excel",
+        "Descargar Cuenta Corriente Proveedores PRO Excel",
         data=excel,
-        file_name="cuenta_corriente_proveedores.xlsx",
+        file_name="cuenta_corriente_proveedores_pro.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
