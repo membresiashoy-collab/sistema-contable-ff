@@ -1,8 +1,13 @@
-from html import escape
-
 import streamlit as st
 
 from database import init_db
+
+from core.ui import (
+    aplicar_estilos_globales,
+    mostrar_encabezado_modulo_visual,
+    mostrar_sidebar_marca,
+)
+
 from services.seguridad_service import (
     inicializar_seguridad,
     login_usuario,
@@ -28,9 +33,12 @@ from modulos import ventas, compras, bancos, reportes, auditoria, configuracion,
 
 st.set_page_config(
     page_title="Sistema Contable FF",
+    page_icon="📘",
     layout="wide"
 )
 
+
+aplicar_estilos_globales()
 
 init_db()
 inicializar_seguridad()
@@ -118,40 +126,11 @@ def mostrar_encabezado_modulo(menu):
         titulo = str(datos.get("titulo", menu))
         descripcion = str(datos.get("descripcion", ""))
 
-    icono_html = escape(icono)
-    titulo_html = escape(titulo)
-    descripcion_html = escape(descripcion)
-
-    st.markdown(
-        f"""
-        <div style="margin-top: 0.25rem; margin-bottom: 1.35rem;">
-            <div style="
-                display: flex;
-                align-items: center;
-                gap: 0.85rem;
-                margin-bottom: 0.45rem;
-            ">
-                <div style="font-size: 2.35rem; line-height: 1;">{icono_html}</div>
-                <div style="
-                    font-size: 2.65rem;
-                    font-weight: 800;
-                    line-height: 1.1;
-                    letter-spacing: -0.03em;
-                ">
-                    {titulo_html}
-                </div>
-            </div>
-            <div style="
-                color: rgba(250, 250, 250, 0.68);
-                font-size: 0.98rem;
-                line-height: 1.45;
-                margin-left: 0.1rem;
-            ">
-                {descripcion_html}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
+    mostrar_encabezado_modulo_visual(
+        icono=icono,
+        titulo=titulo,
+        descripcion=descripcion,
+        empresa_nombre=st.session_state.get("empresa_nombre", "")
     )
 
 
@@ -302,42 +281,43 @@ def refrescar_permisos_usuario_actual():
 
 
 def pantalla_login():
-    st.title("🔐 Sistema Contable FF")
+    col1, col2, col3 = st.columns([1, 1.05, 1])
 
-    st.info("Ingresá con tu usuario y contraseña.")
+    with col2:
+        st.markdown("## Sistema Contable")
 
-    with st.form("form_login"):
-        usuario = st.text_input("Usuario")
-        password = st.text_input("Contraseña", type="password")
+        with st.form("form_login"):
+            usuario = st.text_input("Usuario")
+            password = st.text_input("Contraseña", type="password")
 
-        ingresar = st.form_submit_button("Ingresar")
+            ingresar = st.form_submit_button("Ingresar", use_container_width=True)
 
-        if ingresar:
-            datos = login_usuario(usuario.strip(), password)
+            if ingresar:
+                datos = login_usuario(usuario.strip(), password)
 
-            if datos is None:
-                st.error("Usuario o contraseña incorrectos.")
-                return
+                if datos is None:
+                    st.error("Usuario o contraseña incorrectos.")
+                    return
 
-            empresas = obtener_empresas_usuario(datos["id"])
+                empresas = obtener_empresas_usuario(datos["id"])
 
-            empresa_id = 1
-            empresa_nombre = "Empresa Demo"
+                empresa_id = 1
+                empresa_nombre = "Empresa Demo"
 
-            if not empresas.empty:
-                empresa_id = int(empresas.iloc[0]["id"])
-                empresa_nombre = str(empresas.iloc[0]["nombre"])
+                if not empresas.empty:
+                    empresa_id = int(empresas.iloc[0]["id"])
+                    empresa_nombre = str(empresas.iloc[0]["nombre"])
 
-            token = crear_sesion(datos["id"], empresa_id)
+                token = crear_sesion(datos["id"], empresa_id)
 
-            st.session_state["session_token"] = token
-            st.session_state["empresa_id"] = empresa_id
-            st.session_state["empresa_nombre"] = empresa_nombre
+                st.session_state["session_token"] = token
+                st.session_state["empresa_id"] = empresa_id
+                st.session_state["empresa_nombre"] = empresa_nombre
 
-            cargar_usuario_en_estado(datos, empresa_id_preferida=empresa_id)
-            poner_sid_url(token)
+                cargar_usuario_en_estado(datos, empresa_id_preferida=empresa_id)
+                poner_sid_url(token)
 
-            st.rerun()
+                st.rerun()
 
 
 def pantalla_cambio_password():
@@ -346,28 +326,36 @@ def pantalla_cambio_password():
     if int(usuario.get("debe_cambiar_password", 0)) != 1:
         return False
 
-    st.title("🔑 Cambio de contraseña obligatorio")
+    mostrar_encabezado_modulo_visual(
+        icono="🔑",
+        titulo="Cambio de contraseña obligatorio",
+        descripcion="Por seguridad, antes de continuar tenés que definir una nueva contraseña.",
+        empresa_nombre=st.session_state.get("empresa_nombre", "")
+    )
 
-    with st.form("form_cambio_password"):
-        nueva = st.text_input("Nueva contraseña", type="password")
-        repetir = st.text_input("Repetir contraseña", type="password")
+    col1, col2, col3 = st.columns([1, 1.15, 1])
 
-        guardar = st.form_submit_button("Cambiar contraseña")
+    with col2:
+        with st.form("form_cambio_password"):
+            nueva = st.text_input("Nueva contraseña", type="password")
+            repetir = st.text_input("Repetir contraseña", type="password")
 
-        if guardar:
-            if nueva.strip() == "":
-                st.warning("La contraseña no puede estar vacía.")
+            guardar = st.form_submit_button("Cambiar contraseña", use_container_width=True)
 
-            elif nueva != repetir:
-                st.warning("Las contraseñas no coinciden.")
+            if guardar:
+                if nueva.strip() == "":
+                    st.warning("La contraseña no puede estar vacía.")
 
-            elif len(nueva) < 8:
-                st.warning("Usá una contraseña de al menos 8 caracteres.")
+                elif nueva != repetir:
+                    st.warning("Las contraseñas no coinciden.")
 
-            else:
-                cambiar_password(usuario["id"], nueva)
-                st.success("Contraseña actualizada. Volvé a ingresar.")
-                cerrar_sesion_actual()
+                elif len(nueva) < 8:
+                    st.warning("Usá una contraseña de al menos 8 caracteres.")
+
+                else:
+                    cambiar_password(usuario["id"], nueva)
+                    st.success("Contraseña actualizada. Volvé a ingresar.")
+                    cerrar_sesion_actual()
 
     return True
 
@@ -409,9 +397,10 @@ def menu_principal():
 
     usuario = st.session_state["usuario"]
 
-    st.sidebar.title("📘 Menú")
-    st.sidebar.caption(f"Usuario: {usuario['usuario']}")
-    st.sidebar.caption(f"Rol: {usuario['rol']}")
+    mostrar_sidebar_marca(
+        usuario=usuario["usuario"],
+        rol=usuario["rol"]
+    )
 
     selector_empresa_sidebar()
 
@@ -445,14 +434,14 @@ def menu_principal():
         st.error("Tu usuario no tiene permisos asignados.")
         return
 
+    st.sidebar.markdown("#### Navegación")
     menu = st.sidebar.radio("Ir a:", opciones)
 
     st.sidebar.divider()
 
-    if st.sidebar.button("Cerrar sesión"):
+    if st.sidebar.button("Cerrar sesión", use_container_width=True):
         cerrar_sesion_actual()
 
-    st.caption(f"Empresa activa: **{st.session_state['empresa_nombre']}**")
     mostrar_encabezado_modulo(menu)
 
     if menu == "Ventas":
