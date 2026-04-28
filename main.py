@@ -21,12 +21,10 @@ from services.sesion_service import (
     limpiar_sesiones_vencidas
 )
 
-from modulos import ventas, compras, reportes, auditoria, configuracion, seguridad
+from services.bancos_service import inicializar_bancos
 
+from modulos import ventas, compras, bancos, reportes, auditoria, configuracion, seguridad
 
-# ======================================================
-# CONFIGURACIÓN GENERAL STREAMLIT
-# ======================================================
 
 st.set_page_config(
     page_title="Sistema Contable FF",
@@ -34,19 +32,12 @@ st.set_page_config(
 )
 
 
-# ======================================================
-# INICIALIZACIÓN GENERAL
-# ======================================================
-
 init_db()
 inicializar_seguridad()
+inicializar_bancos()
 inicializar_tabla_sesiones()
 limpiar_sesiones_vencidas()
 
-
-# ======================================================
-# ENCABEZADOS CENTRALES DE MÓDULOS
-# ======================================================
 
 MODULOS_UI = {
     "Ventas": {
@@ -63,6 +54,14 @@ MODULOS_UI = {
         "descripcion": (
             "Carga de compras, clasificación contable por proveedor, "
             "Libro IVA Compras y cuenta corriente de proveedores."
+        )
+    },
+    "Banco / Caja": {
+        "icono": "🏦",
+        "titulo": "Banco / Caja",
+        "descripcion": (
+            "Importación flexible de extractos bancarios, control de saldos, "
+            "gastos bancarios, reglas recurrentes y base para conciliación."
         )
     },
     "IVA": {
@@ -108,17 +107,6 @@ MODULOS_UI = {
 
 
 def mostrar_encabezado_modulo(menu):
-    """
-    Encabezado principal único del sistema.
-
-    Regla de arquitectura:
-    - El encabezado principal vive solo en main.py.
-    - Los archivos dentro de modulos/ no deben usar st.title().
-    - Los módulos pueden usar st.subheader(), st.info(), st.tabs(), etc.
-    - Se usa markdown/HTML controlado en vez de st.title() para evitar
-      que Streamlit arrastre visualmente títulos anteriores entre módulos.
-    """
-
     datos = MODULOS_UI.get(menu)
 
     if datos is None:
@@ -167,10 +155,6 @@ def mostrar_encabezado_modulo(menu):
     )
 
 
-# ======================================================
-# UTILIDADES DE QUERY PARAMS
-# ======================================================
-
 def obtener_sid_url():
     try:
         return st.query_params.get("sid", "")
@@ -207,10 +191,6 @@ def limpiar_sid_url():
         except Exception:
             pass
 
-
-# ======================================================
-# ESTADO DE SESIÓN
-# ======================================================
 
 def iniciar_estado():
     if "autenticado" not in st.session_state:
@@ -254,10 +234,6 @@ def cargar_usuario_en_estado(datos_usuario, empresa_id_preferida=None):
 
 
 def restaurar_sesion_desde_url():
-    """
-    Si el usuario refresca la página, intenta recuperar la sesión usando el token.
-    """
-
     if st.session_state.get("autenticado"):
         return
 
@@ -283,11 +259,6 @@ def restaurar_sesion_desde_url():
 
 
 def validar_sesion_actual():
-    """
-    Verifica que la sesión actual siga activa.
-    Si venció, fuerza cierre de sesión.
-    """
-
     token = st.session_state.get("session_token", "")
 
     if not token:
@@ -321,9 +292,14 @@ def tiene_permiso(permiso):
     return permiso in st.session_state.get("permisos", set())
 
 
-# ======================================================
-# LOGIN
-# ======================================================
+def refrescar_permisos_usuario_actual():
+    usuario = st.session_state.get("usuario")
+
+    if not usuario:
+        return
+
+    st.session_state["permisos"] = obtener_permisos_usuario(usuario["id"])
+
 
 def pantalla_login():
     st.title("🔐 Sistema Contable FF")
@@ -396,10 +372,6 @@ def pantalla_cambio_password():
     return True
 
 
-# ======================================================
-# EMPRESA ACTIVA
-# ======================================================
-
 def selector_empresa_sidebar():
     usuario = st.session_state["usuario"]
     empresas = obtener_empresas_usuario(usuario["id"])
@@ -409,7 +381,6 @@ def selector_empresa_sidebar():
         return
 
     opciones = empresas["id"].tolist()
-
     empresa_actual = st.session_state.get("empresa_id", opciones[0])
 
     if empresa_actual not in opciones:
@@ -433,11 +404,9 @@ def selector_empresa_sidebar():
     )
 
 
-# ======================================================
-# MENÚ PRINCIPAL
-# ======================================================
-
 def menu_principal():
+    refrescar_permisos_usuario_actual()
+
     usuario = st.session_state["usuario"]
 
     st.sidebar.title("📘 Menú")
@@ -453,6 +422,9 @@ def menu_principal():
 
     if tiene_permiso("compras.ver"):
         opciones.append("Compras")
+
+    if tiene_permiso("bancos.ver"):
+        opciones.append("Banco / Caja")
 
     if tiene_permiso("iva.ver"):
         opciones.append("IVA")
@@ -489,6 +461,9 @@ def menu_principal():
     elif menu == "Compras":
         compras.mostrar_compras()
 
+    elif menu == "Banco / Caja":
+        bancos.mostrar_bancos()
+
     elif menu == "IVA":
         try:
             from modulos import iva
@@ -508,10 +483,6 @@ def menu_principal():
     elif menu == "Seguridad":
         seguridad.mostrar_seguridad()
 
-
-# ======================================================
-# EJECUCIÓN
-# ======================================================
 
 iniciar_estado()
 restaurar_sesion_desde_url()
