@@ -37,6 +37,8 @@ from services.tesoreria_service import (
 TIPOS_MOVIMIENTO_CAJA = {
     "INGRESO_MANUAL",
     "EGRESO_MANUAL",
+    "COBRANZA_EFECTIVO",
+    "PAGO_EFECTIVO",
     "DEPOSITO_CAJA_BANCO",
     "RETIRO_BANCO_CAJA",
     "TRANSFERENCIA_CAJA_CAJA",
@@ -656,19 +658,42 @@ def inicializar_cajas():
     inicializar_tesoreria()
     _ejecutar_script_sql(_ruta_migracion_caja())
 
-    crear_cuenta_tesoreria(
-        empresa_id=1,
-        tipo_cuenta="CAJA",
-        nombre="Caja General",
-        entidad="Efectivo",
-        numero_cuenta="",
-        moneda="ARS",
-        cuenta_contable_codigo=CUENTA_CAJA_DEFAULT[0],
-        cuenta_contable_nombre=CUENTA_CAJA_DEFAULT[1],
-        observacion="Caja inicial creada automáticamente por el módulo Caja.",
-    )
+    # No crear una Caja General duplicada si la empresa ya tiene una caja operativa.
+    empresa_id_default = 1
+    conn = conectar()
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM tesoreria_cuentas
+            WHERE empresa_id = ?
+              AND tipo_cuenta = 'CAJA'
+              AND activo = 1
+            """,
+            (empresa_id_default,),
+        )
+        cantidad_cajas = int(cur.fetchone()[0] or 0)
+
+    finally:
+        conn.close()
+
+    if cantidad_cajas == 0:
+        crear_cuenta_tesoreria(
+            empresa_id=empresa_id_default,
+            tipo_cuenta="CAJA",
+            nombre="Caja General",
+            entidad="Efectivo",
+            numero_cuenta="",
+            moneda="ARS",
+            cuenta_contable_codigo=CUENTA_CAJA_DEFAULT[0],
+            cuenta_contable_nombre=CUENTA_CAJA_DEFAULT[1],
+            observacion="Caja inicial creada automáticamente por el módulo Caja.",
+        )
 
     return True
+
 
 
 # ======================================================
@@ -948,6 +973,303 @@ def registrar_movimiento_manual_caja(
     finally:
         conn.close()
 
+
+
+# ======================================================
+# INTEGRACIÓN AUTOMÁTICA CON COBRANZAS / PAGOS EN EFECTIVO
+# ======================================================
+
+def registrar_cobranza_efectivo_en_caja_cur(
+    cur,
+    empresa_id,
+    caja_id,
+    caja_nombre,
+    fecha,
+    cliente,
+    cuit,
+    importe,
+    numero_recibo,
+    cobranza_id,
+    tesoreria_operacion_id=None,
+    usuario_id=None,
+):
+    """
+    Registra en Caja el ingreso físico de efectivo originado en una cobranza.
+
+    No genera asiento en caja_asientos porque el asiento contable principal
+    ya lo genera el módulo Cobranzas en libro_diario.
+    """
+
+    empresa_id = int(empresa_id or 1)
+    caja_id = int(caja_id)
+    importe = _validar_importe_positivo(importe)
+    referencia = _texto(numero_recibo)
+
+    if not referencia:
+        referencia = f"COBRANZA-{cobranza_id}"
+
+    cur.execute(
+        """
+        SELECT id
+        FROM caja_movimientos
+        WHERE empresa_id = ?
+          AND tipo_movimiento = 'COBRANZA_EFECTIVO'
+          AND referencia = ?
+          AND estado <> 'ANULADO'
+        LIMIT 1
+        """,
+        (empresa_id, referencia),
+    )
+
+    existente = cur.fetchone()
+
+    if existente:
+        return int(existente[0])
+
+    concepto = f"Cobranza en efectivo {referencia}"
+
+    if _texto(cliente):
+        concepto += f" - {_texto(cliente)}"
+
+    movimiento_id = _insertar_movimiento_caja(
+        cur=cur,
+        empresa_id=empresa_id,
+        fecha=fecha,
+        tipo_movimiento="COBRANZA_EFECTIVO",
+        caja_id_origen=caja_id,
+        caja_nombre_origen=caja_nombre,
+        caja_id_destino=None,
+        caja_nombre_destino="",
+        cuenta_banco_id=None,
+        cuenta_banco_nombre="",
+        concepto=concepto,
+        referencia=referencia,
+        observacion=(
+            "Movimiento automático generado desde Cobranzas. "
+            "Solo registra el flujo físico de efectivo en Caja; "
+            "el asiento contable principal está en Cobranzas."
+        ),
+        importe=importe,
+        sentido_caja_origen="INGRESO",
+        usuario_id=usuario_id,
+    )
+
+    cur.execute(
+        """
+        UPDATE caja_movimientos
+        SET tesoreria_operacion_id = ?
+        WHERE empresa_id = ?
+          AND id = ?
+        """,
+        (tesoreria_operacion_id, empresa_id, movimiento_id),
+    )
+
+    _registrar_auditoria_caja(
+        cur=cur,
+        empresa_id=empresa_id,
+        usuario_id=usuario_id,
+        accion="CREAR",
+        entidad="caja_movimientos",
+        entidad_id=movimiento_id,
+        valor_nuevo={
+            "tipo": "COBRANZA_EFECTIVO",
+            "origen": "COBRANZAS",
+            "cobranza_id": cobranza_id,
+            "numero_recibo": numero_recibo,
+            "cliente": cliente,
+            "cuit": cuit,
+            "importe": importe,
+        },
+        motivo="Ingreso automático de Caja por cobranza en efectivo.",
+    )
+
+    return movimiento_id
+
+
+def registrar_pago_efectivo_en_caja_cur(
+    cur,
+    empresa_id,
+    caja_id,
+    caja_nombre,
+    fecha,
+    proveedor,
+    cuit,
+    importe,
+    numero_orden_pago,
+    pago_id,
+    tesoreria_operacion_id=None,
+    usuario_id=None,
+):
+    """
+    Registra en Caja el egreso físico de efectivo originado en un pago.
+
+    No genera asiento en caja_asientos porque el asiento contable principal
+    ya lo genera el módulo Pagos en libro_diario.
+    """
+
+    empresa_id = int(empresa_id or 1)
+    caja_id = int(caja_id)
+    importe = _validar_importe_positivo(importe)
+    referencia = _texto(numero_orden_pago)
+
+    if not referencia:
+        referencia = f"PAGO-{pago_id}"
+
+    cur.execute(
+        """
+        SELECT id
+        FROM caja_movimientos
+        WHERE empresa_id = ?
+          AND tipo_movimiento = 'PAGO_EFECTIVO'
+          AND referencia = ?
+          AND estado <> 'ANULADO'
+        LIMIT 1
+        """,
+        (empresa_id, referencia),
+    )
+
+    existente = cur.fetchone()
+
+    if existente:
+        return int(existente[0])
+
+    concepto = f"Pago en efectivo {referencia}"
+
+    if _texto(proveedor):
+        concepto += f" - {_texto(proveedor)}"
+
+    movimiento_id = _insertar_movimiento_caja(
+        cur=cur,
+        empresa_id=empresa_id,
+        fecha=fecha,
+        tipo_movimiento="PAGO_EFECTIVO",
+        caja_id_origen=caja_id,
+        caja_nombre_origen=caja_nombre,
+        caja_id_destino=None,
+        caja_nombre_destino="",
+        cuenta_banco_id=None,
+        cuenta_banco_nombre="",
+        concepto=concepto,
+        referencia=referencia,
+        observacion=(
+            "Movimiento automático generado desde Pagos. "
+            "Solo registra el flujo físico de efectivo en Caja; "
+            "el asiento contable principal está en Pagos."
+        ),
+        importe=importe,
+        sentido_caja_origen="EGRESO",
+        usuario_id=usuario_id,
+    )
+
+    cur.execute(
+        """
+        UPDATE caja_movimientos
+        SET tesoreria_operacion_id = ?
+        WHERE empresa_id = ?
+          AND id = ?
+        """,
+        (tesoreria_operacion_id, empresa_id, movimiento_id),
+    )
+
+    _registrar_auditoria_caja(
+        cur=cur,
+        empresa_id=empresa_id,
+        usuario_id=usuario_id,
+        accion="CREAR",
+        entidad="caja_movimientos",
+        entidad_id=movimiento_id,
+        valor_nuevo={
+            "tipo": "PAGO_EFECTIVO",
+            "origen": "PAGOS",
+            "pago_id": pago_id,
+            "numero_orden_pago": numero_orden_pago,
+            "proveedor": proveedor,
+            "cuit": cuit,
+            "importe": importe,
+        },
+        motivo="Egreso automático de Caja por pago en efectivo.",
+    )
+
+    return movimiento_id
+
+
+def anular_movimientos_caja_por_referencia_cur(
+    cur,
+    empresa_id,
+    tipo_movimiento,
+    referencia,
+    motivo,
+    usuario_id=None,
+):
+    """
+    Anula lógicamente movimientos automáticos de Caja vinculados a recibos u órdenes de pago.
+    No borra movimientos.
+    """
+
+    empresa_id = int(empresa_id or 1)
+    tipo_movimiento = _texto_upper(tipo_movimiento)
+    referencia = _texto(referencia)
+    motivo = _texto(motivo)
+
+    if not referencia:
+        return 0
+
+    cur.execute(
+        """
+        SELECT id
+        FROM caja_movimientos
+        WHERE empresa_id = ?
+          AND tipo_movimiento = ?
+          AND referencia = ?
+          AND estado <> 'ANULADO'
+        """,
+        (empresa_id, tipo_movimiento, referencia),
+    )
+
+    filas = cur.fetchall()
+    ids = [int(fila[0]) for fila in filas]
+
+    if not ids:
+        return 0
+
+    placeholders = ", ".join(["?"] * len(ids))
+
+    cur.execute(
+        f"""
+        UPDATE caja_movimientos
+        SET estado = 'ANULADO',
+            motivo_anulacion = ?,
+            fecha_anulacion = CURRENT_TIMESTAMP
+        WHERE empresa_id = ?
+          AND id IN ({placeholders})
+        """,
+        tuple([motivo, empresa_id] + ids),
+    )
+
+    cur.execute(
+        f"""
+        UPDATE caja_asientos
+        SET estado = 'ANULADO'
+        WHERE empresa_id = ?
+          AND movimiento_caja_id IN ({placeholders})
+        """,
+        tuple([empresa_id] + ids),
+    )
+
+    for movimiento_id in ids:
+        _registrar_auditoria_caja(
+            cur=cur,
+            empresa_id=empresa_id,
+            usuario_id=usuario_id,
+            accion="ANULAR",
+            entidad="caja_movimientos",
+            entidad_id=movimiento_id,
+            valor_anterior={"estado": "CONFIRMADO"},
+            valor_nuevo={"estado": "ANULADO", "motivo": motivo},
+            motivo=motivo,
+        )
+
+    return len(ids)
 
 # ======================================================
 # TRANSFERENCIAS INTERNAS

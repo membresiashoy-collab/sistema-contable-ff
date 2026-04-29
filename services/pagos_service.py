@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from database import conectar, ejecutar_query
-from services import tesoreria_service
+from services import tesoreria_service, cajas_service
 
 
 # ======================================================
@@ -772,6 +772,7 @@ def registrar_pago(
     cuit = _texto(cuit)
     referencia_externa = _texto(referencia_externa)
     descripcion = _texto(descripcion)
+    medio_pago_codigo = _texto_upper(medio_pago_codigo or "TRANSFERENCIA")
 
     if not fecha_pago:
         return {
@@ -862,6 +863,9 @@ def registrar_pago(
         imputaciones=imputaciones_normalizadas,
     )
 
+    if medio_pago_codigo == "EFECTIVO":
+        cajas_service.inicializar_cajas()
+
     conn = conectar()
     cur = conn.cursor()
 
@@ -873,6 +877,22 @@ def registrar_pago(
             return {
                 "ok": False,
                 "mensaje": "No se encontró la cuenta de Tesorería seleccionada.",
+            }
+
+        tipo_cuenta_tesoreria = _texto_upper(cuenta.get("tipo_cuenta"))
+
+        if medio_pago_codigo == "EFECTIVO" and tipo_cuenta_tesoreria != "CAJA":
+            conn.rollback()
+            return {
+                "ok": False,
+                "mensaje": "El medio de pago EFECTIVO debe salir de una cuenta tipo CAJA.",
+            }
+
+        if medio_pago_codigo != "EFECTIVO" and tipo_cuenta_tesoreria == "CAJA":
+            conn.rollback()
+            return {
+                "ok": False,
+                "mensaje": "Solo los pagos en EFECTIVO pueden salir de una cuenta tipo CAJA. Tarjeta, billetera y transferencia deben salir de Banco/Tesorería o cuenta puente.",
             }
 
         medio_pago_id = _obtener_medio_pago_id_cur(cur, empresa_id, medio_pago_codigo)
@@ -1121,6 +1141,24 @@ def registrar_pago(
                 componentes=componentes_tesoreria,
             )
 
+        pago_caja_movimiento_id = None
+
+        if importe_pagado > 0 and medio_pago_codigo == "EFECTIVO":
+            pago_caja_movimiento_id = cajas_service.registrar_pago_efectivo_en_caja_cur(
+                cur=cur,
+                empresa_id=empresa_id,
+                caja_id=cuenta_tesoreria_id,
+                caja_nombre=_texto(cuenta.get("nombre")) or "Caja",
+                fecha=fecha_pago,
+                proveedor=proveedor,
+                cuit=cuit,
+                importe=importe_pagado,
+                numero_orden_pago=numero_orden_pago,
+                pago_id=pago_id,
+                tesoreria_operacion_id=tesoreria_operacion_id,
+                usuario_id=usuario_id,
+            )
+
         cur.execute(
             """
             UPDATE pagos
@@ -1137,6 +1175,7 @@ def registrar_pago(
                 pago_id,
             ),
         )
+
 
         _registrar_auditoria(
             cur=cur,
@@ -1156,6 +1195,7 @@ def registrar_pago(
                 "importe_a_cuenta": importe_a_cuenta,
                 "asiento_id": asiento_id,
                 "tesoreria_operacion_id": tesoreria_operacion_id,
+                "caja_movimiento_id": pago_caja_movimiento_id,
             },
             motivo="Alta de pago.",
         )
@@ -1170,6 +1210,7 @@ def registrar_pago(
             "numero_orden_pago": numero_orden_pago,
             "asiento_id": asiento_id,
             "tesoreria_operacion_id": tesoreria_operacion_id,
+            "caja_movimiento_id": pago_caja_movimiento_id,
             "importe_pagado": importe_pagado,
             "importe_retenciones": importe_retenciones,
             "importe_total_aplicado": importe_total_aplicado,
@@ -1408,6 +1449,28 @@ def anular_pago(
                     tesoreria_operacion_id,
                 ),
             )
+
+        # Anula el movimiento automático de Caja vinculado a la orden de pago,
+        # solo si el pago original había salido por una cuenta tipo CAJA.
+        numero_orden_pago_caja = _texto(pago.get("numero_orden_pago"))
+        cuenta_tesoreria_id_caja = pago.get("cuenta_tesoreria_id")
+
+        if numero_orden_pago_caja and cuenta_tesoreria_id_caja:
+            cuenta_caja = _obtener_cuenta_tesoreria(
+                cur,
+                empresa_id,
+                cuenta_tesoreria_id_caja,
+            )
+
+            if cuenta_caja is not None and _texto_upper(cuenta_caja.get("tipo_cuenta")) == "CAJA":
+                cajas_service.anular_movimientos_caja_por_referencia_cur(
+                    cur=cur,
+                    empresa_id=empresa_id,
+                    tipo_movimiento="PAGO_EFECTIVO",
+                    referencia=numero_orden_pago_caja,
+                    motivo=motivo,
+                    usuario_id=usuario_id,
+                )
 
         _registrar_auditoria(
             cur=cur,

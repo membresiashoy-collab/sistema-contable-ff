@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from database import conectar, ejecutar_query
-from services import tesoreria_service
+from services import tesoreria_service, cajas_service
 
 
 # ======================================================
@@ -770,6 +770,7 @@ def registrar_cobranza(
     cuit = _texto(cuit)
     referencia_externa = _texto(referencia_externa)
     descripcion = _texto(descripcion)
+    medio_pago_codigo = _texto_upper(medio_pago_codigo or "EFECTIVO")
 
     if not fecha_cobranza:
         return {
@@ -860,6 +861,9 @@ def registrar_cobranza(
         imputaciones=imputaciones_normalizadas,
     )
 
+    if medio_pago_codigo == "EFECTIVO":
+        cajas_service.inicializar_cajas()
+
     conn = conectar()
     cur = conn.cursor()
 
@@ -871,6 +875,22 @@ def registrar_cobranza(
             return {
                 "ok": False,
                 "mensaje": "No se encontró la cuenta de Tesorería seleccionada.",
+            }
+
+        tipo_cuenta_tesoreria = _texto_upper(cuenta.get("tipo_cuenta"))
+
+        if medio_pago_codigo == "EFECTIVO" and tipo_cuenta_tesoreria != "CAJA":
+            conn.rollback()
+            return {
+                "ok": False,
+                "mensaje": "El medio de pago EFECTIVO debe usar una cuenta tipo CAJA.",
+            }
+
+        if medio_pago_codigo != "EFECTIVO" and tipo_cuenta_tesoreria == "CAJA":
+            conn.rollback()
+            return {
+                "ok": False,
+                "mensaje": "Solo las cobranzas en EFECTIVO pueden ingresar a una cuenta tipo CAJA. Tarjeta, billetera y transferencia deben ir a Banco/Tesorería o cuenta puente.",
             }
 
         medio_pago_id = _obtener_medio_pago_id_cur(cur, empresa_id, medio_pago_codigo)
@@ -1119,6 +1139,24 @@ def registrar_cobranza(
                 componentes=componentes_tesoreria,
             )
 
+        caja_movimiento_id = None
+
+        if importe_recibido > 0 and medio_pago_codigo == "EFECTIVO":
+            caja_movimiento_id = cajas_service.registrar_cobranza_efectivo_en_caja_cur(
+                cur=cur,
+                empresa_id=empresa_id,
+                caja_id=cuenta_tesoreria_id,
+                caja_nombre=_texto(cuenta.get("nombre")) or "Caja",
+                fecha=fecha_cobranza,
+                cliente=cliente,
+                cuit=cuit,
+                importe=importe_recibido,
+                numero_recibo=numero_recibo,
+                cobranza_id=cobranza_id,
+                tesoreria_operacion_id=tesoreria_operacion_id,
+                usuario_id=usuario_id,
+            )
+
         cur.execute(
             """
             UPDATE cobranzas
@@ -1135,6 +1173,7 @@ def registrar_cobranza(
                 cobranza_id,
             ),
         )
+
 
         _registrar_auditoria(
             cur=cur,
@@ -1154,6 +1193,7 @@ def registrar_cobranza(
                 "importe_a_cuenta": importe_a_cuenta,
                 "asiento_id": asiento_id,
                 "tesoreria_operacion_id": tesoreria_operacion_id,
+                "caja_movimiento_id": caja_movimiento_id,
             },
             motivo="Alta de cobranza.",
         )
@@ -1168,6 +1208,7 @@ def registrar_cobranza(
             "numero_recibo": numero_recibo,
             "asiento_id": asiento_id,
             "tesoreria_operacion_id": tesoreria_operacion_id,
+            "caja_movimiento_id": caja_movimiento_id,
             "importe_recibido": importe_recibido,
             "importe_retenciones": importe_retenciones,
             "importe_total_aplicado": importe_total_aplicado,
@@ -1406,6 +1447,28 @@ def anular_cobranza(
                     tesoreria_operacion_id,
                 ),
             )
+
+        # Anula el movimiento automático de Caja vinculado al recibo,
+        # solo si la cobranza original había ingresado por una cuenta tipo CAJA.
+        numero_recibo_caja = _texto(cobranza.get("numero_recibo"))
+        cuenta_tesoreria_id_caja = cobranza.get("cuenta_tesoreria_id")
+
+        if numero_recibo_caja and cuenta_tesoreria_id_caja:
+            cuenta_caja = _obtener_cuenta_tesoreria(
+                cur,
+                empresa_id,
+                cuenta_tesoreria_id_caja,
+            )
+
+            if cuenta_caja is not None and _texto_upper(cuenta_caja.get("tipo_cuenta")) == "CAJA":
+                cajas_service.anular_movimientos_caja_por_referencia_cur(
+                    cur=cur,
+                    empresa_id=empresa_id,
+                    tipo_movimiento="COBRANZA_EFECTIVO",
+                    referencia=numero_recibo_caja,
+                    motivo=motivo,
+                    usuario_id=usuario_id,
+                )
 
         _registrar_auditoria(
             cur=cur,
