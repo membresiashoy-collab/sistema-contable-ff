@@ -4,7 +4,24 @@ from pathlib import Path
 
 import pandas as pd
 
-from database import conectar, ejecutar_query
+from database import conectar
+
+
+def ejecutar_query(sql, params=()):
+    """
+    Helper local de Caja para consultas SELECT.
+
+    En el proyecto, database.ejecutar_query puede devolver un cursor sqlite.
+    Este módulo necesita DataFrames porque la UI y los resúmenes usan .empty,
+    .iterrows(), columnas y sumatorias de pandas.
+    """
+    conn = conectar()
+
+    try:
+        return pd.read_sql_query(sql, conn, params=params)
+
+    finally:
+        conn.close()
 
 from services.tesoreria_service import (
     inicializar_tesoreria,
