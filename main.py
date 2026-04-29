@@ -107,6 +107,14 @@ MODULOS_UI = {
             "Libro IVA Compras y cuenta corriente de proveedores."
         ),
     },
+    "Pagos": {
+        "icono": "💸",
+        "titulo": "Pagos",
+        "descripcion": (
+            "Registro de pagos a proveedores, imputación contra cuenta corriente, "
+            "retenciones practicadas y operaciones pendientes de conciliación."
+        ),
+    },
     "Banco / Caja": {
         "icono": "🏦",
         "titulo": "Banco / Caja",
@@ -181,6 +189,15 @@ MODULOS_RENDER = {
             "services.clasificacion_compras_service",
             "services.compras_service",
             "modulos.compras",
+        ],
+    },
+    "Pagos": {
+        "modulo": "modulos.pagos",
+        "funcion": "mostrar_pagos",
+        "dependencias": [
+            "services.tesoreria_service",
+            "services.pagos_service",
+            "modulos.pagos",
         ],
     },
     "Banco / Caja": {
