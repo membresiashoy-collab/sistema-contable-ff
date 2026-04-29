@@ -14,12 +14,27 @@ from services.cobranzas_service import (
     registrar_cobranza,
 )
 
-from services.tesoreria_service import crear_cuenta_tesoreria, listar_medios_pago, asegurar_medios_pago_basicos
+from services.tesoreria_service import (
+    asegurar_medios_pago_basicos,
+    crear_cuenta_tesoreria,
+)
 
 
 # ======================================================
 # UTILIDADES
 # ======================================================
+
+MEDIOS_CUENTAS_COMPATIBLES = {
+    "EFECTIVO": {"CAJA"},
+    "TRANSFERENCIA": {"BANCO"},
+    "DEBITO_AUTOMATICO": {"BANCO"},
+    "TARJETA": {"BANCO", "TARJETA"},
+    "BILLETERA": {"BANCO", "BILLETERA"},
+    "CHEQUE": {"VALORES", "BANCO"},
+    "ECHEQ": {"VALORES", "BANCO"},
+    "OTRO": {"BANCO", "BILLETERA", "TARJETA", "VALORES", "OTRO"},
+}
+
 
 def empresa_actual_id():
     return int(st.session_state.get("empresa_id", 1))
@@ -63,6 +78,10 @@ def _texto(valor):
     return str(valor).strip()
 
 
+def _texto_upper(valor):
+    return _texto(valor).upper()
+
+
 def _etiqueta_cliente(row):
     cliente = _texto(row.get("cliente"))
     cuit = _texto(row.get("cuit"))
@@ -88,6 +107,168 @@ def _etiqueta_cuenta(row):
 
 def _etiqueta_medio(row):
     return f"{row.get('codigo')} | {row.get('nombre')}"
+
+
+def _tipos_compatibles_por_medio(medio_codigo):
+    codigo = _texto_upper(medio_codigo)
+    return MEDIOS_CUENTAS_COMPATIBLES.get(
+        codigo,
+        {"BANCO", "BILLETERA", "TARJETA", "VALORES", "OTRO"},
+    )
+
+
+def _filtrar_cuentas_por_medio(cuentas, medio_codigo):
+    if cuentas is None or cuentas.empty:
+        return pd.DataFrame()
+
+    if "tipo_cuenta" not in cuentas.columns:
+        return pd.DataFrame()
+
+    tipos_compatibles = _tipos_compatibles_por_medio(medio_codigo)
+
+    return cuentas[
+        cuentas["tipo_cuenta"].astype(str).str.upper().isin(tipos_compatibles)
+    ].copy()
+
+
+def _label_cuenta_destino_cobranza(medio_codigo):
+    codigo = _texto_upper(medio_codigo)
+
+    if codigo == "EFECTIVO":
+        return "Caja / sucursal donde ingresó el efectivo"
+
+    if codigo == "TRANSFERENCIA":
+        return "Banco destino de la transferencia"
+
+    if codigo == "DEBITO_AUTOMATICO":
+        return "Banco donde se acreditó el débito automático"
+
+    if codigo == "TARJETA":
+        return "Banco de acreditación o cuenta puente de tarjetas"
+
+    if codigo == "BILLETERA":
+        return "Banco de acreditación o billetera / procesador"
+
+    if codigo in {"CHEQUE", "ECHEQ"}:
+        return "Cuenta de valores o banco receptor"
+
+    return "Cuenta destino compatible"
+
+
+def _label_importe_recibido_cobranza(medio_codigo):
+    codigo = _texto_upper(medio_codigo)
+
+    if codigo == "EFECTIVO":
+        return "Importe recibido en efectivo"
+
+    if codigo == "TRANSFERENCIA":
+        return "Importe transferido / acreditado"
+
+    if codigo == "DEBITO_AUTOMATICO":
+        return "Importe debitado / acreditado"
+
+    if codigo == "TARJETA":
+        return "Importe cobrado con tarjeta"
+
+    if codigo == "BILLETERA":
+        return "Importe cobrado por billetera"
+
+    if codigo in {"CHEQUE", "ECHEQ"}:
+        return "Importe recibido en cheque / eCheq"
+
+    return "Importe recibido"
+
+
+def _mostrar_impacto_cobranza(medio_codigo, cuenta_row):
+    codigo = _texto_upper(medio_codigo)
+    nombre = _texto(cuenta_row.get("nombre"))
+    tipo_cuenta = _texto_upper(cuenta_row.get("tipo_cuenta"))
+
+    if codigo == "EFECTIVO":
+        st.success(
+            f"Impacto: esta cobranza ingresará a Caja ({nombre}) "
+            "y aparecerá automáticamente en el módulo Caja como COBRANZA_EFECTIVO."
+        )
+        return
+
+    if codigo == "TRANSFERENCIA":
+        st.info(
+            "Impacto: esta cobranza NO mueve Caja. "
+            "Queda en Tesorería/Banco pendiente de conciliación bancaria."
+        )
+        return
+
+    if codigo == "TARJETA":
+        st.info(
+            "Impacto: esta cobranza NO mueve Caja. "
+            "Se registra el medio tarjeta y luego se controla la acreditación/liquidación."
+        )
+        return
+
+    if codigo == "BILLETERA":
+        st.info(
+            "Impacto: esta cobranza NO mueve Caja. "
+            "Se registra el medio billetera y luego se controla la acreditación bancaria."
+        )
+        return
+
+    if codigo in {"CHEQUE", "ECHEQ"}:
+        st.info(
+            "Impacto: esta cobranza NO mueve Caja. "
+            "Queda como valor o banco para depósito/acreditación posterior."
+        )
+        return
+
+    if tipo_cuenta == "BANCO":
+        st.info(
+            "Impacto: esta cobranza queda en Tesorería/Banco y no genera movimiento de Caja."
+        )
+        return
+
+    st.info("Impacto: esta cobranza queda registrada según la cuenta de Tesorería seleccionada.")
+
+
+def _crear_cuenta_rapida_cobranza(empresa_id, medio_codigo):
+    codigo = _texto_upper(medio_codigo)
+
+    if codigo == "EFECTIVO":
+        if st.button("Crear Caja principal", use_container_width=True, key="cobranzas_crear_caja"):
+            crear_cuenta_tesoreria(
+                empresa_id=empresa_id,
+                tipo_cuenta="CAJA",
+                nombre="Caja principal",
+                moneda="ARS",
+                cuenta_contable_nombre="Caja principal",
+            )
+            st.success("Caja principal creada.")
+            st.rerun()
+        return
+
+    if codigo in {"TRANSFERENCIA", "TARJETA", "BILLETERA", "DEBITO_AUTOMATICO"}:
+        if st.button("Crear Banco principal", use_container_width=True, key="cobranzas_crear_banco"):
+            crear_cuenta_tesoreria(
+                empresa_id=empresa_id,
+                tipo_cuenta="BANCO",
+                nombre="Banco principal",
+                entidad="Banco",
+                moneda="ARS",
+                cuenta_contable_nombre="Banco principal",
+            )
+            st.success("Banco principal creado.")
+            st.rerun()
+        return
+
+    if codigo in {"CHEQUE", "ECHEQ"}:
+        if st.button("Crear Valores a depositar", use_container_width=True, key="cobranzas_crear_valores"):
+            crear_cuenta_tesoreria(
+                empresa_id=empresa_id,
+                tipo_cuenta="VALORES",
+                nombre="Valores a depositar",
+                moneda="ARS",
+                cuenta_contable_nombre="Valores a depositar",
+            )
+            st.success("Cuenta de valores creada.")
+            st.rerun()
 
 
 def _preparar_pendientes_editor(df):
@@ -147,8 +328,8 @@ def mostrar_registrar_cobranza():
     empresa_id = empresa_actual_id()
 
     st.info(
-        "Registrá cobranzas de clientes contra Caja, Banco o Billetera. "
-        "La cobranza cancela cuenta corriente y deja una operación pendiente de conciliación en Tesorería."
+        "Primero elegí el medio de pago. El sistema muestra solo las cuentas compatibles "
+        "y aclara si la operación impacta Caja o queda en Tesorería/Banco."
     )
 
     clientes = obtener_clientes_con_saldo_pendiente(empresa_id=empresa_id)
@@ -158,30 +339,14 @@ def mostrar_registrar_cobranza():
         return
 
     cuentas = obtener_cuentas_cobranza(empresa_id=empresa_id)
-
-    if cuentas.empty:
-        st.warning(
-            "Todavía no hay cuentas de Tesorería para recibir cobranzas. "
-            "Podés crear una Caja principal rápida para empezar."
-        )
-
-        if st.button("Crear Caja principal", use_container_width=True):
-            crear_cuenta_tesoreria(
-                empresa_id=empresa_id,
-                tipo_cuenta="CAJA",
-                nombre="Caja principal",
-                moneda="ARS",
-                cuenta_contable_nombre="Caja principal",
-            )
-            st.success("Caja principal creada.")
-            st.rerun()
-
-        return
-
     medios = asegurar_medios_pago_basicos(empresa_id=empresa_id)
 
+    if medios is None or medios.empty:
+        st.error("No hay medios de pago configurados.")
+        return
+
     clientes_labels = [_etiqueta_cliente(row) for _, row in clientes.iterrows()]
-    cliente_sel = st.selectbox("Cliente", clientes_labels)
+    cliente_sel = st.selectbox("Cliente", clientes_labels, key="cobranzas_cliente_select")
 
     idx_cliente = clientes_labels.index(cliente_sel)
     cliente_row = clientes.iloc[idx_cliente].to_dict()
@@ -237,21 +402,46 @@ def mostrar_registrar_cobranza():
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        fecha_cobranza = st.date_input("Fecha de cobranza")
+        fecha_cobranza = st.date_input("Fecha de cobranza", format="DD/MM/YYYY", key="cobranzas_fecha")
 
     with col2:
-        fecha_contable = st.date_input("Fecha contable", value=fecha_cobranza)
+        fecha_contable = st.date_input(
+            "Fecha contable",
+            value=fecha_cobranza,
+            format="DD/MM/YYYY",
+            key="cobranzas_fecha_contable",
+        )
 
     with col3:
-        referencia = st.text_input("Referencia / comprobante externo")
+        referencia = st.text_input("Referencia / comprobante externo", key="cobranzas_referencia")
 
-    cuentas_labels = [_etiqueta_cuenta(row) for _, row in cuentas.iterrows()]
-    cuenta_sel = st.selectbox("Cuenta destino", cuentas_labels)
-    cuenta_id = int(cuentas.iloc[cuentas_labels.index(cuenta_sel)]["id"])
+    st.subheader("Medio de cobro y cuenta destino")
 
     medios_labels = [_etiqueta_medio(row) for _, row in medios.iterrows()]
-    medio_sel = st.selectbox("Medio de pago", medios_labels)
+    medio_sel = st.selectbox("Medio de pago", medios_labels, key="cobranzas_medio_select")
     medio_codigo = str(medios.iloc[medios_labels.index(medio_sel)]["codigo"])
+
+    cuentas_compatibles = _filtrar_cuentas_por_medio(cuentas, medio_codigo)
+
+    if cuentas_compatibles.empty:
+        st.warning(
+            "No hay cuentas compatibles para el medio de pago seleccionado. "
+            "Creá una cuenta adecuada para continuar."
+        )
+        _crear_cuenta_rapida_cobranza(empresa_id, medio_codigo)
+        return
+
+    cuentas_labels = [_etiqueta_cuenta(row) for _, row in cuentas_compatibles.iterrows()]
+    cuenta_sel = st.selectbox(
+        _label_cuenta_destino_cobranza(medio_codigo),
+        cuentas_labels,
+        key="cobranzas_cuenta_select",
+    )
+
+    cuenta_row = cuentas_compatibles.iloc[cuentas_labels.index(cuenta_sel)].to_dict()
+    cuenta_id = int(cuenta_row["id"])
+
+    _mostrar_impacto_cobranza(medio_codigo, cuenta_row)
 
     st.subheader("Importes")
 
@@ -259,20 +449,21 @@ def mostrar_registrar_cobranza():
 
     with c1:
         importe_recibido = st.number_input(
-            "Importe recibido en Caja/Banco",
+            _label_importe_recibido_cobranza(medio_codigo),
             min_value=0.0,
             value=float(importe_imputado),
             step=0.01,
+            key="cobranzas_importe_recibido",
         )
 
     with c2:
-        ret_iibb = st.number_input("Retención IIBB sufrida", min_value=0.0, value=0.0, step=0.01)
+        ret_iibb = st.number_input("Retención IIBB sufrida", min_value=0.0, value=0.0, step=0.01, key="cobranzas_ret_iibb")
 
     with c3:
-        ret_ganancias = st.number_input("Retención Ganancias sufrida", min_value=0.0, value=0.0, step=0.01)
+        ret_ganancias = st.number_input("Retención Ganancias sufrida", min_value=0.0, value=0.0, step=0.01, key="cobranzas_ret_ganancias")
 
     with c4:
-        ret_iva = st.number_input("Retención IVA sufrida", min_value=0.0, value=0.0, step=0.01)
+        ret_iva = st.number_input("Retención IVA sufrida", min_value=0.0, value=0.0, step=0.01, key="cobranzas_ret_iva")
 
     retenciones_total = round(ret_iibb + ret_ganancias + ret_iva, 2)
     total_aplicado = round(importe_recibido + retenciones_total, 2)
@@ -288,6 +479,7 @@ def mostrar_registrar_cobranza():
     descripcion = st.text_area(
         "Descripción",
         value=f"Cobranza cliente {cliente}",
+        key="cobranzas_descripcion",
     )
 
     st.caption(
@@ -295,7 +487,7 @@ def mostrar_registrar_cobranza():
         "del cliente. Si es menor, se registra una cobranza parcial."
     )
 
-    if st.button("Confirmar cobranza", type="primary", use_container_width=True):
+    if st.button("Confirmar cobranza", type="primary", use_container_width=True, key="cobranzas_confirmar"):
         imputaciones = []
 
         for _, row in seleccionados.iterrows():
@@ -408,7 +600,7 @@ def mostrar_historial_cobranzas():
 
     st.subheader("Historial de cobranzas")
 
-    incluir_anuladas = st.checkbox("Incluir anuladas", value=True)
+    incluir_anuladas = st.checkbox("Incluir anuladas", value=True, key="cobranzas_incluir_anuladas")
 
     historial = obtener_historial_cobranzas(
         empresa_id=empresa_id,
@@ -445,11 +637,11 @@ def mostrar_historial_cobranzas():
         return
 
     labels = [label for _, label in opciones]
-    seleccionado = st.selectbox("Cobranza a anular", labels)
+    seleccionado = st.selectbox("Cobranza a anular", labels, key="cobranzas_anular_select")
 
     cobranza_id = opciones[labels.index(seleccionado)][0]
 
-    motivo = st.text_input("Motivo de anulación")
+    motivo = st.text_input("Motivo de anulación", key="cobranzas_motivo_anulacion")
 
     permitir_conciliada = False
 
@@ -457,9 +649,10 @@ def mostrar_historial_cobranzas():
         permitir_conciliada = st.checkbox(
             "Permitir anulación aunque esté conciliada",
             value=False,
+            key="cobranzas_permitir_conciliada",
         )
 
-    if st.button("Anular cobranza", use_container_width=True):
+    if st.button("Anular cobranza", use_container_width=True, key="cobranzas_anular_boton"):
         resultado = anular_cobranza(
             cobranza_id=cobranza_id,
             empresa_id=empresa_id,

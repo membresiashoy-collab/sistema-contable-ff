@@ -24,6 +24,18 @@ from services.tesoreria_service import (
 # UTILIDADES
 # ======================================================
 
+MEDIOS_CUENTAS_COMPATIBLES = {
+    "EFECTIVO": {"CAJA"},
+    "TRANSFERENCIA": {"BANCO"},
+    "DEBITO_AUTOMATICO": {"BANCO"},
+    "TARJETA": {"BANCO", "TARJETA"},
+    "BILLETERA": {"BANCO", "BILLETERA"},
+    "CHEQUE": {"VALORES", "BANCO"},
+    "ECHEQ": {"VALORES", "BANCO"},
+    "OTRO": {"BANCO", "BILLETERA", "TARJETA", "VALORES", "OTRO"},
+}
+
+
 def empresa_actual_id():
     return int(st.session_state.get("empresa_id", 1))
 
@@ -66,6 +78,10 @@ def _texto(valor):
     return str(valor).strip()
 
 
+def _texto_upper(valor):
+    return _texto(valor).upper()
+
+
 def _etiqueta_proveedor(row):
     proveedor = _texto(row.get("proveedor"))
     cuit = _texto(row.get("cuit"))
@@ -91,6 +107,168 @@ def _etiqueta_cuenta(row):
 
 def _etiqueta_medio(row):
     return f"{row.get('codigo')} | {row.get('nombre')}"
+
+
+def _tipos_compatibles_por_medio(medio_codigo):
+    codigo = _texto_upper(medio_codigo)
+    return MEDIOS_CUENTAS_COMPATIBLES.get(
+        codigo,
+        {"BANCO", "BILLETERA", "TARJETA", "VALORES", "OTRO"},
+    )
+
+
+def _filtrar_cuentas_por_medio(cuentas, medio_codigo):
+    if cuentas is None or cuentas.empty:
+        return pd.DataFrame()
+
+    if "tipo_cuenta" not in cuentas.columns:
+        return pd.DataFrame()
+
+    tipos_compatibles = _tipos_compatibles_por_medio(medio_codigo)
+
+    return cuentas[
+        cuentas["tipo_cuenta"].astype(str).str.upper().isin(tipos_compatibles)
+    ].copy()
+
+
+def _label_cuenta_origen_pago(medio_codigo):
+    codigo = _texto_upper(medio_codigo)
+
+    if codigo == "EFECTIVO":
+        return "Caja / sucursal desde donde salió el efectivo"
+
+    if codigo == "TRANSFERENCIA":
+        return "Banco origen de la transferencia"
+
+    if codigo == "DEBITO_AUTOMATICO":
+        return "Banco origen del débito automático"
+
+    if codigo == "TARJETA":
+        return "Banco, tarjeta o cuenta puente utilizada"
+
+    if codigo == "BILLETERA":
+        return "Banco o billetera / procesador utilizado"
+
+    if codigo in {"CHEQUE", "ECHEQ"}:
+        return "Cuenta de valores o banco emisor"
+
+    return "Cuenta origen compatible"
+
+
+def _label_importe_pagado(medio_codigo):
+    codigo = _texto_upper(medio_codigo)
+
+    if codigo == "EFECTIVO":
+        return "Importe pagado en efectivo"
+
+    if codigo == "TRANSFERENCIA":
+        return "Importe transferido"
+
+    if codigo == "DEBITO_AUTOMATICO":
+        return "Importe debitado"
+
+    if codigo == "TARJETA":
+        return "Importe pagado con tarjeta"
+
+    if codigo == "BILLETERA":
+        return "Importe pagado por billetera"
+
+    if codigo in {"CHEQUE", "ECHEQ"}:
+        return "Importe pagado con cheque / eCheq"
+
+    return "Importe pagado"
+
+
+def _mostrar_impacto_pago(medio_codigo, cuenta_row):
+    codigo = _texto_upper(medio_codigo)
+    nombre = _texto(cuenta_row.get("nombre"))
+    tipo_cuenta = _texto_upper(cuenta_row.get("tipo_cuenta"))
+
+    if codigo == "EFECTIVO":
+        st.success(
+            f"Impacto: este pago saldrá de Caja ({nombre}) "
+            "y aparecerá automáticamente en el módulo Caja como PAGO_EFECTIVO."
+        )
+        return
+
+    if codigo == "TRANSFERENCIA":
+        st.info(
+            "Impacto: este pago NO mueve Caja. "
+            "Queda en Tesorería/Banco pendiente de conciliación bancaria."
+        )
+        return
+
+    if codigo == "TARJETA":
+        st.info(
+            "Impacto: este pago NO mueve Caja. "
+            "Se registra el medio tarjeta y luego se controla la liquidación/acreditación."
+        )
+        return
+
+    if codigo == "BILLETERA":
+        st.info(
+            "Impacto: este pago NO mueve Caja. "
+            "Se registra el medio billetera y luego se controla el movimiento bancario o del procesador."
+        )
+        return
+
+    if codigo in {"CHEQUE", "ECHEQ"}:
+        st.info(
+            "Impacto: este pago NO mueve Caja. "
+            "Queda como valor o banco para control posterior."
+        )
+        return
+
+    if tipo_cuenta == "BANCO":
+        st.info(
+            "Impacto: este pago queda en Tesorería/Banco y no genera movimiento de Caja."
+        )
+        return
+
+    st.info("Impacto: este pago queda registrado según la cuenta de Tesorería seleccionada.")
+
+
+def _crear_cuenta_rapida_pago(empresa_id, medio_codigo):
+    codigo = _texto_upper(medio_codigo)
+
+    if codigo == "EFECTIVO":
+        if st.button("Crear Caja principal para pagos", use_container_width=True, key="pagos_crear_caja"):
+            crear_cuenta_tesoreria(
+                empresa_id=empresa_id,
+                tipo_cuenta="CAJA",
+                nombre="Caja principal",
+                moneda="ARS",
+                cuenta_contable_nombre="Caja principal",
+            )
+            st.success("Caja principal creada.")
+            st.rerun()
+        return
+
+    if codigo in {"TRANSFERENCIA", "TARJETA", "BILLETERA", "DEBITO_AUTOMATICO"}:
+        if st.button("Crear Banco principal para pagos", use_container_width=True, key="pagos_crear_banco"):
+            crear_cuenta_tesoreria(
+                empresa_id=empresa_id,
+                tipo_cuenta="BANCO",
+                nombre="Banco principal",
+                entidad="Banco",
+                moneda="ARS",
+                cuenta_contable_nombre="Banco principal",
+            )
+            st.success("Banco principal creado.")
+            st.rerun()
+        return
+
+    if codigo in {"CHEQUE", "ECHEQ"}:
+        if st.button("Crear Valores para pagos", use_container_width=True, key="pagos_crear_valores"):
+            crear_cuenta_tesoreria(
+                empresa_id=empresa_id,
+                tipo_cuenta="VALORES",
+                nombre="Valores",
+                moneda="ARS",
+                cuenta_contable_nombre="Valores",
+            )
+            st.success("Cuenta de valores creada.")
+            st.rerun()
 
 
 def _preparar_pendientes_editor(df):
@@ -150,8 +328,8 @@ def mostrar_registrar_pago():
     empresa_id = empresa_actual_id()
 
     st.info(
-        "Registrá pagos a proveedores contra Caja, Banco o Billetera. "
-        "El pago cancela cuenta corriente y deja una operación pendiente de conciliación en Tesorería."
+        "Primero elegí el medio de pago. El sistema muestra solo las cuentas compatibles "
+        "y aclara si la operación impacta Caja o queda en Tesorería/Banco."
     )
 
     proveedores = obtener_proveedores_con_saldo_pendiente(empresa_id=empresa_id)
@@ -161,27 +339,11 @@ def mostrar_registrar_pago():
         return
 
     cuentas = obtener_cuentas_pago(empresa_id=empresa_id)
-
-    if cuentas.empty:
-        st.warning(
-            "Todavía no hay cuentas de Tesorería para realizar pagos. "
-            "Podés crear una Caja principal rápida para empezar."
-        )
-
-        if st.button("Crear Caja principal para pagos", use_container_width=True):
-            crear_cuenta_tesoreria(
-                empresa_id=empresa_id,
-                tipo_cuenta="CAJA",
-                nombre="Caja principal",
-                moneda="ARS",
-                cuenta_contable_nombre="Caja principal",
-            )
-            st.success("Caja principal creada.")
-            st.rerun()
-
-        return
-
     medios = asegurar_medios_pago_basicos(empresa_id=empresa_id)
+
+    if medios is None or medios.empty:
+        st.error("No hay medios de pago configurados.")
+        return
 
     proveedores_labels = [_etiqueta_proveedor(row) for _, row in proveedores.iterrows()]
     proveedor_sel = st.selectbox("Proveedor", proveedores_labels, key="pagos_proveedor_select")
@@ -240,21 +402,46 @@ def mostrar_registrar_pago():
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        fecha_pago = st.date_input("Fecha de pago", key="pagos_fecha_pago")
+        fecha_pago = st.date_input("Fecha de pago", format="DD/MM/YYYY", key="pagos_fecha_pago")
 
     with col2:
-        fecha_contable = st.date_input("Fecha contable", value=fecha_pago, key="pagos_fecha_contable")
+        fecha_contable = st.date_input(
+            "Fecha contable",
+            value=fecha_pago,
+            format="DD/MM/YYYY",
+            key="pagos_fecha_contable",
+        )
 
     with col3:
         referencia = st.text_input("Referencia / comprobante externo", key="pagos_referencia")
 
-    cuentas_labels = [_etiqueta_cuenta(row) for _, row in cuentas.iterrows()]
-    cuenta_sel = st.selectbox("Cuenta origen", cuentas_labels, key="pagos_cuenta_select")
-    cuenta_id = int(cuentas.iloc[cuentas_labels.index(cuenta_sel)]["id"])
+    st.subheader("Medio de pago y cuenta origen")
 
     medios_labels = [_etiqueta_medio(row) for _, row in medios.iterrows()]
     medio_sel = st.selectbox("Medio de pago", medios_labels, key="pagos_medio_select")
     medio_codigo = str(medios.iloc[medios_labels.index(medio_sel)]["codigo"])
+
+    cuentas_compatibles = _filtrar_cuentas_por_medio(cuentas, medio_codigo)
+
+    if cuentas_compatibles.empty:
+        st.warning(
+            "No hay cuentas compatibles para el medio de pago seleccionado. "
+            "Creá una cuenta adecuada para continuar."
+        )
+        _crear_cuenta_rapida_pago(empresa_id, medio_codigo)
+        return
+
+    cuentas_labels = [_etiqueta_cuenta(row) for _, row in cuentas_compatibles.iterrows()]
+    cuenta_sel = st.selectbox(
+        _label_cuenta_origen_pago(medio_codigo),
+        cuentas_labels,
+        key="pagos_cuenta_select",
+    )
+
+    cuenta_row = cuentas_compatibles.iloc[cuentas_labels.index(cuenta_sel)].to_dict()
+    cuenta_id = int(cuenta_row["id"])
+
+    _mostrar_impacto_pago(medio_codigo, cuenta_row)
 
     st.subheader("Importes")
 
@@ -262,7 +449,7 @@ def mostrar_registrar_pago():
 
     with c1:
         importe_pagado = st.number_input(
-            "Importe pagado desde Caja/Banco",
+            _label_importe_pagado(medio_codigo),
             min_value=0.0,
             value=float(importe_imputado),
             step=0.01,
