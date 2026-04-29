@@ -15,6 +15,11 @@ from core.ui import (
     mostrar_sidebar_marca,
 )
 
+from core.ui_state import (
+    obtener_resumen_limpieza,
+    preparar_cambio_modulo,
+)
+
 from services.seguridad_service import (
     inicializar_seguridad,
     login_usuario,
@@ -52,10 +57,6 @@ aplicar_estilos_globales()
 # ======================================================
 # FLAGS DE DESARROLLO
 # ======================================================
-# En Codespaces conviene mantener la recarga activa.
-# Si más adelante se usa en producción y se quiere desactivar:
-# export SISTEMA_CONTABLE_RECARGA_MODULOS=0
-# export SISTEMA_CONTABLE_MOSTRAR_DIAGNOSTICO=0
 
 RECARGAR_MODULOS_DESARROLLO = (
     os.getenv("SISTEMA_CONTABLE_RECARGA_MODULOS", "1").strip() != "0"
@@ -88,6 +89,14 @@ MODULOS_UI = {
         "descripcion": (
             "Carga de ventas, Libro IVA Ventas, estadísticas comerciales "
             "y cuenta corriente de clientes."
+        ),
+    },
+    "Cobranzas": {
+        "icono": "💵",
+        "titulo": "Cobranzas",
+        "descripcion": (
+            "Registro de cobranzas de clientes, imputación contra cuenta corriente, "
+            "retenciones sufridas y operaciones pendientes de conciliación."
         ),
     },
     "Compras": {
@@ -154,6 +163,15 @@ MODULOS_RENDER = {
         "funcion": "mostrar_ventas",
         "dependencias": [
             "modulos.ventas",
+        ],
+    },
+    "Cobranzas": {
+        "modulo": "modulos.cobranzas",
+        "funcion": "mostrar_cobranzas",
+        "dependencias": [
+            "services.tesoreria_service",
+            "services.cobranzas_service",
+            "modulos.cobranzas",
         ],
     },
     "Compras": {
@@ -345,6 +363,15 @@ def mostrar_diagnostico_tecnico_sidebar(menu, modulo=None):
         st.caption(f"Recarga módulos: `{RECARGAR_MODULOS_DESARROLLO}`")
         st.caption(f"DB: `{obtener_ruta_base_datos()}`")
 
+        limpieza = obtener_resumen_limpieza(st.session_state)
+
+        if limpieza:
+            st.caption(
+                "UI última limpieza: "
+                f"`{limpieza.get('desde', '')}` → `{limpieza.get('hacia', '')}`"
+            )
+            st.caption(f"UI claves limpiadas: `{limpieza.get('cantidad', 0)}`")
+
         if modulo is not None:
             try:
                 ruta = Path(inspect.getfile(modulo)).resolve()
@@ -445,6 +472,15 @@ def iniciar_estado():
     if "session_token" not in st.session_state:
         st.session_state["session_token"] = ""
 
+    if "menu_actual" not in st.session_state:
+        st.session_state["menu_actual"] = "Ventas"
+
+    if "ui_modulo_activo" not in st.session_state:
+        st.session_state["ui_modulo_activo"] = st.session_state.get("menu_actual", "Ventas")
+
+    if "ui_estado_version" not in st.session_state:
+        st.session_state["ui_estado_version"] = 1
+
 
 def cargar_usuario_en_estado(datos_usuario, empresa_id_preferida=None):
     st.session_state["autenticado"] = True
@@ -535,6 +571,12 @@ def refrescar_permisos_usuario_actual():
     st.session_state["permisos"] = obtener_permisos_usuario(usuario["id"])
 
 
+def usuario_es_administrador():
+    usuario = st.session_state.get("usuario") or {}
+    rol = str(usuario.get("rol", "")).strip().upper()
+    return rol in {"ADMINISTRADOR", "ADMIN", "SUPERADMIN"}
+
+
 # ======================================================
 # LOGIN
 # ======================================================
@@ -585,6 +627,18 @@ def pantalla_login():
                 st.rerun()
 
 
+def _cambiar_password_seguro(usuario_id, nueva_password):
+    try:
+        resultado = cambiar_password(usuario_id, nueva_password)
+    except TypeError:
+        resultado = cambiar_password(
+            usuario_id=usuario_id,
+            nueva_password=nueva_password,
+        )
+
+    return resultado
+
+
 def pantalla_cambio_password():
     usuario = st.session_state["usuario"]
 
@@ -618,157 +672,226 @@ def pantalla_cambio_password():
                     st.warning("Las contraseñas no coinciden.")
 
                 elif len(nueva) < 8:
-                    st.warning("Usá una contraseña de al menos 8 caracteres.")
+                    st.warning("La contraseña debe tener al menos 8 caracteres.")
 
                 else:
-                    cambiar_password(usuario["id"], nueva)
-                    st.success("Contraseña actualizada. Volvé a ingresar.")
-                    cerrar_sesion_actual()
+                    resultado = _cambiar_password_seguro(usuario["id"], nueva)
+
+                    if resultado is False:
+                        st.error("No se pudo cambiar la contraseña.")
+                        return True
+
+                    st.success("Contraseña actualizada correctamente.")
+
+                    st.session_state["usuario"]["debe_cambiar_password"] = 0
+                    refrescar_permisos_usuario_actual()
+
+                    st.rerun()
 
     return True
 
 
 # ======================================================
-# EMPRESA ACTIVA
+# SIDEBAR / NAVEGACIÓN
 # ======================================================
 
-def selector_empresa_sidebar():
-    usuario = st.session_state["usuario"]
-    empresas = obtener_empresas_usuario(usuario["id"])
+def obtener_menus_disponibles():
+    menus = list(MODULOS_UI.keys())
 
-    if empresas.empty:
-        st.sidebar.error("El usuario no tiene empresas asignadas.")
+    if usuario_es_administrador():
+        return menus
+
+    return [menu for menu in menus if menu != "Seguridad"]
+
+
+def mostrar_selector_empresa_sidebar():
+    usuario = st.session_state.get("usuario")
+
+    if not usuario:
         return
-
-    opciones = empresas["id"].tolist()
-    empresa_actual = st.session_state.get("empresa_id", opciones[0])
-
-    if empresa_actual not in opciones:
-        empresa_actual = opciones[0]
-
-    seleccion = st.sidebar.selectbox(
-        "Empresa activa",
-        opciones,
-        index=opciones.index(empresa_actual),
-        format_func=lambda x: empresas[empresas["id"] == x].iloc[0]["nombre"],
-    )
-
-    fila = empresas[empresas["id"] == seleccion].iloc[0]
-
-    st.session_state["empresa_id"] = int(fila["id"])
-    st.session_state["empresa_nombre"] = str(fila["nombre"])
-
-    actualizar_empresa_sesion(
-        st.session_state.get("session_token", ""),
-        int(fila["id"]),
-    )
-
-
-# ======================================================
-# MENÚ PRINCIPAL
-# ======================================================
-
-def obtener_opciones_menu():
-    opciones = []
-
-    if tiene_permiso("ventas.ver"):
-        opciones.append("Ventas")
-
-    if tiene_permiso("compras.ver"):
-        opciones.append("Compras")
-
-    if tiene_permiso("bancos.ver"):
-        opciones.append("Banco / Caja")
-
-    if tiene_permiso("iva.ver"):
-        opciones.append("IVA")
-
-    if tiene_permiso("diario.ver"):
-        opciones.append("Contabilidad")
-
-    if tiene_permiso("auditoria.ver"):
-        opciones.append("Estado de Cargas")
-
-    if tiene_permiso("configuracion.ver"):
-        opciones.append("Configuración")
-
-    if tiene_permiso("seguridad.ver"):
-        opciones.append("Seguridad")
-
-    return opciones
-
-
-def renderizar_modulo(menu):
-    if menu == "Banco / Caja":
-        inicializar_bancos()
 
     try:
-        modulo, funcion = cargar_modulo_render(menu)
-        funcion()
-        return modulo
+        empresas = obtener_empresas_usuario(usuario["id"])
+    except Exception:
+        empresas = None
 
-    except ModuleNotFoundError:
-        st.warning(f"El módulo {menu} todavía no está disponible.")
-        return None
-
-    except Exception as e:
-        st.error(f"No se pudo renderizar el módulo {menu}: {e}")
-        raise
-
-
-def menu_principal():
-    refrescar_permisos_usuario_actual()
-
-    usuario = st.session_state["usuario"]
-
-    mostrar_sidebar_marca(
-        usuario=usuario["usuario"],
-        rol=usuario["rol"],
-    )
-
-    selector_empresa_sidebar()
-
-    opciones = obtener_opciones_menu()
-
-    if not opciones:
-        st.error("Tu usuario no tiene permisos asignados.")
+    if empresas is None or empresas.empty:
+        st.sidebar.caption("Empresa activa")
+        st.sidebar.info(st.session_state.get("empresa_nombre", "Empresa Demo"))
         return
 
-    st.sidebar.markdown("#### Navegación")
+    opciones = []
+
+    for _, fila in empresas.iterrows():
+        opciones.append(
+            {
+                "id": int(fila["id"]),
+                "nombre": str(fila["nombre"]),
+            }
+        )
+
+    ids = [op["id"] for op in opciones]
+    labels = [op["nombre"] for op in opciones]
+
+    empresa_actual = int(st.session_state.get("empresa_id", ids[0]))
+
+    try:
+        index_actual = ids.index(empresa_actual)
+    except ValueError:
+        index_actual = 0
+
+    st.sidebar.caption("Empresa activa")
+
+    seleccion = st.sidebar.selectbox(
+        "Empresa",
+        labels,
+        index=index_actual,
+        label_visibility="collapsed",
+        key="selector_empresa_activa",
+    )
+
+    nueva_empresa_id = ids[labels.index(seleccion)]
+    nueva_empresa_nombre = seleccion
+
+    if nueva_empresa_id != empresa_actual:
+        st.session_state["empresa_id"] = nueva_empresa_id
+        st.session_state["empresa_nombre"] = nueva_empresa_nombre
+
+        token = st.session_state.get("session_token", "")
+
+        if token:
+            try:
+                actualizar_empresa_sesion(token, nueva_empresa_id)
+            except TypeError:
+                actualizar_empresa_sesion(
+                    token=token,
+                    empresa_id=nueva_empresa_id,
+                )
+            except Exception:
+                pass
+
+        st.rerun()
+
+
+def mostrar_sidebar_usuario():
+    usuario = st.session_state.get("usuario") or {}
+    nombre = str(usuario.get("nombre") or usuario.get("usuario") or "Usuario")
+    rol = str(usuario.get("rol") or "").upper()
+
+    st.sidebar.markdown(
+        f"""
+        <div style="
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 14px;
+            padding: 14px;
+            margin-bottom: 14px;
+            background: rgba(15, 23, 42, 0.35);
+        ">
+            <div style="font-weight: 700;">👤 {nombre}</div>
+            <div style="font-size: 12px; opacity: 0.8; margin-top: 6px;">
+                Rol: {rol}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def mostrar_sidebar_navegacion():
+    try:
+        mostrar_sidebar_marca()
+    except TypeError:
+        try:
+            mostrar_sidebar_marca(titulo="Sistema Contable FF")
+        except Exception:
+            st.sidebar.markdown("### Sistema Contable FF")
+            st.sidebar.caption(
+                "Contabilidad, IVA, compras, ventas, bancos y auditoría en un flujo integrado."
+            )
+    except Exception:
+        st.sidebar.markdown("### Sistema Contable FF")
+        st.sidebar.caption(
+            "Contabilidad, IVA, compras, ventas, bancos y auditoría en un flujo integrado."
+        )
+
+    mostrar_sidebar_usuario()
+    mostrar_selector_empresa_sidebar()
+
+    st.sidebar.markdown("### Navegación")
+    st.sidebar.caption("Ir a:")
+
+    menus = obtener_menus_disponibles()
+
+    menu_actual = st.session_state.get("menu_actual", "Ventas")
+
+    if menu_actual not in menus:
+        menu_actual = menus[0]
+
+    index_actual = menus.index(menu_actual)
 
     menu = st.sidebar.radio(
-        "Ir a:",
-        opciones,
-        key="menu_principal_modulo",
+        "Módulos",
+        menus,
+        index=index_actual,
+        label_visibility="collapsed",
+        key="radio_menu_principal",
     )
+
+    st.session_state["menu_actual"] = menu
 
     st.sidebar.divider()
 
     if st.sidebar.button("Cerrar sesión", use_container_width=True):
         cerrar_sesion_actual()
 
-    mostrar_encabezado_modulo(menu)
-
-    modulo_renderizado = renderizar_modulo(menu)
-
-    mostrar_diagnostico_tecnico_sidebar(
-        menu=menu,
-        modulo=modulo_renderizado,
-    )
+    return menu
 
 
 # ======================================================
-# EJECUCIÓN
+# APLICACIÓN PRINCIPAL
 # ======================================================
 
-iniciar_estado()
-restaurar_sesion_desde_url()
+def ejecutar_modulo(menu):
+    modulo = None
 
-if not st.session_state["autenticado"]:
-    pantalla_login()
-else:
-    if validar_sesion_actual():
-        if not pantalla_cambio_password():
-            menu_principal()
-    else:
+    try:
+        modulo, funcion = cargar_modulo_render(menu)
+
+        mostrar_encabezado_modulo(menu)
+
+        funcion()
+
+    except Exception as e:
+        mostrar_encabezado_modulo(menu)
+
+        st.error("No se pudo cargar el módulo seleccionado.")
+        st.exception(e)
+
+    finally:
+        mostrar_diagnostico_tecnico_sidebar(menu, modulo=modulo)
+
+
+def main():
+    iniciar_estado()
+    restaurar_sesion_desde_url()
+
+    if not st.session_state.get("autenticado"):
         pantalla_login()
+        return
+
+    if not validar_sesion_actual():
+        pantalla_login()
+        return
+
+    if pantalla_cambio_password():
+        return
+
+    menu = mostrar_sidebar_navegacion()
+
+    if preparar_cambio_modulo(st.session_state, menu):
+        st.rerun()
+
+    ejecutar_modulo(menu)
+
+
+main()
