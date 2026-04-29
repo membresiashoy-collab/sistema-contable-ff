@@ -1,3 +1,10 @@
+import hashlib
+import importlib
+import inspect
+import os
+import subprocess
+from pathlib import Path
+
 import streamlit as st
 
 from database import init_db
@@ -13,7 +20,7 @@ from services.seguridad_service import (
     login_usuario,
     obtener_permisos_usuario,
     obtener_empresas_usuario,
-    cambiar_password
+    cambiar_password,
 )
 
 from services.sesion_service import (
@@ -23,22 +30,45 @@ from services.sesion_service import (
     actualizar_actividad,
     actualizar_empresa_sesion,
     cerrar_sesion,
-    limpiar_sesiones_vencidas
+    limpiar_sesiones_vencidas,
 )
 
 from services.bancos_service import inicializar_bancos
 
-from modulos import ventas, compras, bancos, reportes, auditoria, configuracion, seguridad
 
+# ======================================================
+# CONFIGURACIÓN GENERAL
+# ======================================================
 
 st.set_page_config(
     page_title="Sistema Contable FF",
     page_icon="📘",
-    layout="wide"
+    layout="wide",
+)
+
+aplicar_estilos_globales()
+
+
+# ======================================================
+# FLAGS DE DESARROLLO
+# ======================================================
+# En Codespaces conviene mantener la recarga activa.
+# Si más adelante se usa en producción y se quiere desactivar:
+# export SISTEMA_CONTABLE_RECARGA_MODULOS=0
+# export SISTEMA_CONTABLE_MOSTRAR_DIAGNOSTICO=0
+
+RECARGAR_MODULOS_DESARROLLO = (
+    os.getenv("SISTEMA_CONTABLE_RECARGA_MODULOS", "1").strip() != "0"
+)
+
+MOSTRAR_DIAGNOSTICO_TECNICO = (
+    os.getenv("SISTEMA_CONTABLE_MOSTRAR_DIAGNOSTICO", "1").strip() != "0"
 )
 
 
-aplicar_estilos_globales()
+# ======================================================
+# INICIALIZACIÓN GENERAL
+# ======================================================
 
 init_db()
 inicializar_seguridad()
@@ -47,6 +77,10 @@ inicializar_tabla_sesiones()
 limpiar_sesiones_vencidas()
 
 
+# ======================================================
+# CONFIGURACIÓN CENTRAL DE MÓDULOS
+# ======================================================
+
 MODULOS_UI = {
     "Ventas": {
         "icono": "📤",
@@ -54,7 +88,7 @@ MODULOS_UI = {
         "descripcion": (
             "Carga de ventas, Libro IVA Ventas, estadísticas comerciales "
             "y cuenta corriente de clientes."
-        )
+        ),
     },
     "Compras": {
         "icono": "📥",
@@ -62,7 +96,7 @@ MODULOS_UI = {
         "descripcion": (
             "Carga de compras, clasificación contable por proveedor, "
             "Libro IVA Compras y cuenta corriente de proveedores."
-        )
+        ),
     },
     "Banco / Caja": {
         "icono": "🏦",
@@ -70,7 +104,7 @@ MODULOS_UI = {
         "descripcion": (
             "Importación flexible de extractos bancarios, control de saldos, "
             "gastos bancarios, reglas recurrentes y base para conciliación."
-        )
+        ),
     },
     "IVA": {
         "icono": "🧾",
@@ -78,7 +112,7 @@ MODULOS_UI = {
         "descripcion": (
             "Control de posición mensual de IVA, débito fiscal, crédito fiscal, "
             "percepciones, retenciones y saldos técnicos."
-        )
+        ),
     },
     "Contabilidad": {
         "icono": "📚",
@@ -86,7 +120,7 @@ MODULOS_UI = {
         "descripcion": (
             "Libros y reportes contables: Libro Diario, Libro Mayor, "
             "Balance de Sumas y Saldos y control por origen/archivo."
-        )
+        ),
     },
     "Estado de Cargas": {
         "icono": "📋",
@@ -94,7 +128,7 @@ MODULOS_UI = {
         "descripcion": (
             "Auditoría de archivos procesados, errores, advertencias, "
             "eliminación controlada de cargas y backups."
-        )
+        ),
     },
     "Configuración": {
         "icono": "⚙️",
@@ -102,17 +136,229 @@ MODULOS_UI = {
         "descripcion": (
             "Parámetros base del sistema, categorías, cuentas contables, "
             "conceptos fiscales, datos maestros y configuraciones generales."
-        )
+        ),
     },
     "Seguridad": {
         "icono": "🔐",
         "titulo": "Seguridad",
         "descripcion": (
             "Usuarios, roles, permisos y control de acceso al sistema."
-        )
-    }
+        ),
+    },
 }
 
+
+MODULOS_RENDER = {
+    "Ventas": {
+        "modulo": "modulos.ventas",
+        "funcion": "mostrar_ventas",
+        "dependencias": [
+            "modulos.ventas",
+        ],
+    },
+    "Compras": {
+        "modulo": "modulos.compras",
+        "funcion": "mostrar_compras",
+        "dependencias": [
+            "services.clasificacion_compras_service",
+            "services.compras_service",
+            "modulos.compras",
+        ],
+    },
+    "Banco / Caja": {
+        "modulo": "modulos.bancos",
+        "funcion": "mostrar_bancos",
+        "dependencias": [
+            "services.bancos_operaciones_service",
+            "services.bancos_service",
+            "modulos.bancos",
+        ],
+    },
+    "IVA": {
+        "modulo": "modulos.iva",
+        "funcion": "mostrar_iva",
+        "dependencias": [
+            "services.iva_service",
+            "modulos.iva",
+        ],
+    },
+    "Contabilidad": {
+        "modulo": "modulos.reportes",
+        "funcion": "mostrar_diario",
+        "dependencias": [
+            "services.reportes_service",
+            "modulos.reportes",
+        ],
+    },
+    "Estado de Cargas": {
+        "modulo": "modulos.auditoria",
+        "funcion": "mostrar_estado",
+        "dependencias": [
+            "modulos.auditoria",
+        ],
+    },
+    "Configuración": {
+        "modulo": "modulos.configuracion",
+        "funcion": "mostrar_configuracion",
+        "dependencias": [
+            "modulos.configuracion",
+        ],
+    },
+    "Seguridad": {
+        "modulo": "modulos.seguridad",
+        "funcion": "mostrar_seguridad",
+        "dependencias": [
+            "modulos.seguridad",
+        ],
+    },
+}
+
+
+# ======================================================
+# UTILIDADES DE DIAGNÓSTICO / RECARGA
+# ======================================================
+
+def obtener_commit_actual():
+    try:
+        resultado = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        commit = resultado.stdout.strip()
+
+        if commit:
+            return commit
+
+    except Exception:
+        pass
+
+    return "sin-git"
+
+
+def obtener_estado_git_corto():
+    try:
+        resultado = subprocess.run(
+            ["git", "status", "--short"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        estado = resultado.stdout.strip()
+
+        if estado:
+            return "con cambios"
+
+        return "limpio"
+
+    except Exception:
+        return "no disponible"
+
+
+def obtener_ruta_base_datos():
+    try:
+        from database import conectar
+
+        conn = conectar()
+        cur = conn.cursor()
+        cur.execute("PRAGMA database_list")
+        filas = cur.fetchall()
+        conn.close()
+
+        for fila in filas:
+            if len(fila) >= 3 and str(fila[1]) == "main":
+                return str(fila[2])
+
+    except Exception:
+        pass
+
+    return "no disponible"
+
+
+def obtener_sha_archivo(ruta):
+    try:
+        ruta = Path(ruta)
+
+        if not ruta.exists():
+            return "sin-archivo"
+
+        contenido = ruta.read_bytes()
+        return hashlib.sha256(contenido).hexdigest()[:16]
+
+    except Exception:
+        return "sha-error"
+
+
+def importar_modulo(nombre_modulo, recargar=True):
+    modulo = importlib.import_module(nombre_modulo)
+
+    if recargar:
+        modulo = importlib.reload(modulo)
+
+    return modulo
+
+
+def cargar_modulo_render(menu):
+    config = MODULOS_RENDER.get(menu)
+
+    if config is None:
+        raise RuntimeError(f"No existe configuración de render para el menú: {menu}")
+
+    dependencias = config.get("dependencias", [])
+    modulo_objetivo = None
+
+    for nombre_modulo in dependencias:
+        modulo = importar_modulo(
+            nombre_modulo,
+            recargar=RECARGAR_MODULOS_DESARROLLO,
+        )
+
+        if nombre_modulo == config["modulo"]:
+            modulo_objetivo = modulo
+
+    if modulo_objetivo is None:
+        modulo_objetivo = importar_modulo(
+            config["modulo"],
+            recargar=RECARGAR_MODULOS_DESARROLLO,
+        )
+
+    funcion = getattr(modulo_objetivo, config["funcion"], None)
+
+    if funcion is None:
+        raise RuntimeError(
+            f"El módulo {config['modulo']} no tiene la función {config['funcion']}."
+        )
+
+    return modulo_objetivo, funcion
+
+
+def mostrar_diagnostico_tecnico_sidebar(menu, modulo=None):
+    if not MOSTRAR_DIAGNOSTICO_TECNICO:
+        return
+
+    with st.sidebar.expander("Diagnóstico técnico", expanded=False):
+        st.caption(f"Commit: `{obtener_commit_actual()}`")
+        st.caption(f"Git: `{obtener_estado_git_corto()}`")
+        st.caption(f"Recarga módulos: `{RECARGAR_MODULOS_DESARROLLO}`")
+        st.caption(f"DB: `{obtener_ruta_base_datos()}`")
+
+        if modulo is not None:
+            try:
+                ruta = Path(inspect.getfile(modulo)).resolve()
+                st.caption(f"Módulo activo: `{menu}`")
+                st.caption(f"Archivo: `{ruta}`")
+                st.caption(f"SHA: `{obtener_sha_archivo(ruta)}`")
+            except Exception as e:
+                st.caption(f"Módulo activo: `{menu}`")
+                st.caption(f"No se pudo leer ruta del módulo: {e}")
+
+
+# ======================================================
+# ENCABEZADO
+# ======================================================
 
 def mostrar_encabezado_modulo(menu):
     datos = MODULOS_UI.get(menu)
@@ -130,9 +376,13 @@ def mostrar_encabezado_modulo(menu):
         icono=icono,
         titulo=titulo,
         descripcion=descripcion,
-        empresa_nombre=st.session_state.get("empresa_nombre", "")
+        empresa_nombre=st.session_state.get("empresa_nombre", ""),
     )
 
+
+# ======================================================
+# UTILIDADES DE QUERY PARAMS
+# ======================================================
 
 def obtener_sid_url():
     try:
@@ -146,6 +396,7 @@ def obtener_sid_url():
                 return valor[0]
 
             return valor
+
         except Exception:
             return ""
 
@@ -170,6 +421,10 @@ def limpiar_sid_url():
         except Exception:
             pass
 
+
+# ======================================================
+# ESTADO DE SESIÓN
+# ======================================================
 
 def iniciar_estado():
     if "autenticado" not in st.session_state:
@@ -231,7 +486,7 @@ def restaurar_sesion_desde_url():
 
     cargar_usuario_en_estado(
         sesion["usuario"],
-        empresa_id_preferida=sesion.get("empresa_id", 1)
+        empresa_id_preferida=sesion.get("empresa_id", 1),
     )
 
     actualizar_actividad(token)
@@ -280,6 +535,10 @@ def refrescar_permisos_usuario_actual():
     st.session_state["permisos"] = obtener_permisos_usuario(usuario["id"])
 
 
+# ======================================================
+# LOGIN
+# ======================================================
+
 def pantalla_login():
     col1, col2, col3 = st.columns([1, 1.05, 1])
 
@@ -290,7 +549,10 @@ def pantalla_login():
             usuario = st.text_input("Usuario")
             password = st.text_input("Contraseña", type="password")
 
-            ingresar = st.form_submit_button("Ingresar", use_container_width=True)
+            ingresar = st.form_submit_button(
+                "Ingresar",
+                use_container_width=True,
+            )
 
             if ingresar:
                 datos = login_usuario(usuario.strip(), password)
@@ -314,7 +576,10 @@ def pantalla_login():
                 st.session_state["empresa_id"] = empresa_id
                 st.session_state["empresa_nombre"] = empresa_nombre
 
-                cargar_usuario_en_estado(datos, empresa_id_preferida=empresa_id)
+                cargar_usuario_en_estado(
+                    datos,
+                    empresa_id_preferida=empresa_id,
+                )
                 poner_sid_url(token)
 
                 st.rerun()
@@ -330,7 +595,7 @@ def pantalla_cambio_password():
         icono="🔑",
         titulo="Cambio de contraseña obligatorio",
         descripcion="Por seguridad, antes de continuar tenés que definir una nueva contraseña.",
-        empresa_nombre=st.session_state.get("empresa_nombre", "")
+        empresa_nombre=st.session_state.get("empresa_nombre", ""),
     )
 
     col1, col2, col3 = st.columns([1, 1.15, 1])
@@ -340,7 +605,10 @@ def pantalla_cambio_password():
             nueva = st.text_input("Nueva contraseña", type="password")
             repetir = st.text_input("Repetir contraseña", type="password")
 
-            guardar = st.form_submit_button("Cambiar contraseña", use_container_width=True)
+            guardar = st.form_submit_button(
+                "Cambiar contraseña",
+                use_container_width=True,
+            )
 
             if guardar:
                 if nueva.strip() == "":
@@ -360,6 +628,10 @@ def pantalla_cambio_password():
     return True
 
 
+# ======================================================
+# EMPRESA ACTIVA
+# ======================================================
+
 def selector_empresa_sidebar():
     usuario = st.session_state["usuario"]
     empresas = obtener_empresas_usuario(usuario["id"])
@@ -378,7 +650,7 @@ def selector_empresa_sidebar():
         "Empresa activa",
         opciones,
         index=opciones.index(empresa_actual),
-        format_func=lambda x: empresas[empresas["id"] == x].iloc[0]["nombre"]
+        format_func=lambda x: empresas[empresas["id"] == x].iloc[0]["nombre"],
     )
 
     fila = empresas[empresas["id"] == seleccion].iloc[0]
@@ -388,22 +660,15 @@ def selector_empresa_sidebar():
 
     actualizar_empresa_sesion(
         st.session_state.get("session_token", ""),
-        int(fila["id"])
+        int(fila["id"]),
     )
 
 
-def menu_principal():
-    refrescar_permisos_usuario_actual()
+# ======================================================
+# MENÚ PRINCIPAL
+# ======================================================
 
-    usuario = st.session_state["usuario"]
-
-    mostrar_sidebar_marca(
-        usuario=usuario["usuario"],
-        rol=usuario["rol"]
-    )
-
-    selector_empresa_sidebar()
-
+def obtener_opciones_menu():
     opciones = []
 
     if tiene_permiso("ventas.ver"):
@@ -430,12 +695,52 @@ def menu_principal():
     if tiene_permiso("seguridad.ver"):
         opciones.append("Seguridad")
 
+    return opciones
+
+
+def renderizar_modulo(menu):
+    if menu == "Banco / Caja":
+        inicializar_bancos()
+
+    try:
+        modulo, funcion = cargar_modulo_render(menu)
+        funcion()
+        return modulo
+
+    except ModuleNotFoundError:
+        st.warning(f"El módulo {menu} todavía no está disponible.")
+        return None
+
+    except Exception as e:
+        st.error(f"No se pudo renderizar el módulo {menu}: {e}")
+        raise
+
+
+def menu_principal():
+    refrescar_permisos_usuario_actual()
+
+    usuario = st.session_state["usuario"]
+
+    mostrar_sidebar_marca(
+        usuario=usuario["usuario"],
+        rol=usuario["rol"],
+    )
+
+    selector_empresa_sidebar()
+
+    opciones = obtener_opciones_menu()
+
     if not opciones:
         st.error("Tu usuario no tiene permisos asignados.")
         return
 
     st.sidebar.markdown("#### Navegación")
-    menu = st.sidebar.radio("Ir a:", opciones)
+
+    menu = st.sidebar.radio(
+        "Ir a:",
+        opciones,
+        key="menu_principal_modulo",
+    )
 
     st.sidebar.divider()
 
@@ -444,34 +749,17 @@ def menu_principal():
 
     mostrar_encabezado_modulo(menu)
 
-    if menu == "Ventas":
-        ventas.mostrar_ventas()
+    modulo_renderizado = renderizar_modulo(menu)
 
-    elif menu == "Compras":
-        compras.mostrar_compras()
+    mostrar_diagnostico_tecnico_sidebar(
+        menu=menu,
+        modulo=modulo_renderizado,
+    )
 
-    elif menu == "Banco / Caja":
-        bancos.mostrar_bancos()
 
-    elif menu == "IVA":
-        try:
-            from modulos import iva
-            iva.mostrar_iva()
-        except Exception:
-            st.warning("El módulo IVA todavía no está disponible.")
-
-    elif menu == "Contabilidad":
-        reportes.mostrar_diario()
-
-    elif menu == "Estado de Cargas":
-        auditoria.mostrar_estado()
-
-    elif menu == "Configuración":
-        configuracion.mostrar_configuracion()
-
-    elif menu == "Seguridad":
-        seguridad.mostrar_seguridad()
-
+# ======================================================
+# EJECUCIÓN
+# ======================================================
 
 iniciar_estado()
 restaurar_sesion_desde_url()
