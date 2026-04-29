@@ -39,6 +39,7 @@ from services.sesion_service import (
 )
 
 from services.bancos_service import inicializar_bancos
+from services.cajas_service import inicializar_cajas
 
 
 # ======================================================
@@ -74,6 +75,7 @@ MOSTRAR_DIAGNOSTICO_TECNICO = (
 init_db()
 inicializar_seguridad()
 inicializar_bancos()
+inicializar_cajas()
 inicializar_tabla_sesiones()
 limpiar_sesiones_vencidas()
 
@@ -113,6 +115,14 @@ MODULOS_UI = {
         "descripcion": (
             "Registro de pagos a proveedores, imputación contra cuenta corriente, "
             "retenciones practicadas y operaciones pendientes de conciliación."
+        ),
+    },
+    "Caja": {
+        "icono": "💰",
+        "titulo": "Caja",
+        "descripcion": (
+            "Gestión de efectivo: cajas configurables, ingresos, egresos, "
+            "depósitos, retiros, transferencias internas, arqueos y diferencias controladas."
         ),
     },
     "Banco / Caja": {
@@ -198,6 +208,15 @@ MODULOS_RENDER = {
             "services.tesoreria_service",
             "services.pagos_service",
             "modulos.pagos",
+        ],
+    },
+    "Caja": {
+        "modulo": "modulos.caja",
+        "funcion": "mostrar_caja",
+        "dependencias": [
+            "services.tesoreria_service",
+            "services.cajas_service",
+            "modulos.caja",
         ],
     },
     "Banco / Caja": {
