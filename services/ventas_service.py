@@ -3,10 +3,9 @@ import json
 from database import (
     ejecutar_transaccion,
     proximo_asiento,
-    archivo_ya_cargado,
     comprobante_ya_procesado,
     tipo_comprobante_existe,
-    obtener_tipo_comprobante_config
+    obtener_tipo_comprobante_config,
 )
 
 from core.numeros import limpiar_numero
@@ -15,7 +14,7 @@ from core.fechas import formatear_fecha, obtener_anio_mes
 from core.comprobantes import (
     construir_numero_comprobante_desde_fila,
     tipo_desde_descripcion,
-    aplicar_signo
+    aplicar_signo,
 )
 from core.reglas_contables import interpretar_importes_venta
 
@@ -35,8 +34,8 @@ def op_insert_libro_diario(asiento, fecha, cuenta, debe, haber, glosa, origen, a
             round(float(haber), 2),
             glosa,
             origen,
-            archivo
-        )
+            archivo,
+        ),
     )
 
 
@@ -53,9 +52,9 @@ def op_insert_comprobante_procesado(modulo, fecha, codigo, numero, cliente_prove
             codigo,
             numero,
             cliente_proveedor,
-            total,
-            archivo
-        )
+            round(float(total), 2),
+            archivo,
+        ),
     )
 
 
@@ -76,11 +75,11 @@ def op_insert_venta(fecha, anio, mes, codigo, tipo, punto_venta, numero, cliente
             numero,
             cliente,
             cuit,
-            neto,
-            iva,
-            total,
-            archivo
-        )
+            round(float(neto), 2),
+            round(float(iva), 2),
+            round(float(total), 2),
+            archivo,
+        ),
     )
 
 
@@ -97,12 +96,12 @@ def op_insert_cta_cte_cliente(fecha, cliente, cuit, tipo, numero, debe, haber, s
             cuit,
             tipo,
             numero,
-            debe,
-            haber,
-            saldo,
+            round(float(debe), 2),
+            round(float(haber), 2),
+            round(float(saldo), 2),
             origen,
-            archivo
-        )
+            archivo,
+        ),
     )
 
 
@@ -116,8 +115,8 @@ def op_insert_historial(modulo, archivo, registros):
         (
             modulo,
             archivo,
-            registros
-        )
+            int(registros),
+        ),
     )
 
 
@@ -138,14 +137,32 @@ def op_insert_error(modulo, archivo, fila, motivo, contenido):
             archivo,
             fila,
             motivo,
-            contenido_json
-        )
+            contenido_json,
+        ),
+    )
+
+
+def construir_clave_comprobante(codigo, numero, cliente_clave):
+    """
+    Clave funcional usada para evitar duplicación contable.
+
+    No se usa el nombre del archivo porque ARCA/AFIP puede descargar dos veces
+    el mismo período con el mismo nombre o el usuario puede renombrar archivos.
+    Lo relevante es no duplicar el comprobante ya procesado.
+    """
+
+    return (
+        "VENTAS",
+        limpiar_texto(codigo).upper(),
+        limpiar_texto(numero).upper(),
+        limpiar_texto(cliente_clave).upper(),
     )
 
 
 def procesar_csv_ventas(nombre_archivo, df):
     """
     Procesa un DataFrame de ventas ARCA/AFIP.
+
     Genera:
     - Libro Diario
     - Libro IVA Ventas
@@ -153,7 +170,11 @@ def procesar_csv_ventas(nombre_archivo, df):
     - Historial
     - Errores de auditoría
 
-    Todo se guarda en una única transacción.
+    Regla importante:
+    - El nombre del archivo NO bloquea la carga.
+    - Los comprobantes ya importados se omiten para evitar duplicar asientos,
+      Libro IVA Ventas y cuenta corriente de clientes.
+    - Los duplicados se informan como advertencia operativa, no como error real.
     """
 
     resultado = {
@@ -165,30 +186,14 @@ def procesar_csv_ventas(nombre_archivo, df):
         "duplicados": 0,
         "errores_matematicos": 0,
         "errores_codigo": 0,
-        "ajustes_centavos": 0
+        "ajustes_centavos": 0,
     }
 
     operaciones = []
     claves_archivo = set()
-
-    if archivo_ya_cargado(nombre_archivo):
-        resultado["errores"] += 1
-        operaciones.append(
-            op_insert_error(
-                "VENTAS",
-                nombre_archivo,
-                0,
-                "El archivo ya fue cargado anteriormente.",
-                {}
-            )
-        )
-        ejecutar_transaccion(operaciones)
-        return resultado
-
     asiento = proximo_asiento()
 
     for numero_fila, (_, fila) in enumerate(df.iterrows(), start=2):
-
         try:
             fecha = formatear_fecha(fila.iloc[0])
             anio, mes = obtener_anio_mes(fila.iloc[0])
@@ -220,7 +225,7 @@ def procesar_csv_ventas(nombre_archivo, df):
                         nombre_archivo,
                         numero_fila,
                         f"Código de comprobante inexistente: {codigo}",
-                        contenido_fila
+                        contenido_fila,
                     )
                 )
                 continue
@@ -237,7 +242,7 @@ def procesar_csv_ventas(nombre_archivo, df):
                         nombre_archivo,
                         numero_fila,
                         f"No se pudo interpretar el comprobante: {codigo}",
-                        contenido_fila
+                        contenido_fila,
                     )
                 )
                 continue
@@ -245,10 +250,9 @@ def procesar_csv_ventas(nombre_archivo, df):
             tipo = tipo_desde_descripcion(config["descripcion"])
             signo = int(config["signo"])
 
-            clave = ("VENTAS", codigo, numero, cliente_clave)
+            clave = construir_clave_comprobante(codigo, numero, cliente_clave)
 
             if clave in claves_archivo or comprobante_ya_procesado("VENTAS", codigo, numero, cliente_clave):
-                resultado["errores"] += 1
                 resultado["duplicados"] += 1
 
                 operaciones.append(
@@ -256,8 +260,12 @@ def procesar_csv_ventas(nombre_archivo, df):
                         "VENTAS",
                         nombre_archivo,
                         numero_fila,
-                        f"Comprobante duplicado: código {codigo}, número {numero}, cliente/CUIT {cliente_clave}",
-                        contenido_fila
+                        (
+                            "ADVERTENCIA - Comprobante duplicado omitido. "
+                            f"Código {codigo}, número {numero}, cliente/CUIT {cliente_clave}. "
+                            "No se generaron asientos ni movimientos duplicados."
+                        ),
+                        contenido_fila,
                     )
                 )
                 continue
@@ -280,7 +288,7 @@ def procesar_csv_ventas(nombre_archivo, df):
                             f"Neto: {neto}, IVA: {iva}, Total: {total}, "
                             f"Diferencia: {importes['diferencia']}"
                         ),
-                        contenido_fila
+                        contenido_fila,
                     )
                 )
                 continue
@@ -292,7 +300,7 @@ def procesar_csv_ventas(nombre_archivo, df):
                 importes["neto"],
                 importes["iva"],
                 importes["total"],
-                signo
+                signo,
             )
 
             neto_s = importes_con_signo["neto"]
@@ -319,7 +327,7 @@ def procesar_csv_ventas(nombre_archivo, df):
                     haber_total,
                     glosa,
                     "VENTAS",
-                    nombre_archivo
+                    nombre_archivo,
                 )
             )
 
@@ -332,7 +340,7 @@ def procesar_csv_ventas(nombre_archivo, df):
                     haber_venta,
                     glosa,
                     "VENTAS",
-                    nombre_archivo
+                    nombre_archivo,
                 )
             )
 
@@ -346,7 +354,7 @@ def procesar_csv_ventas(nombre_archivo, df):
                         haber_iva,
                         glosa,
                         "VENTAS",
-                        nombre_archivo
+                        nombre_archivo,
                     )
                 )
 
@@ -358,7 +366,7 @@ def procesar_csv_ventas(nombre_archivo, df):
                     numero,
                     cliente_clave,
                     total_s,
-                    nombre_archivo
+                    nombre_archivo,
                 )
             )
 
@@ -376,7 +384,7 @@ def procesar_csv_ventas(nombre_archivo, df):
                     neto_s,
                     iva_s,
                     total_s,
-                    nombre_archivo
+                    nombre_archivo,
                 )
             )
 
@@ -391,7 +399,7 @@ def procesar_csv_ventas(nombre_archivo, df):
                     abs(total_s) if total_s < 0 else 0,
                     0,
                     "VENTAS",
-                    nombre_archivo
+                    nombre_archivo,
                 )
             )
 
@@ -415,7 +423,7 @@ def procesar_csv_ventas(nombre_archivo, df):
                     nombre_archivo,
                     numero_fila,
                     f"Error inesperado: {str(e)}",
-                    fila.to_dict()
+                    fila.to_dict(),
                 )
             )
 
@@ -424,7 +432,7 @@ def procesar_csv_ventas(nombre_archivo, df):
             op_insert_historial(
                 "VENTAS",
                 nombre_archivo,
-                resultado["procesados"]
+                resultado["procesados"],
             )
         )
 

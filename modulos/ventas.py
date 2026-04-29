@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 
-from database import ejecutar_query, archivo_ya_cargado
+from database import ejecutar_query
 from services.ventas_service import procesar_csv_ventas
 
 from core.fechas import ordenar_dataframe_por_fecha, fecha_para_ordenar, formatear_fecha
@@ -164,9 +164,11 @@ def cargar_csv_ventas():
     if not archivo:
         return
 
-    if archivo_ya_cargado(archivo.name):
-        st.error("Ese archivo ya fue cargado anteriormente.")
-        return
+    st.caption(
+        "Podés volver a cargar un archivo con el mismo nombre. "
+        "El sistema no duplica comprobantes: importa solo operaciones nuevas "
+        "y omite las que ya estén registradas."
+    )
 
     try:
         df = pd.read_csv(
@@ -189,7 +191,15 @@ def cargar_csv_ventas():
 
         resultado = procesar_csv_ventas(archivo.name, df)
 
-        st.success("Proceso finalizado")
+        if resultado["procesados"] > 0:
+            st.success("Proceso finalizado. Se importaron operaciones nuevas.")
+        elif resultado["duplicados"] > 0 and resultado["errores"] == 0:
+            st.info(
+                "Proceso finalizado. No se importaron operaciones nuevas porque "
+                "los comprobantes del archivo ya estaban registrados."
+            )
+        else:
+            st.success("Proceso finalizado")
 
         col1, col2, col3 = st.columns(3)
 
@@ -202,19 +212,25 @@ def cargar_csv_ventas():
             st.metric("Notas de Débito", resultado["notas_debito"])
 
         with col3:
-            st.metric("Errores", resultado["errores"])
-            st.metric("Duplicados", resultado["duplicados"])
+            st.metric("Errores reales", resultado["errores"])
+            st.metric("Duplicados omitidos", resultado["duplicados"])
 
         st.divider()
 
         st.subheader("Detalle de auditoría")
         st.write(f"Errores matemáticos: {resultado['errores_matematicos']}")
         st.write(f"Códigos inexistentes: {resultado['errores_codigo']}")
-        st.write(f"Duplicados detectados: {resultado['duplicados']}")
+        st.write(f"Duplicados omitidos: {resultado['duplicados']}")
         st.write(f"Ajustes técnicos de centavos sobre neto: {resultado['ajustes_centavos']}")
 
+        if resultado["duplicados"] > 0:
+            st.info(
+                "Los duplicados fueron omitidos para evitar repetir comprobantes, "
+                "asientos, Libro IVA Ventas y cuenta corriente de clientes."
+            )
+
         if resultado["errores"] > 0:
-            st.warning("Se detectaron errores. Revisar Estado de Cargas / Auditoría.")
+            st.warning("Se detectaron errores reales. Revisar Estado de Cargas / Auditoría.")
 
     except Exception as e:
         st.error(f"No se pudo leer el archivo: {str(e)}")
