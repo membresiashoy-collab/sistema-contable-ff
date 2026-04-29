@@ -86,10 +86,21 @@ def test_bancos_ui_corrige_titulos_y_ortografia_contable():
     contenido = leer_archivo("modulos/bancos.py")
 
     assert "Asientos propuestos de Banco / Caja" in contenido
+    assert "Pendientes de imputación" in contenido
     assert "Resumen / Estadísticas de Ventas" not in contenido
+    assert "Libro IVA Ventas" not in contenido
     assert "Gasto bancario gravado" in contenido
     assert "grabado" not in contenido.lower()
     assert "Impuesto sobre débitos y créditos bancarios" in contenido
+
+
+def test_bancos_ui_mejora_nombre_de_asientos_agrupados():
+    contenido = leer_archivo("modulos/bancos.py")
+
+    assert "Operaciones bancarias agrupadas para contabilizar" in contenido
+    assert "Operación bancaria agrupada" in contenido
+    assert "Vista por asiento agrupado" not in contenido
+    assert "Cada opción representa una operación bancaria agrupada" in contenido
 
 
 def test_bancos_ui_filtra_asientos_agrupados_solo_con_movimientos():

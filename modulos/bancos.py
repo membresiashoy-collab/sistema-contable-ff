@@ -1376,7 +1376,11 @@ def mostrar_asientos_propuestos():
     else:
         st.error("Los asientos propuestos no cuadran. Revisar antes de confirmar.")
 
-    st.markdown("#### Vista por asiento agrupado")
+    st.markdown("#### Operaciones bancarias agrupadas para contabilizar")
+    st.caption(
+        "Cada opción representa una operación bancaria agrupada con sus líneas de Debe y Haber. "
+        "Sirve para revisar rápidamente que la propuesta contable esté balanceada antes de confirmarla."
+    )
 
     df["grupo_asiento"] = (
         df["fecha"].astype(str)
@@ -1401,7 +1405,7 @@ def mostrar_asientos_propuestos():
 
     if not grupos.empty:
         grupo_idx = st.selectbox(
-            "Asiento agrupado",
+            "Operación bancaria agrupada",
             list(range(len(grupos))),
             format_func=lambda i: (
                 f"{grupos.iloc[int(i)]['fecha']} | "
@@ -1417,7 +1421,7 @@ def mostrar_asientos_propuestos():
         detalle_grupo = df[df["grupo_asiento"] == grupo["grupo_asiento"]].copy()
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Líneas del asiento", int(grupo["lineas"]))
+        c1.metric("Líneas de la operación", int(grupo["lineas"]))
         c2.metric("Debe", moneda(_numero(grupo["debe"])))
         c3.metric("Haber", moneda(_numero(grupo["haber"])))
         c4.metric("Diferencia", moneda(_numero(grupo["diferencia"])))
@@ -1446,6 +1450,10 @@ def mostrar_asientos_propuestos():
 
     st.divider()
     st.markdown("#### Detalle técnico de líneas propuestas")
+    st.caption(
+        "Este detalle muestra cada línea contable propuesta. Es útil para auditoría, revisión contable "
+        "y futura confirmación contra Libro Diario."
+    )
 
     tipos = ["Todos"] + sorted(df["tipo_movimiento_sugerido"].dropna().unique().tolist())
 
@@ -1484,7 +1492,8 @@ def mostrar_asientos_propuestos():
     st.dataframe(preparar_vista(vista[columnas]), use_container_width=True)
 
     st.warning(
-        "Próximo paso futuro: confirmar estos asientos contra Libro Diario con auditoría y reversión."
+        "Próximo paso futuro: confirmar estos asientos contra Libro Diario con auditoría, reversión "
+        "y control de saldos banco-contabilidad."
     )
 
 
