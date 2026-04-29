@@ -17,48 +17,38 @@ def aplicar_estilos_globales():
             """
             <style>
                 :root {
-                    --ff-bg-0: #0b1020;
-                    --ff-bg-1: #111827;
-                    --ff-bg-2: #172033;
-                    --ff-card: rgba(17, 24, 39, 0.84);
-                    --ff-card-soft: rgba(30, 41, 59, 0.72);
-                    --ff-border: rgba(148, 163, 184, 0.22);
-                    --ff-border-strong: rgba(148, 163, 184, 0.34);
+                    --ff-bg-page: #0b1220;
+                    --ff-bg-panel: #111827;
+                    --ff-bg-panel-2: #162033;
+                    --ff-bg-input: #0f172a;
+                    --ff-border: #334155;
+                    --ff-border-soft: #243044;
                     --ff-text: #f8fafc;
                     --ff-muted: #cbd5e1;
                     --ff-muted-2: #94a3b8;
                     --ff-primary: #38bdf8;
                     --ff-primary-2: #2563eb;
-                    --ff-success: #22c55e;
-                    --ff-warning: #f59e0b;
                     --ff-danger: #ef4444;
                     --ff-radius-lg: 22px;
                     --ff-radius-md: 16px;
-                    --ff-shadow: 0 18px 55px rgba(0, 0, 0, 0.34);
+                    --ff-shadow-soft: 0 10px 28px rgba(0, 0, 0, 0.28);
+                }
+
+                html,
+                body,
+                .stApp {
+                    color: var(--ff-text) !important;
+                    text-rendering: optimizeLegibility;
+                    -webkit-font-smoothing: antialiased;
+                    -moz-osx-font-smoothing: grayscale;
+                    filter: none !important;
+                    backdrop-filter: none !important;
+                    -webkit-backdrop-filter: none !important;
                 }
 
                 .stApp {
-                    background:
-                        radial-gradient(circle at top left, rgba(56, 189, 248, 0.13), transparent 34rem),
-                        radial-gradient(circle at top right, rgba(37, 99, 235, 0.16), transparent 34rem),
-                        linear-gradient(135deg, #070b16 0%, #0f172a 48%, #111827 100%);
-                    color: var(--ff-text);
-                }
-
-                section[data-testid="stSidebar"] {
-                    background:
-                        linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(2, 6, 23, 0.98));
-                    border-right: 1px solid var(--ff-border);
-                }
-
-                section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] p,
-                section[data-testid="stSidebar"] label,
-                section[data-testid="stSidebar"] span {
-                    color: var(--ff-muted);
-                }
-
-                div[data-testid="stSidebarUserContent"] {
-                    padding-top: 1rem;
+                    background: linear-gradient(135deg, #07101d 0%, #0b1220 48%, #111827 100%) !important;
+                    color: var(--ff-text) !important;
                 }
 
                 .block-container {
@@ -67,16 +57,62 @@ def aplicar_estilos_globales():
                     max-width: 1480px;
                 }
 
-                h1, h2, h3 {
-                    letter-spacing: -0.035em;
+                h1, h2, h3, h4, h5, h6 {
+                    color: var(--ff-text) !important;
+                    letter-spacing: -0.025em;
+                    text-shadow: none !important;
                 }
 
+                p, span, label, div {
+                    text-shadow: none !important;
+                }
+
+                /*
+                ======================================================
+                SIDEBAR
+                ======================================================
+                */
+
+                section[data-testid="stSidebar"] {
+                    background: #080f1d !important;
+                    border-right: 1px solid var(--ff-border-soft) !important;
+                    filter: none !important;
+                    backdrop-filter: none !important;
+                    -webkit-backdrop-filter: none !important;
+                }
+
+                section[data-testid="stSidebar"] * {
+                    text-shadow: none !important;
+                    filter: none !important;
+                    backdrop-filter: none !important;
+                    -webkit-backdrop-filter: none !important;
+                }
+
+                section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] p,
+                section[data-testid="stSidebar"] label,
+                section[data-testid="stSidebar"] span {
+                    color: var(--ff-muted) !important;
+                }
+
+                div[data-testid="stSidebarUserContent"] {
+                    padding-top: 1rem;
+                }
+
+                /*
+                ======================================================
+                MÉTRICAS / TABLAS / TABS
+                ======================================================
+                */
+
                 div[data-testid="stMetric"] {
-                    background: rgba(15, 23, 42, 0.70);
-                    border: 1px solid var(--ff-border);
-                    border-radius: var(--ff-radius-md);
-                    padding: 0.85rem 1rem;
-                    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.20);
+                    background: #111827 !important;
+                    border: 1px solid var(--ff-border) !important;
+                    border-radius: var(--ff-radius-md) !important;
+                    padding: 0.85rem 1rem !important;
+                    box-shadow: none !important;
+                    filter: none !important;
+                    backdrop-filter: none !important;
+                    -webkit-backdrop-filter: none !important;
                 }
 
                 div[data-testid="stMetric"] label {
@@ -85,19 +121,23 @@ def aplicar_estilos_globales():
                 }
 
                 div[data-testid="stMetric"] div {
-                    color: var(--ff-text);
+                    color: var(--ff-text) !important;
+                    text-shadow: none !important;
                 }
 
                 div[data-testid="stDataFrame"] {
-                    border: 1px solid var(--ff-border);
-                    border-radius: var(--ff-radius-md);
-                    overflow: hidden;
+                    border: 1px solid var(--ff-border) !important;
+                    border-radius: var(--ff-radius-md) !important;
+                    overflow: hidden !important;
+                    filter: none !important;
+                    backdrop-filter: none !important;
+                    -webkit-backdrop-filter: none !important;
                 }
 
                 .stTabs [data-baseweb="tab-list"] {
                     gap: 0.35rem;
-                    background: rgba(15, 23, 42, 0.48);
-                    border: 1px solid var(--ff-border);
+                    background: #0f172a !important;
+                    border: 1px solid var(--ff-border) !important;
                     border-radius: 999px;
                     padding: 0.35rem;
                 }
@@ -105,46 +145,197 @@ def aplicar_estilos_globales():
                 .stTabs [data-baseweb="tab"] {
                     border-radius: 999px;
                     padding: 0.45rem 0.9rem;
-                    color: var(--ff-muted);
+                    color: var(--ff-muted) !important;
                 }
 
                 .stTabs [aria-selected="true"] {
-                    background: linear-gradient(135deg, rgba(56, 189, 248, 0.22), rgba(37, 99, 235, 0.20));
+                    background: #0c4a6e !important;
                     color: var(--ff-text) !important;
-                    border: 1px solid rgba(56, 189, 248, 0.35);
+                    border: 1px solid #0284c7 !important;
                 }
+
+                /*
+                ======================================================
+                BOTONES
+                ======================================================
+                */
 
                 div.stButton > button,
                 div.stDownloadButton > button,
                 button[kind="secondary"] {
                     border-radius: 999px !important;
-                    border: 1px solid var(--ff-border-strong) !important;
-                    background: rgba(15, 23, 42, 0.72) !important;
+                    border: 1px solid var(--ff-border) !important;
+                    background: #111827 !important;
                     color: var(--ff-text) !important;
-                    transition: all 0.14s ease-in-out;
+                    box-shadow: none !important;
+                    transition: border-color 0.14s ease-in-out, background 0.14s ease-in-out;
                 }
 
                 div.stButton > button:hover,
                 div.stDownloadButton > button:hover {
-                    border-color: rgba(56, 189, 248, 0.55) !important;
-                    transform: translateY(-1px);
-                    box-shadow: 0 10px 24px rgba(56, 189, 248, 0.13);
+                    border-color: #38bdf8 !important;
+                    background: #162033 !important;
                 }
 
                 div.stButton > button[kind="primary"] {
-                    background: linear-gradient(135deg, #0284c7, #2563eb) !important;
-                    border: 1px solid rgba(125, 211, 252, 0.35) !important;
+                    background: #075985 !important;
+                    border: 1px solid #38bdf8 !important;
                     color: white !important;
                     font-weight: 700 !important;
                 }
 
+                div.stButton > button:disabled,
+                div.stButton > button[disabled] {
+                    opacity: 0.48 !important;
+                    cursor: not-allowed !important;
+                    box-shadow: none !important;
+                }
+
+                /*
+                ======================================================
+                INPUTS, SELECTBOX, MULTISELECT Y POPOVERS
+                ======================================================
+                */
+
                 div[data-baseweb="select"] > div,
                 div[data-baseweb="input"] > div,
-                textarea {
+                div[data-baseweb="textarea"] textarea,
+                textarea,
+                input {
                     border-radius: 14px !important;
-                    border-color: rgba(148, 163, 184, 0.28) !important;
-                    background: rgba(15, 23, 42, 0.72) !important;
+                    border-color: var(--ff-border) !important;
+                    background: #0f172a !important;
+                    color: var(--ff-text) !important;
+                    box-shadow: none !important;
+                    filter: none !important;
+                    backdrop-filter: none !important;
+                    -webkit-backdrop-filter: none !important;
+                    opacity: 1 !important;
                 }
+
+                div[data-baseweb="select"] *,
+                div[data-baseweb="input"] *,
+                div[data-baseweb="textarea"] *,
+                textarea,
+                input {
+                    color: var(--ff-text) !important;
+                    text-shadow: none !important;
+                    filter: none !important;
+                    backdrop-filter: none !important;
+                    -webkit-backdrop-filter: none !important;
+                    opacity: 1 !important;
+                }
+
+                div[data-baseweb="select"] svg,
+                div[data-baseweb="input"] svg {
+                    color: var(--ff-muted) !important;
+                    fill: var(--ff-muted) !important;
+                }
+
+                [data-testid="stSelectbox"],
+                [data-testid="stMultiSelect"],
+                [data-testid="stTextInput"],
+                [data-testid="stNumberInput"],
+                [data-testid="stTextArea"] {
+                    filter: none !important;
+                    backdrop-filter: none !important;
+                    -webkit-backdrop-filter: none !important;
+                    opacity: 1 !important;
+                }
+
+                [data-testid="stSelectbox"] label,
+                [data-testid="stMultiSelect"] label,
+                [data-testid="stTextInput"] label,
+                [data-testid="stNumberInput"] label,
+                [data-testid="stTextArea"] label {
+                    color: var(--ff-text) !important;
+                    font-weight: 700 !important;
+                }
+
+                div[data-baseweb="popover"] {
+                    z-index: 999999 !important;
+                    background: transparent !important;
+                    filter: none !important;
+                    backdrop-filter: none !important;
+                    -webkit-backdrop-filter: none !important;
+                    opacity: 1 !important;
+                }
+
+                div[data-baseweb="popover"] > div,
+                div[data-baseweb="popover"] ul,
+                div[data-baseweb="popover"] li,
+                div[data-baseweb="menu"],
+                div[role="listbox"],
+                ul[role="listbox"] {
+                    background: #0f172a !important;
+                    color: var(--ff-text) !important;
+                    border: 1px solid var(--ff-border) !important;
+                    border-radius: 14px !important;
+                    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.55) !important;
+                    filter: none !important;
+                    backdrop-filter: none !important;
+                    -webkit-backdrop-filter: none !important;
+                    opacity: 1 !important;
+                }
+
+                div[data-baseweb="popover"] *,
+                div[data-baseweb="menu"] *,
+                div[role="listbox"] *,
+                ul[role="listbox"] * {
+                    color: var(--ff-text) !important;
+                    text-shadow: none !important;
+                    filter: none !important;
+                    backdrop-filter: none !important;
+                    -webkit-backdrop-filter: none !important;
+                    opacity: 1 !important;
+                    font-weight: 600 !important;
+                }
+
+                div[role="option"],
+                li[role="option"],
+                div[data-baseweb="menu"] li,
+                ul[role="listbox"] li {
+                    background: #0f172a !important;
+                    color: var(--ff-text) !important;
+                    border-radius: 10px !important;
+                    margin: 0.12rem 0.22rem !important;
+                    padding-top: 0.42rem !important;
+                    padding-bottom: 0.42rem !important;
+                }
+
+                div[role="option"]:hover,
+                li[role="option"]:hover,
+                div[data-baseweb="menu"] li:hover,
+                ul[role="listbox"] li:hover {
+                    background: #1e3a5f !important;
+                    color: #ffffff !important;
+                }
+
+                div[aria-selected="true"][role="option"],
+                li[aria-selected="true"][role="option"] {
+                    background: #1d4ed8 !important;
+                    color: #ffffff !important;
+                }
+
+                /*
+                ======================================================
+                ALERTAS
+                ======================================================
+                */
+
+                div[data-testid="stAlert"] {
+                    border-radius: var(--ff-radius-md) !important;
+                    border: 1px solid var(--ff-border) !important;
+                    filter: none !important;
+                    backdrop-filter: none !important;
+                    -webkit-backdrop-filter: none !important;
+                }
+
+                /*
+                ======================================================
+                COMPONENTES PROPIOS
+                ======================================================
+                */
 
                 .ff-module-hero {
                     display: flex;
@@ -155,10 +346,8 @@ def aplicar_estilos_globales():
                     padding: 1.15rem 1.25rem;
                     border: 1px solid var(--ff-border);
                     border-radius: var(--ff-radius-lg);
-                    background:
-                        linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(30, 41, 59, 0.70)),
-                        radial-gradient(circle at top right, rgba(56, 189, 248, 0.20), transparent 22rem);
-                    box-shadow: var(--ff-shadow);
+                    background: #111827;
+                    box-shadow: none;
                 }
 
                 .ff-module-left {
@@ -176,8 +365,8 @@ def aplicar_estilos_globales():
                     align-items: center;
                     justify-content: center;
                     border-radius: 1.35rem;
-                    background: linear-gradient(135deg, rgba(56, 189, 248, 0.18), rgba(37, 99, 235, 0.20));
-                    border: 1px solid rgba(125, 211, 252, 0.26);
+                    background: #0c4a6e;
+                    border: 1px solid #38bdf8;
                     font-size: 2.05rem;
                 }
 
@@ -185,9 +374,10 @@ def aplicar_estilos_globales():
                     font-size: clamp(2rem, 3.3vw, 3.15rem);
                     line-height: 1;
                     font-weight: 850;
-                    letter-spacing: -0.055em;
+                    letter-spacing: -0.045em;
                     color: var(--ff-text);
                     margin-bottom: 0.38rem;
+                    text-shadow: none;
                 }
 
                 .ff-module-desc {
@@ -195,6 +385,7 @@ def aplicar_estilos_globales():
                     font-size: 0.98rem;
                     line-height: 1.45;
                     max-width: 54rem;
+                    text-shadow: none;
                 }
 
                 .ff-module-right {
@@ -205,13 +396,14 @@ def aplicar_estilos_globales():
                 }
 
                 .ff-company-pill {
-                    border: 1px solid rgba(56, 189, 248, 0.28);
-                    background: rgba(14, 165, 233, 0.10);
-                    color: #dff7ff;
+                    border: 1px solid #38bdf8;
+                    background: #0f172a;
+                    color: #e0f2fe;
                     border-radius: 999px;
                     padding: 0.55rem 0.8rem;
                     font-size: 0.82rem;
                     white-space: nowrap;
+                    text-shadow: none;
                 }
 
                 .ff-sidebar-brand {
@@ -219,9 +411,8 @@ def aplicar_estilos_globales():
                     padding: 1rem;
                     border-radius: 1.2rem;
                     border: 1px solid var(--ff-border);
-                    background:
-                        linear-gradient(135deg, rgba(56, 189, 248, 0.14), rgba(37, 99, 235, 0.10)),
-                        rgba(15, 23, 42, 0.68);
+                    background: #111827;
+                    box-shadow: none;
                 }
 
                 .ff-sidebar-brand-title {
@@ -229,194 +420,167 @@ def aplicar_estilos_globales():
                     font-size: 1.05rem;
                     font-weight: 800;
                     margin-bottom: 0.25rem;
+                    text-shadow: none;
                 }
 
                 .ff-sidebar-brand-subtitle {
                     color: var(--ff-muted-2);
                     font-size: 0.78rem;
                     line-height: 1.35;
+                    text-shadow: none;
                 }
 
                 .ff-sidebar-user {
                     margin: 0.5rem 0 0.85rem 0;
                     padding: 0.85rem;
                     border-radius: 1rem;
-                    border: 1px solid rgba(148, 163, 184, 0.18);
-                    background: rgba(15, 23, 42, 0.58);
+                    border: 1px solid var(--ff-border);
+                    background: #0f172a;
+                    box-shadow: none;
                 }
 
                 .ff-sidebar-user-main {
                     color: var(--ff-text);
                     font-weight: 700;
                     font-size: 0.92rem;
+                    text-shadow: none;
                 }
 
                 .ff-sidebar-user-meta {
                     color: var(--ff-muted-2);
                     font-size: 0.76rem;
                     margin-top: 0.15rem;
+                    text-shadow: none;
                 }
 
-                .ff-login-card {
-                    margin-top: 8vh;
-                    padding: 1.25rem;
-                    border-radius: var(--ff-radius-lg);
-                    border: 1px solid var(--ff-border);
-                    background: rgba(15, 23, 42, 0.72);
-                    box-shadow: var(--ff-shadow);
+                .ff-login-title {
+                    text-align: center;
+                    font-size: clamp(1.9rem, 4vw, 2.8rem);
+                    font-weight: 850;
+                    letter-spacing: -0.045em;
+                    margin: 1rem 0 1.2rem 0;
+                    color: var(--ff-text);
+                    text-shadow: none;
                 }
 
-                .ff-card {
-                    padding: 1rem;
-                    border-radius: var(--ff-radius-md);
-                    border: 1px solid var(--ff-border);
-                    background: var(--ff-card);
-                    box-shadow: 0 14px 35px rgba(0, 0, 0, 0.18);
-                }
-
-                .ff-section-note {
-                    padding: 0.85rem 1rem;
-                    border-radius: 1rem;
-                    border: 1px solid rgba(56, 189, 248, 0.22);
-                    background: rgba(14, 165, 233, 0.08);
-                    color: var(--ff-muted);
-                    line-height: 1.45;
-                    margin: 0.65rem 0 1rem 0;
-                }
-
-                @media (max-width: 900px) {
+                @media (max-width: 760px) {
                     .ff-module-hero {
                         flex-direction: column;
                     }
 
                     .ff-module-right {
                         justify-content: flex-start;
-                        min-width: unset;
                     }
 
-                    .ff-company-pill {
-                        white-space: normal;
+                    .ff-module-icon {
+                        width: 3.4rem;
+                        min-width: 3.4rem;
+                        height: 3.4rem;
+                        font-size: 1.7rem;
                     }
                 }
             </style>
             """
         ),
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
 
-def _limpiar_html(valor):
-    return escape(str(valor or ""))
+def mostrar_sidebar_brand(
+    titulo="Sistema Contable FF",
+    subtitulo="Contabilidad, IVA, compras, ventas, bancos y auditoría en un flujo integrado.",
+):
+    titulo_html = escape(str(titulo))
+    subtitulo_html = escape(str(subtitulo))
+
+    st.sidebar.markdown(
+        f"""
+        <div class="ff-sidebar-brand">
+            <div class="ff-sidebar-brand-title">{titulo_html}</div>
+            <div class="ff-sidebar-brand-subtitle">{subtitulo_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
-def mostrar_encabezado_modulo_visual(icono, titulo, descripcion, empresa_nombre=""):
-    icono_html = _limpiar_html(icono)
-    titulo_html = _limpiar_html(titulo)
-    descripcion_html = _limpiar_html(descripcion)
-    empresa_html = _limpiar_html(empresa_nombre)
+def mostrar_sidebar_usuario(usuario="administrador", rol="ADMINISTRADOR"):
+    usuario_html = escape(str(usuario))
+    rol_html = escape(str(rol))
 
-    empresa_bloque = ""
+    st.sidebar.markdown(
+        f"""
+        <div class="ff-sidebar-user">
+            <div class="ff-sidebar-user-main">👤 {usuario_html}</div>
+            <div class="ff-sidebar-user-meta">Rol: {rol_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def mostrar_sidebar_marca(
+    titulo="Sistema Contable FF",
+    subtitulo="Contabilidad, IVA, compras, ventas, bancos y auditoría en un flujo integrado.",
+    usuario=None,
+    rol=None,
+    mostrar_usuario=True,
+    **kwargs,
+):
+    mostrar_sidebar_brand(
+        titulo=titulo,
+        subtitulo=subtitulo,
+    )
+
+    if mostrar_usuario and usuario is not None:
+        mostrar_sidebar_usuario(
+            usuario=usuario,
+            rol=rol or "ADMINISTRADOR",
+        )
+
+
+def mostrar_sidebar_usuario_visual(usuario="administrador", rol="ADMINISTRADOR"):
+    return mostrar_sidebar_usuario(
+        usuario=usuario,
+        rol=rol,
+    )
+
+
+def mostrar_encabezado_modulo(icono, titulo, descripcion="", empresa_nombre=""):
+    icono_html = escape(str(icono or ""))
+    titulo_html = escape(str(titulo or ""))
+    descripcion_html = escape(str(descripcion or ""))
+    empresa_html = escape(str(empresa_nombre or ""))
 
     if empresa_html:
         empresa_bloque = (
-            f'<div class="ff-module-right">'
+            '<div class="ff-module-right">'
             f'<div class="ff-company-pill">Empresa activa: <strong>{empresa_html}</strong></div>'
-            f'</div>'
+            '</div>'
         )
+    else:
+        empresa_bloque = ""
 
-    html = f"""
-    <div class="ff-module-hero">
-        <div class="ff-module-left">
-            <div class="ff-module-icon">{icono_html}</div>
-            <div>
-                <div class="ff-module-title">{titulo_html}</div>
-                <div class="ff-module-desc">{descripcion_html}</div>
-            </div>
-        </div>
-        {empresa_bloque}
-    </div>
-    """
-
-    st.markdown(dedent(html).strip(), unsafe_allow_html=True)
-
-
-def mostrar_sidebar_marca(usuario="", rol=""):
-    usuario_html = _limpiar_html(usuario)
-    rol_html = _limpiar_html(rol)
-
-    st.sidebar.markdown(
-        dedent(
-            """
-            <div class="ff-sidebar-brand">
-                <div class="ff-sidebar-brand-title">Sistema Contable FF</div>
-                <div class="ff-sidebar-brand-subtitle">
-                    Contabilidad, IVA, compras, ventas, bancos y auditoría en un flujo integrado.
-                </div>
-            </div>
-            """
-        ).strip(),
-        unsafe_allow_html=True
+    html = (
+        '<div class="ff-module-hero">'
+        '<div class="ff-module-left">'
+        f'<div class="ff-module-icon">{icono_html}</div>'
+        '<div>'
+        f'<div class="ff-module-title">{titulo_html}</div>'
+        f'<div class="ff-module-desc">{descripcion_html}</div>'
+        '</div>'
+        '</div>'
+        f'{empresa_bloque}'
+        '</div>'
     )
 
-    if usuario_html or rol_html:
-        st.sidebar.markdown(
-            dedent(
-                f"""
-                <div class="ff-sidebar-user">
-                    <div class="ff-sidebar-user-main">👤 {usuario_html}</div>
-                    <div class="ff-sidebar-user-meta">Rol: {rol_html}</div>
-                </div>
-                """
-            ).strip(),
-            unsafe_allow_html=True
-        )
+    st.markdown(html, unsafe_allow_html=True)
 
 
-def mostrar_login_bienvenida():
-    st.markdown(
-        dedent(
-            """
-            <div class="ff-login-card">
-                <h2 style="margin-top: 0; margin-bottom: 0.25rem;">Sistema Contable FF</h2>
-                <p style="color: #cbd5e1; margin-bottom: 0;">
-                    Ingresá con tu usuario y contraseña para continuar.
-                </p>
-            </div>
-            """
-        ).strip(),
-        unsafe_allow_html=True
-    )
-
-
-def mostrar_nota_visual(texto):
-    texto_html = _limpiar_html(texto)
-
-    st.markdown(
-        dedent(
-            f"""
-            <div class="ff-section-note">
-                {texto_html}
-            </div>
-            """
-        ).strip(),
-        unsafe_allow_html=True
-    )
-
-
-def mostrar_tarjeta(titulo, descripcion="", icono=""):
-    icono_html = _limpiar_html(icono)
-    titulo_html = _limpiar_html(titulo)
-    descripcion_html = _limpiar_html(descripcion)
-
-    st.markdown(
-        dedent(
-            f"""
-            <div class="ff-card">
-                <div style="font-size: 1.55rem; margin-bottom: 0.35rem;">{icono_html}</div>
-                <div style="font-weight: 800; color: #f8fafc; margin-bottom: 0.25rem;">{titulo_html}</div>
-                <div style="color: #cbd5e1; font-size: 0.92rem; line-height: 1.45;">{descripcion_html}</div>
-            </div>
-            """
-        ).strip(),
-        unsafe_allow_html=True
+def mostrar_encabezado_modulo_visual(icono, titulo, descripcion="", empresa_nombre=""):
+    return mostrar_encabezado_modulo(
+        icono=icono,
+        titulo=titulo,
+        descripcion=descripcion,
+        empresa_nombre=empresa_nombre,
     )
