@@ -4,6 +4,8 @@ import streamlit as st
 from core.numeros import moneda
 from core.ui import preparar_vista
 
+from modulos.documentos_tesoreria_componentes import mostrar_recibos_emitidos_integrado
+
 from services.cobranzas_service import (
     anular_cobranza,
     inicializar_cobranzas,
@@ -304,10 +306,11 @@ def _preparar_pendientes_editor(df):
 def mostrar_cobranzas():
     inicializar_cobranzas()
 
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab_recibos_emitidos = st.tabs([
         "Registrar cobranza",
         "Pendientes por cliente",
         "Historial / Anulación",
+        "Recibos emitidos",
     ])
 
     with tab1:
@@ -318,6 +321,9 @@ def mostrar_cobranzas():
 
     with tab3:
         mostrar_historial_cobranzas()
+
+    with tab_recibos_emitidos:
+        mostrar_recibos_emitidos_integrado()
 
 
 # ======================================================

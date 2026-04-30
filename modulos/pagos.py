@@ -4,6 +4,8 @@ import streamlit as st
 from core.numeros import moneda
 from core.ui import preparar_vista
 
+from modulos.documentos_tesoreria_componentes import mostrar_ordenes_pago_emitidas_integrado
+
 from services.pagos_service import (
     anular_pago,
     inicializar_pagos,
@@ -304,10 +306,11 @@ def _preparar_pendientes_editor(df):
 def mostrar_pagos():
     inicializar_pagos()
 
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab_ordenes_pago_emitidas = st.tabs([
         "Registrar pago",
         "Pendientes por proveedor",
         "Historial / Anulación",
+        "Órdenes de pago",
     ])
 
     with tab1:
@@ -318,6 +321,9 @@ def mostrar_pagos():
 
     with tab3:
         mostrar_historial_pagos()
+
+    with tab_ordenes_pago_emitidas:
+        mostrar_ordenes_pago_emitidas_integrado()
 
 
 # ======================================================
