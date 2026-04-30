@@ -189,6 +189,7 @@ MODULOS_RENDER = {
         "dependencias": [
             "services.tesoreria_service",
             "services.cobranzas_service",
+            "services.documentos_tesoreria_service",
             "modulos.cobranzas",
         ],
     },
@@ -207,6 +208,7 @@ MODULOS_RENDER = {
         "dependencias": [
             "services.tesoreria_service",
             "services.pagos_service",
+            "services.documentos_tesoreria_service",
             "modulos.pagos",
         ],
     },
