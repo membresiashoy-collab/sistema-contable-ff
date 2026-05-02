@@ -133,6 +133,14 @@ MODULOS_UI = {
             "gastos bancarios, reglas recurrentes y base para conciliación."
         ),
     },
+    "Conciliación": {
+        "icono": "🔗",
+        "titulo": "Conciliación",
+        "descripcion": (
+            "Cruce entre extractos bancarios y operaciones reales de Tesorería: "
+            "sugerencias automáticas, confirmación manual, trazabilidad y desconciliación controlada."
+        ),
+    },
     "IVA": {
         "icono": "🧾",
         "titulo": "IVA",
@@ -228,6 +236,16 @@ MODULOS_RENDER = {
             "services.bancos_operaciones_service",
             "services.bancos_service",
             "modulos.bancos",
+        ],
+    },
+    "Conciliación": {
+        "modulo": "modulos.conciliacion",
+        "funcion": "mostrar_conciliacion",
+        "dependencias": [
+            "services.tesoreria_service",
+            "services.bancos_service",
+            "services.conciliacion_service",
+            "modulos.conciliacion",
         ],
     },
     "IVA": {
