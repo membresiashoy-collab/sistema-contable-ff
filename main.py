@@ -506,6 +506,148 @@ def limpiar_sid_url():
 
 
 # ======================================================
+# UTILIDADES DE EMPRESA OPERATIVA
+# ======================================================
+
+def _entero_seguro(valor, default=None):
+    try:
+        if valor is None:
+            return default
+
+        return int(valor)
+
+    except Exception:
+        return default
+
+
+def _rol_es_administrador(datos_usuario):
+    rol = str((datos_usuario or {}).get("rol", "")).strip().upper()
+    return rol in {"ADMINISTRADOR", "ADMIN", "SUPERADMIN"}
+
+
+def _actualizar_empresa_sesion_segura(empresa_id):
+    token = st.session_state.get("session_token", "")
+
+    if not token or empresa_id is None:
+        return
+
+    try:
+        actualizar_empresa_sesion(token, int(empresa_id))
+    except TypeError:
+        try:
+            actualizar_empresa_sesion(
+                token=token,
+                empresa_id=int(empresa_id),
+            )
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _obtener_empresas_activas_usuario(usuario_id):
+    try:
+        empresas = obtener_empresas_usuario(usuario_id)
+    except Exception:
+        return None
+
+    return empresas
+
+
+def _marcar_sin_empresa_operativa():
+    st.session_state["empresa_id"] = None
+    st.session_state["empresa_nombre"] = "Sin empresa activa"
+    st.session_state["empresa_operativa_bloqueada"] = True
+    st.session_state["empresa_operativa_mensaje"] = (
+        "No hay una empresa activa habilitada para operar."
+    )
+
+
+def _marcar_empresa_operativa(empresa_id, empresa_nombre):
+    st.session_state["empresa_id"] = int(empresa_id)
+    st.session_state["empresa_nombre"] = str(empresa_nombre)
+    st.session_state["empresa_operativa_bloqueada"] = False
+    st.session_state["empresa_operativa_mensaje"] = ""
+
+
+def asegurar_empresa_operativa_actual():
+    usuario = st.session_state.get("usuario")
+
+    if not usuario:
+        _marcar_sin_empresa_operativa()
+        return False
+
+    empresas = _obtener_empresas_activas_usuario(usuario["id"])
+
+    if empresas is None or empresas.empty:
+        _marcar_sin_empresa_operativa()
+        return False
+
+    empresas = empresas.copy()
+    empresas["id"] = empresas["id"].astype(int)
+
+    ids_validos = empresas["id"].tolist()
+    empresa_actual = _entero_seguro(st.session_state.get("empresa_id"), default=None)
+
+    if empresa_actual in ids_validos:
+        fila = empresas[empresas["id"] == empresa_actual].iloc[0]
+        _marcar_empresa_operativa(
+            empresa_id=int(fila["id"]),
+            empresa_nombre=str(fila["nombre"]),
+        )
+        return True
+
+    fila = empresas.iloc[0]
+    nueva_empresa_id = int(fila["id"])
+    nueva_empresa_nombre = str(fila["nombre"])
+
+    _marcar_empresa_operativa(
+        empresa_id=nueva_empresa_id,
+        empresa_nombre=nueva_empresa_nombre,
+    )
+
+    _actualizar_empresa_sesion_segura(nueva_empresa_id)
+
+    if "selector_empresa_activa" in st.session_state:
+        del st.session_state["selector_empresa_activa"]
+
+    return True
+
+
+def puede_operar_modulo(menu):
+    if menu == "Seguridad" and usuario_es_administrador():
+        return True
+
+    return not bool(st.session_state.get("empresa_operativa_bloqueada", False))
+
+
+def mostrar_bloqueo_empresa_operativa():
+    mostrar_encabezado_modulo_visual(
+        icono="🏢",
+        titulo="Sin empresa operativa activa",
+        descripcion=(
+            "Para operar módulos como Ventas, Compras, Banco, Caja, Pagos o IVA, "
+            "el usuario debe tener asignada una empresa activa."
+        ),
+        empresa_nombre=st.session_state.get("empresa_nombre", "Sin empresa activa"),
+    )
+
+    if usuario_es_administrador():
+        st.warning(
+            "No hay una empresa activa disponible para operar. "
+            "Entrá a Seguridad para crear una empresa, reactivar una existente o asignarla al usuario."
+        )
+        st.info(
+            "Por seguridad, mientras no exista una empresa activa, solo se permite ingresar a Seguridad."
+        )
+    else:
+        st.error(
+            "Tu usuario no tiene ninguna empresa activa asignada. "
+            "Pedile al administrador que reactive una empresa o te asigne una empresa activa."
+        )
+
+
+# ======================================================
 # ESTADO DE SESIÓN
 # ======================================================
 
@@ -520,10 +662,16 @@ def iniciar_estado():
         st.session_state["permisos"] = set()
 
     if "empresa_id" not in st.session_state:
-        st.session_state["empresa_id"] = 1
+        st.session_state["empresa_id"] = None
 
     if "empresa_nombre" not in st.session_state:
-        st.session_state["empresa_nombre"] = "Empresa Demo"
+        st.session_state["empresa_nombre"] = "Sin empresa activa"
+
+    if "empresa_operativa_bloqueada" not in st.session_state:
+        st.session_state["empresa_operativa_bloqueada"] = True
+
+    if "empresa_operativa_mensaje" not in st.session_state:
+        st.session_state["empresa_operativa_mensaje"] = ""
 
     if "session_token" not in st.session_state:
         st.session_state["session_token"] = ""
@@ -543,20 +691,33 @@ def cargar_usuario_en_estado(datos_usuario, empresa_id_preferida=None):
     st.session_state["usuario"] = datos_usuario
     st.session_state["permisos"] = obtener_permisos_usuario(datos_usuario["id"])
 
-    empresas = obtener_empresas_usuario(datos_usuario["id"])
+    empresas = _obtener_empresas_activas_usuario(datos_usuario["id"])
 
-    if not empresas.empty:
-        opciones = empresas["id"].tolist()
+    if empresas is None or empresas.empty:
+        _marcar_sin_empresa_operativa()
+        return False
 
-        if empresa_id_preferida in opciones:
-            empresa_id = empresa_id_preferida
-        else:
-            empresa_id = int(empresas.iloc[0]["id"])
+    empresas = empresas.copy()
+    empresas["id"] = empresas["id"].astype(int)
 
-        fila = empresas[empresas["id"] == empresa_id].iloc[0]
+    opciones = empresas["id"].tolist()
+    preferida = _entero_seguro(empresa_id_preferida, default=None)
 
-        st.session_state["empresa_id"] = int(fila["id"])
-        st.session_state["empresa_nombre"] = str(fila["nombre"])
+    if preferida in opciones:
+        empresa_id = preferida
+    else:
+        empresa_id = int(empresas.iloc[0]["id"])
+
+    fila = empresas[empresas["id"] == empresa_id].iloc[0]
+
+    _marcar_empresa_operativa(
+        empresa_id=int(fila["id"]),
+        empresa_nombre=str(fila["nombre"]),
+    )
+
+    _actualizar_empresa_sesion_segura(int(fila["id"]))
+
+    return True
 
 
 def restaurar_sesion_desde_url():
@@ -578,7 +739,7 @@ def restaurar_sesion_desde_url():
 
     cargar_usuario_en_estado(
         sesion["usuario"],
-        empresa_id_preferida=sesion.get("empresa_id", 1),
+        empresa_id_preferida=sesion.get("empresa_id", None),
     )
 
     actualizar_actividad(token)
@@ -629,8 +790,7 @@ def refrescar_permisos_usuario_actual():
 
 def usuario_es_administrador():
     usuario = st.session_state.get("usuario") or {}
-    rol = str(usuario.get("rol", "")).strip().upper()
-    return rol in {"ADMINISTRADOR", "ADMIN", "SUPERADMIN"}
+    return _rol_es_administrador(usuario)
 
 
 # ======================================================
@@ -659,25 +819,46 @@ def pantalla_login():
                     st.error("Usuario o contraseña incorrectos.")
                     return
 
-                empresas = obtener_empresas_usuario(datos["id"])
+                empresas = _obtener_empresas_activas_usuario(datos["id"])
 
-                empresa_id = 1
-                empresa_nombre = "Empresa Demo"
+                if empresas is None or empresas.empty:
+                    if not _rol_es_administrador(datos):
+                        st.error(
+                            "Tu usuario no tiene ninguna empresa activa asignada. "
+                            "Pedile al administrador que reactive una empresa o te asigne una empresa activa."
+                        )
+                        return
 
-                if not empresas.empty:
-                    empresa_id = int(empresas.iloc[0]["id"])
-                    empresa_nombre = str(empresas.iloc[0]["nombre"])
+                    token = crear_sesion(datos["id"], None)
+
+                    st.session_state["session_token"] = token
+                    st.session_state["usuario"] = datos
+                    st.session_state["autenticado"] = True
+                    st.session_state["permisos"] = obtener_permisos_usuario(datos["id"])
+                    _marcar_sin_empresa_operativa()
+
+                    poner_sid_url(token)
+                    st.rerun()
+
+                empresas = empresas.copy()
+                empresas["id"] = empresas["id"].astype(int)
+
+                empresa_id = int(empresas.iloc[0]["id"])
+                empresa_nombre = str(empresas.iloc[0]["nombre"])
 
                 token = crear_sesion(datos["id"], empresa_id)
 
                 st.session_state["session_token"] = token
-                st.session_state["empresa_id"] = empresa_id
-                st.session_state["empresa_nombre"] = empresa_nombre
+                _marcar_empresa_operativa(
+                    empresa_id=empresa_id,
+                    empresa_nombre=empresa_nombre,
+                )
 
                 cargar_usuario_en_estado(
                     datos,
                     empresa_id_preferida=empresa_id,
                 )
+
                 poner_sid_url(token)
 
                 st.rerun()
@@ -754,6 +935,14 @@ def pantalla_cambio_password():
 def obtener_menus_disponibles():
     menus = list(MODULOS_UI.keys())
 
+    empresa_bloqueada = bool(st.session_state.get("empresa_operativa_bloqueada", False))
+
+    if empresa_bloqueada:
+        if usuario_es_administrador():
+            return ["Seguridad"]
+
+        return []
+
     if usuario_es_administrador():
         return menus
 
@@ -771,9 +960,10 @@ def mostrar_selector_empresa_sidebar():
     except Exception:
         empresas = None
 
+    st.sidebar.caption("Empresa activa")
+
     if empresas is None or empresas.empty:
-        st.sidebar.caption("Empresa activa")
-        st.sidebar.info(st.session_state.get("empresa_nombre", "Empresa Demo"))
+        st.sidebar.info("Sin empresa activa")
         return
 
     opciones = []
@@ -789,14 +979,16 @@ def mostrar_selector_empresa_sidebar():
     ids = [op["id"] for op in opciones]
     labels = [op["nombre"] for op in opciones]
 
-    empresa_actual = int(st.session_state.get("empresa_id", ids[0]))
+    empresa_actual = _entero_seguro(st.session_state.get("empresa_id"), default=ids[0])
 
     try:
         index_actual = ids.index(empresa_actual)
     except ValueError:
         index_actual = 0
-
-    st.sidebar.caption("Empresa activa")
+        empresa_actual = ids[0]
+        st.session_state["empresa_id"] = empresa_actual
+        st.session_state["empresa_nombre"] = labels[0]
+        _actualizar_empresa_sesion_segura(empresa_actual)
 
     seleccion = st.sidebar.selectbox(
         "Empresa",
@@ -812,19 +1004,10 @@ def mostrar_selector_empresa_sidebar():
     if nueva_empresa_id != empresa_actual:
         st.session_state["empresa_id"] = nueva_empresa_id
         st.session_state["empresa_nombre"] = nueva_empresa_nombre
+        st.session_state["empresa_operativa_bloqueada"] = False
+        st.session_state["empresa_operativa_mensaje"] = ""
 
-        token = st.session_state.get("session_token", "")
-
-        if token:
-            try:
-                actualizar_empresa_sesion(token, nueva_empresa_id)
-            except TypeError:
-                actualizar_empresa_sesion(
-                    token=token,
-                    empresa_id=nueva_empresa_id,
-                )
-            except Exception:
-                pass
+        _actualizar_empresa_sesion_segura(nueva_empresa_id)
 
         st.rerun()
 
@@ -877,6 +1060,16 @@ def mostrar_sidebar_navegacion():
     st.sidebar.caption("Ir a:")
 
     menus = obtener_menus_disponibles()
+
+    if not menus:
+        st.sidebar.warning("Sin empresa activa para operar.")
+
+        st.sidebar.divider()
+
+        if st.sidebar.button("Cerrar sesión", use_container_width=True):
+            cerrar_sesion_actual()
+
+        return None
 
     menu_actual = st.session_state.get("menu_actual", "Ventas")
 
@@ -942,7 +1135,17 @@ def main():
     if pantalla_cambio_password():
         return
 
+    asegurar_empresa_operativa_actual()
+
     menu = mostrar_sidebar_navegacion()
+
+    if menu is None:
+        mostrar_bloqueo_empresa_operativa()
+        return
+
+    if not puede_operar_modulo(menu):
+        mostrar_bloqueo_empresa_operativa()
+        return
 
     if preparar_cambio_modulo(st.session_state, menu):
         st.rerun()
