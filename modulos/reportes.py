@@ -3,14 +3,22 @@ import pandas as pd
 
 from database import (
     ejecutar_query,
-    eliminar_todo_diario,
-    eliminar_diferencias_redondeo
+    eliminar_diferencias_redondeo,
 )
 
 from core.fechas import fecha_para_ordenar, formatear_fecha
 from core.numeros import moneda
 from core.ui import preparar_vista
 from core.exportadores import exportar_excel
+
+from services.admin_limpieza_service import (
+    diagnosticar_datos_demo,
+    limpiar_banco_demo_admin,
+    limpiar_cobranzas_recibos_admin,
+    limpiar_demo_operativa_admin,
+    limpiar_libro_diario_admin,
+    limpiar_pagos_ordenes_admin,
+)
 
 
 # ======================================================
@@ -38,6 +46,16 @@ def fecha_formateada_segura(valor):
         return formatear_fecha(valor)
     except Exception:
         return valor
+
+
+def empresa_actual_id():
+    return int(st.session_state.get("empresa_id", 1) or 1)
+
+
+def usuario_es_administrador():
+    usuario = st.session_state.get("usuario") or {}
+    rol = str(usuario.get("rol", "")).strip().upper()
+    return rol in {"ADMINISTRADOR", "ADMIN", "SUPERADMIN"}
 
 
 def insertar_espacios_entre_asientos(df):
@@ -97,6 +115,26 @@ def cargar_libro_diario():
     df["fecha_mostrar"] = df["fecha"].apply(fecha_formateada_segura)
 
     return df
+
+
+def mostrar_resultado_limpieza(resultado):
+    if resultado.get("ok"):
+        st.success(resultado.get("mensaje", "Operación realizada correctamente."))
+    else:
+        st.error(resultado.get("mensaje", "No se pudo realizar la operación."))
+
+    backup = resultado.get("backup")
+
+    if backup:
+        st.caption(f"Backup creado: `{backup}`")
+
+    detalle = resultado.get("detalle") or []
+
+    if detalle:
+        st.dataframe(
+            preparar_vista(pd.DataFrame(detalle)),
+            use_container_width=True,
+        )
 
 
 def mostrar_alerta_redondeo():
@@ -223,11 +261,12 @@ def mostrar_diario():
         "Las cuentas corrientes de clientes y proveedores deben gestionarse desde Ventas y Compras."
     )
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📓 Libro Diario",
         "📒 Libro Mayor",
         "📊 Balance de Sumas y Saldos",
-        "🧭 Control por origen / archivo"
+        "🧭 Control por origen / archivo",
+        "🧹 Limpieza admin/demo",
     ])
 
     with tab1:
@@ -241,6 +280,9 @@ def mostrar_diario():
 
     with tab4:
         mostrar_control_origen_archivo()
+
+    with tab5:
+        mostrar_limpieza_admin_demo()
 
 
 # ======================================================
@@ -338,28 +380,10 @@ def mostrar_libro_diario():
 
     st.divider()
 
-    if "confirmar_limpiar_diario" not in st.session_state:
-        st.session_state["confirmar_limpiar_diario"] = False
-
-    if st.button("🧹 Limpiar Libro Diario"):
-        st.session_state["confirmar_limpiar_diario"] = True
-
-    if st.session_state["confirmar_limpiar_diario"]:
-        st.warning("¿Confirmás eliminar todos los movimientos del Libro Diario?")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            if st.button("Sí, limpiar libro diario"):
-                eliminar_todo_diario()
-                st.success("Libro Diario limpiado.")
-                st.session_state["confirmar_limpiar_diario"] = False
-                st.rerun()
-
-        with col2:
-            if st.button("Cancelar"):
-                st.session_state["confirmar_limpiar_diario"] = False
-                st.rerun()
+    st.warning(
+        "La limpieza del Libro Diario ahora está en la pestaña "
+        "'Limpieza admin/demo', con conteo real y confirmación fuerte."
+    )
 
 
 # ======================================================
@@ -648,3 +672,140 @@ def mostrar_control_origen_archivo():
         file_name="control_contable_origen_archivo.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+
+# ======================================================
+# LIMPIEZA ADMIN / DEMO
+# ======================================================
+
+def mostrar_limpieza_admin_demo():
+    st.subheader("🧹 Limpieza administrativa / demo")
+
+    if not usuario_es_administrador():
+        st.error("Solo un administrador puede acceder a la limpieza administrativa.")
+        return
+
+    st.warning(
+        "Esta pantalla es para demo, pruebas y correcciones administrativas. "
+        "En operación real se debe usar anulación/reversión, no borrado físico."
+    )
+
+    empresa_id = empresa_actual_id()
+
+    st.markdown("### Diagnóstico actual")
+
+    diagnostico = diagnosticar_datos_demo(empresa_id)
+
+    if diagnostico.empty:
+        st.info("No se pudo obtener diagnóstico.")
+    else:
+        st.dataframe(
+            preparar_vista(diagnostico),
+            use_container_width=True,
+        )
+
+    st.divider()
+
+    st.markdown("### Acciones puntuales")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("#### Limpiar solo Libro Diario")
+        st.caption("Borra únicamente asientos contables. No borra recibos, pagos, tesorería ni banco.")
+
+        texto_diario = st.text_input(
+            "Escribí LIMPIAR DIARIO",
+            key="admin_limpieza_texto_diario",
+        )
+
+        if st.button("Limpiar Libro Diario", use_container_width=True):
+            resultado = limpiar_libro_diario_admin(
+                empresa_id=empresa_id,
+                confirmar_texto=texto_diario,
+            )
+            mostrar_resultado_limpieza(resultado)
+            if resultado.get("ok"):
+                st.rerun()
+
+    with col2:
+        st.markdown("#### Limpiar Banco demo")
+        st.caption("Borra movimientos bancarios, importaciones y conciliaciones bancarias de prueba.")
+
+        texto_banco = st.text_input(
+            "Escribí BORRAR BANCO",
+            key="admin_limpieza_texto_banco",
+        )
+
+        if st.button("Borrar Banco demo", use_container_width=True):
+            resultado = limpiar_banco_demo_admin(
+                empresa_id=empresa_id,
+                confirmar_texto=texto_banco,
+            )
+            mostrar_resultado_limpieza(resultado)
+            if resultado.get("ok"):
+                st.rerun()
+
+    st.divider()
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("#### Borrar Recibos / Cobranzas demo")
+        st.caption("Borra cobranzas, recibos, imputaciones, cuenta corriente, tesorería y asientos vinculados.")
+
+        texto_recibos = st.text_input(
+            "Escribí BORRAR RECIBOS",
+            key="admin_limpieza_texto_recibos",
+        )
+
+        if st.button("Borrar Recibos / Cobranzas", use_container_width=True):
+            resultado = limpiar_cobranzas_recibos_admin(
+                empresa_id=empresa_id,
+                confirmar_texto=texto_recibos,
+            )
+            mostrar_resultado_limpieza(resultado)
+            if resultado.get("ok"):
+                st.rerun()
+
+    with col2:
+        st.markdown("#### Borrar Órdenes / Pagos demo")
+        st.caption("Borra pagos, órdenes, imputaciones, cuenta corriente, tesorería y asientos vinculados.")
+
+        texto_ordenes = st.text_input(
+            "Escribí BORRAR ORDENES",
+            key="admin_limpieza_texto_ordenes",
+        )
+
+        if st.button("Borrar Órdenes / Pagos", use_container_width=True):
+            resultado = limpiar_pagos_ordenes_admin(
+                empresa_id=empresa_id,
+                confirmar_texto=texto_ordenes,
+            )
+            mostrar_resultado_limpieza(resultado)
+            if resultado.get("ok"):
+                st.rerun()
+
+    st.divider()
+
+    st.markdown("### Limpieza demo completa")
+
+    st.error(
+        "Esta acción borra la operatoria demo: banco, cobranzas, pagos, tesorería, cuentas corrientes, "
+        "libro diario, ventas/compras cargadas e historial de cargas. "
+        "No borra usuarios, empresas, plan de cuentas ni configuraciones base."
+    )
+
+    texto_demo = st.text_input(
+        "Escribí LIMPIAR DEMO",
+        key="admin_limpieza_texto_demo",
+    )
+
+    if st.button("LIMPIAR DEMO OPERATIVA COMPLETA", type="primary", use_container_width=True):
+        resultado = limpiar_demo_operativa_admin(
+            empresa_id=empresa_id,
+            confirmar_texto=texto_demo,
+        )
+        mostrar_resultado_limpieza(resultado)
+        if resultado.get("ok"):
+            st.rerun()
