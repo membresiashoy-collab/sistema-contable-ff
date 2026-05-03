@@ -1,4 +1,6 @@
 import json
+import re
+import unicodedata
 from datetime import datetime
 
 import pandas as pd
@@ -664,10 +666,222 @@ def obtener_conciliaciones_tesoreria(empresa_id=1, incluir_anuladas=False):
 
 
 # ======================================================
-# SUGERENCIAS
+# SUGERENCIAS Y CONCILIACIÓN AUTOMÁTICA SEGURA
 # ======================================================
 
-def _puntuar_sugerencia(movimiento, operacion, tolerancia_importe=1.0, dias_maximos=7):
+PALABRAS_RUIDO_CONCILIACION = {
+    "TRANSFERENCIA", "TRANSF", "TRF", "PAGO", "PAGOS", "COBRO", "COBROS",
+    "DEBITO", "DÉBITO", "CREDITO", "CRÉDITO", "ACREDITACION", "ACREDITACIÓN",
+    "BANCO", "CUENTA", "CTA", "CBU", "CVU", "ALIAS", "ARS", "PESOS",
+    "COMISION", "COMISIÓN", "IMP", "IMPUESTO", "IVA", "IIBB", "RET", "RETENCION",
+    "RETENCIÓN", "SUC", "SUCURSAL", "ONLINE", "HOME", "BANKING", "INTERBANKING",
+}
+
+
+def _normalizar_texto_busqueda(valor):
+    texto = _texto_upper(valor)
+
+    if not texto:
+        return ""
+
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(c for c in texto if not unicodedata.combining(c))
+    texto = re.sub(r"[^A-Z0-9]+", " ", texto)
+    texto = re.sub(r"\s+", " ", texto).strip()
+    return texto
+
+
+def _tokens_utiles(valor, largo_minimo=4):
+    texto = _normalizar_texto_busqueda(valor)
+
+    if not texto:
+        return set()
+
+    tokens = set()
+
+    for token in texto.split():
+        if len(token) < int(largo_minimo):
+            continue
+
+        if token in PALABRAS_RUIDO_CONCILIACION:
+            continue
+
+        tokens.add(token)
+
+    return tokens
+
+
+def _referencias_utiles(*valores):
+    referencias = set()
+
+    for valor in valores:
+        texto = _normalizar_texto_busqueda(valor)
+
+        if not texto:
+            continue
+
+        for token in texto.split():
+            if len(token) >= 5 and any(c.isdigit() for c in token):
+                referencias.add(token)
+
+        compacto = re.sub(r"[^A-Z0-9]", "", texto)
+
+        if len(compacto) >= 6 and any(c.isdigit() for c in compacto):
+            referencias.add(compacto)
+
+    return referencias
+
+
+def _texto_banco_para_match(movimiento):
+    return " ".join([
+        _normalizar_texto_busqueda(movimiento.get("referencia")),
+        _normalizar_texto_busqueda(movimiento.get("concepto")),
+        _normalizar_texto_busqueda(movimiento.get("causal")),
+        _normalizar_texto_busqueda(movimiento.get("banco")),
+        _normalizar_texto_busqueda(movimiento.get("nombre_cuenta")),
+    ]).strip()
+
+
+def _texto_tesoreria_para_match(operacion):
+    return " ".join([
+        _normalizar_texto_busqueda(operacion.get("referencia_externa")),
+        _normalizar_texto_busqueda(operacion.get("descripcion")),
+        _normalizar_texto_busqueda(operacion.get("tercero_nombre")),
+        _normalizar_texto_busqueda(operacion.get("tercero_cuit")),
+        _normalizar_texto_busqueda(operacion.get("medio_pago")),
+        _normalizar_texto_busqueda(operacion.get("cuenta_tesoreria")),
+    ]).strip()
+
+
+def _coincidencia_referencias(movimiento, operacion):
+    refs_banco = _referencias_utiles(
+        movimiento.get("referencia"),
+        movimiento.get("concepto"),
+        movimiento.get("causal"),
+    )
+    refs_tesoreria = _referencias_utiles(
+        operacion.get("referencia_externa"),
+        operacion.get("descripcion"),
+        operacion.get("tercero_cuit"),
+    )
+
+    if not refs_banco or not refs_tesoreria:
+        return {
+            "score": 0,
+            "motivo": "",
+            "referencias_banco": sorted(refs_banco),
+            "referencias_tesoreria": sorted(refs_tesoreria),
+            "referencias_comunes": [],
+        }
+
+    comunes = set()
+
+    for ref_banco in refs_banco:
+        for ref_tesoreria in refs_tesoreria:
+            if ref_banco == ref_tesoreria:
+                comunes.add(ref_banco)
+            elif len(ref_banco) >= 8 and len(ref_tesoreria) >= 8:
+                if ref_banco in ref_tesoreria or ref_tesoreria in ref_banco:
+                    comunes.add(ref_banco if len(ref_banco) <= len(ref_tesoreria) else ref_tesoreria)
+
+    if not comunes:
+        return {
+            "score": 0,
+            "motivo": "",
+            "referencias_banco": sorted(refs_banco),
+            "referencias_tesoreria": sorted(refs_tesoreria),
+            "referencias_comunes": [],
+        }
+
+    return {
+        "score": 30,
+        "motivo": "referencia bancaria/externa coincidente",
+        "referencias_banco": sorted(refs_banco),
+        "referencias_tesoreria": sorted(refs_tesoreria),
+        "referencias_comunes": sorted(comunes),
+    }
+
+
+def _coincidencia_texto(movimiento, operacion):
+    texto_banco = _texto_banco_para_match(movimiento)
+    texto_tesoreria = _texto_tesoreria_para_match(operacion)
+
+    tokens_banco = _tokens_utiles(texto_banco)
+    tokens_tesoreria = _tokens_utiles(texto_tesoreria)
+    comunes = tokens_banco.intersection(tokens_tesoreria)
+
+    score = 0
+    motivos = []
+
+    if comunes:
+        score += min(18, len(comunes) * 4)
+        motivos.append("coincidencia de concepto/tercero")
+
+    tercero_cuit = re.sub(r"\D+", "", _texto(operacion.get("tercero_cuit")))
+    texto_banco_digitos = re.sub(r"\D+", "", _texto_banco_para_match(movimiento))
+
+    if tercero_cuit and len(tercero_cuit) >= 8 and tercero_cuit in texto_banco_digitos:
+        score += 16
+        motivos.append("CUIT del tercero encontrado en movimiento bancario")
+
+    tercero_nombre_tokens = _tokens_utiles(operacion.get("tercero_nombre"), largo_minimo=5)
+
+    if tercero_nombre_tokens and tercero_nombre_tokens.intersection(tokens_banco):
+        score += 10
+        motivos.append("nombre del tercero encontrado en banco")
+
+    return {
+        "score": min(score, 28),
+        "motivo": "; ".join(motivos),
+        "tokens_comunes": sorted(comunes),
+    }
+
+
+def _coincidencia_tipo_operacion(movimiento, operacion):
+    importe_banco = _numero(movimiento.get("importe"))
+    tipo_operacion = _texto_upper(operacion.get("tipo_operacion"))
+    subtipo = _texto_upper(operacion.get("subtipo"))
+    origen_modulo = _texto_upper(operacion.get("origen_modulo"))
+
+    if importe_banco > 0 and tipo_operacion in {"COBRANZA", "INGRESO"}:
+        return {"score": 8, "motivo": "crédito bancario contra cobranza/ingreso"}
+
+    if importe_banco < 0 and tipo_operacion in {"PAGO", "EGRESO", "IMPUESTO", "TRANSFERENCIA"}:
+        return {"score": 8, "motivo": "débito bancario contra egreso/pago"}
+
+    if importe_banco < 0 and ("PAGO" in subtipo or "PAGO" in origen_modulo):
+        return {"score": 6, "motivo": "débito bancario asociado a pago"}
+
+    if importe_banco > 0 and ("COBRANZA" in subtipo or "COBRANZA" in origen_modulo):
+        return {"score": 6, "motivo": "crédito bancario asociado a cobranza"}
+
+    return {"score": 0, "motivo": ""}
+
+
+def _clasificar_sugerencia(score, diferencia_importe, score_referencia, score_texto):
+    if score >= 90 and diferencia_importe <= 0.01 and (score_referencia > 0 or score_texto >= 14):
+        return "AUTOMATICA_SEGURA"
+
+    if score >= 75:
+        return "REVISION_ALTA"
+
+    if score >= 60:
+        return "REVISION_MEDIA"
+
+    return "REVISION_BAJA"
+
+
+def _puntuar_sugerencia(movimiento, operacion, tolerancia_importe=1.0, dias_maximos=None):
+    """
+    Puntúa una posible conciliación Banco/Tesorería.
+
+    Regla funcional:
+    - El importe pendiente y el signo financiero son condiciones duras.
+    - La referencia bancaria, el concepto y el tercero elevan la confianza.
+    - La fecha nunca bloquea: solo suma confianza si ayuda.
+    - Las diferencias de fecha altas quedan explicadas para revisión asistida.
+    """
+
     importe_banco = _numero(movimiento.get("importe"))
     importe_operacion = _numero(operacion.get("importe"))
 
@@ -677,8 +891,15 @@ def _puntuar_sugerencia(movimiento, operacion, tolerancia_importe=1.0, dias_maxi
     if _signo(importe_banco) != _signo(importe_operacion):
         return None
 
-    pendiente_banco = _numero(movimiento.get("importe_pendiente")) or abs(importe_banco)
-    pendiente_operacion = _numero(operacion.get("importe_pendiente")) or abs(importe_operacion)
+    pendiente_banco = _numero(movimiento.get("importe_pendiente"))
+    pendiente_operacion = _numero(operacion.get("importe_pendiente"))
+
+    if pendiente_banco <= 0:
+        pendiente_banco = abs(importe_banco)
+
+    if pendiente_operacion <= 0:
+        pendiente_operacion = abs(importe_operacion)
+
     diferencia_importe = abs(abs(pendiente_banco) - abs(pendiente_operacion))
 
     if diferencia_importe > float(tolerancia_importe):
@@ -686,73 +907,62 @@ def _puntuar_sugerencia(movimiento, operacion, tolerancia_importe=1.0, dias_maxi
 
     dias = _dias_entre(movimiento.get("fecha"), operacion.get("fecha_operacion"))
 
-    if dias > int(dias_maximos):
-        return None
-
     score = 0
     motivos = []
 
-    score += 20
+    score += 18
     motivos.append("mismo signo financiero")
 
     if diferencia_importe <= 0.01:
-        score += 35
-        motivos.append("importe exacto")
+        score += 34
+        motivos.append("importe exacto pendiente")
+    elif diferencia_importe <= 0.10:
+        score += 28
+        motivos.append("importe con diferencia mínima")
     elif diferencia_importe <= float(tolerancia_importe):
-        score += 25
+        score += 22
         motivos.append("importe dentro de tolerancia")
 
+    referencia = _coincidencia_referencias(movimiento, operacion)
+
+    if referencia["score"]:
+        score += referencia["score"]
+        motivos.append(referencia["motivo"])
+
+    texto = _coincidencia_texto(movimiento, operacion)
+
+    if texto["score"]:
+        score += texto["score"]
+        motivos.append(texto["motivo"])
+
+    tipo = _coincidencia_tipo_operacion(movimiento, operacion)
+
+    if tipo["score"]:
+        score += tipo["score"]
+        motivos.append(tipo["motivo"])
+
     if dias == 0:
-        score += 20
+        score += 8
         motivos.append("misma fecha")
     elif dias <= 1:
-        score += 15
+        score += 6
         motivos.append("fecha cercana hasta 1 día")
     elif dias <= 3:
-        score += 10
+        score += 4
         motivos.append("fecha cercana hasta 3 días")
+    elif dias <= 7:
+        score += 2
+        motivos.append("fecha cercana hasta 7 días")
     else:
-        score += 5
-        motivos.append("fecha dentro del rango")
+        motivos.append(f"fecha distante: {dias} días; no bloquea, solo baja confianza")
 
-    texto_banco = " ".join([
-        _texto_upper(movimiento.get("concepto")),
-        _texto_upper(movimiento.get("referencia")),
-        _texto_upper(movimiento.get("causal")),
-    ])
-
-    texto_tesoreria = " ".join([
-        _texto_upper(operacion.get("descripcion")),
-        _texto_upper(operacion.get("referencia_externa")),
-        _texto_upper(operacion.get("tercero_nombre")),
-        _texto_upper(operacion.get("tercero_cuit")),
-    ])
-
-    referencia = _texto_upper(operacion.get("referencia_externa"))
-
-    if referencia and referencia in texto_banco:
-        score += 15
-        motivos.append("referencia externa encontrada en banco")
-
-    tokens_banco = {t for t in texto_banco.split() if len(t) >= 4}
-    tokens_tesoreria = {t for t in texto_tesoreria.split() if len(t) >= 4}
-    interseccion = tokens_banco.intersection(tokens_tesoreria)
-
-    if interseccion:
-        score += min(10, len(interseccion) * 2)
-        motivos.append("coincidencia de texto/tercero")
-
-    tipo_operacion = _texto_upper(operacion.get("tipo_operacion"))
-
-    if importe_banco > 0 and tipo_operacion == "COBRANZA":
-        score += 10
-        motivos.append("crédito bancario contra cobranza")
-
-    if importe_banco < 0 and tipo_operacion in {"PAGO", "IMPUESTO", "TRANSFERENCIA", "CAJA"}:
-        score += 10
-        motivos.append("débito bancario contra egreso de tesorería")
-
-    score = min(score, 100)
+    score = min(int(score), 100)
+    clasificacion = _clasificar_sugerencia(
+        score=score,
+        diferencia_importe=diferencia_importe,
+        score_referencia=int(referencia["score"]),
+        score_texto=int(texto["score"]),
+    )
 
     if score >= 85:
         confianza = "Alta"
@@ -764,17 +974,90 @@ def _puntuar_sugerencia(movimiento, operacion, tolerancia_importe=1.0, dias_maxi
     return {
         "score": score,
         "confianza": confianza,
-        "motivo": "; ".join(motivos),
+        "clasificacion": clasificacion,
+        "motivo": "; ".join(m for m in motivos if m),
         "diferencia_importe": round(diferencia_importe, 2),
         "diferencia_dias": dias,
         "importe_sugerido": round(min(abs(pendiente_banco), abs(pendiente_operacion)), 2),
+        "referencias_comunes": referencia.get("referencias_comunes", []),
+        "tokens_comunes": texto.get("tokens_comunes", []),
+        "score_referencia": int(referencia["score"]),
+        "score_texto": int(texto["score"]),
     }
+
+
+def _marcar_ambiguedades_sugerencias(df):
+    if df.empty:
+        return df
+
+    df = df.copy()
+
+    df["cantidad_candidatos_movimiento"] = df.groupby("movimiento_banco_id")["operacion_tesoreria_id"].transform("count")
+    df["cantidad_candidatos_operacion"] = df.groupby("operacion_tesoreria_id")["movimiento_banco_id"].transform("count")
+    df["mejor_score_movimiento"] = df.groupby("movimiento_banco_id")["score"].transform("max")
+    df["mejor_score_operacion"] = df.groupby("operacion_tesoreria_id")["score"].transform("max")
+
+    segundos_movimiento = {}
+
+    for movimiento_id, grupo in df.groupby("movimiento_banco_id"):
+        scores = sorted(grupo["score"].astype(int).tolist(), reverse=True)
+        segundos_movimiento[movimiento_id] = scores[1] if len(scores) > 1 else None
+
+    segundos_operacion = {}
+
+    for operacion_id, grupo in df.groupby("operacion_tesoreria_id"):
+        scores = sorted(grupo["score"].astype(int).tolist(), reverse=True)
+        segundos_operacion[operacion_id] = scores[1] if len(scores) > 1 else None
+
+    df["segundo_score_movimiento"] = df["movimiento_banco_id"].map(segundos_movimiento)
+    df["segundo_score_operacion"] = df["operacion_tesoreria_id"].map(segundos_operacion)
+
+    def _resolver_fila(row):
+        score = int(row.get("score") or 0)
+        clasificacion = _texto_upper(row.get("clasificacion"))
+        segundo_mov = row.get("segundo_score_movimiento")
+        segundo_ope = row.get("segundo_score_operacion")
+
+        margen_mov = 999 if pd.isna(segundo_mov) or segundo_mov is None else score - int(segundo_mov)
+        margen_ope = 999 if pd.isna(segundo_ope) or segundo_ope is None else score - int(segundo_ope)
+
+        unica_movimiento = int(row.get("cantidad_candidatos_movimiento") or 0) == 1 or margen_mov >= 10
+        unica_operacion = int(row.get("cantidad_candidatos_operacion") or 0) == 1 or margen_ope >= 10
+        es_auto = clasificacion == "AUTOMATICA_SEGURA" and unica_movimiento and unica_operacion
+
+        if es_auto:
+            accion = "CONCILIAR_AUTOMATICAMENTE"
+            ambigua = False
+            motivo_control = "coincidencia única y fuerte"
+        else:
+            accion = "REVISION_ASISTIDA"
+            ambigua = not (unica_movimiento and unica_operacion)
+
+            if ambigua:
+                motivo_control = "hay más de un candidato posible para el movimiento u operación"
+            elif clasificacion == "AUTOMATICA_SEGURA":
+                motivo_control = "coincidencia fuerte, pero requiere revisión por control de unicidad"
+            else:
+                motivo_control = "confianza insuficiente para conciliación automática"
+
+        return pd.Series({
+            "es_candidato_auto": bool(es_auto),
+            "ambigua": bool(ambigua),
+            "accion_recomendada": accion,
+            "motivo_control": motivo_control,
+            "margen_score_movimiento": margen_mov,
+            "margen_score_operacion": margen_ope,
+        })
+
+    controles = df.apply(_resolver_fila, axis=1)
+    df = pd.concat([df, controles], axis=1)
+    return df
 
 
 def generar_sugerencias_conciliacion(
     empresa_id=1,
     tolerancia_importe=1.0,
-    dias_maximos=7,
+    dias_maximos=None,
     limite=200,
     confianza_minima="Media",
 ):
@@ -814,19 +1097,26 @@ def generar_sugerencias_conciliacion(
                 "operacion_tesoreria_id": int(ope["id"]),
                 "score": int(puntaje["score"]),
                 "confianza": puntaje["confianza"],
+                "clasificacion": puntaje["clasificacion"],
                 "motivo": puntaje["motivo"],
                 "diferencia_importe": puntaje["diferencia_importe"],
                 "diferencia_dias": puntaje["diferencia_dias"],
                 "importe_sugerido": puntaje["importe_sugerido"],
+                "score_referencia": puntaje["score_referencia"],
+                "score_texto": puntaje["score_texto"],
+                "referencias_comunes": ", ".join(puntaje.get("referencias_comunes") or []),
+                "tokens_comunes": ", ".join(puntaje.get("tokens_comunes") or []),
                 "fecha_banco": mov.get("fecha"),
                 "banco": mov.get("banco"),
                 "cuenta_banco": mov.get("nombre_cuenta"),
                 "concepto_banco": mov.get("concepto"),
                 "referencia_banco": mov.get("referencia"),
+                "causal_banco": mov.get("causal"),
                 "importe_banco": _numero(mov.get("importe")),
                 "pendiente_banco": _numero(mov.get("importe_pendiente")),
                 "fecha_tesoreria": ope.get("fecha_operacion"),
                 "tipo_operacion": ope.get("tipo_operacion"),
+                "subtipo": ope.get("subtipo"),
                 "cuenta_tesoreria": ope.get("cuenta_tesoreria"),
                 "medio_pago": ope.get("medio_pago"),
                 "tercero_nombre": ope.get("tercero_nombre"),
@@ -845,13 +1135,163 @@ def generar_sugerencias_conciliacion(
     if df.empty:
         return df
 
+    df = _marcar_ambiguedades_sugerencias(df)
+
     df = df.sort_values(
-        by=["score", "diferencia_importe", "diferencia_dias"],
-        ascending=[False, True, True],
+        by=[
+            "es_candidato_auto",
+            "score",
+            "diferencia_importe",
+            "ambigua",
+            "diferencia_dias",
+        ],
+        ascending=[False, False, True, True, True],
     ).head(int(limite))
 
     return df.reset_index(drop=True)
 
+
+def ejecutar_conciliacion_automatica_segura(
+    empresa_id=1,
+    usuario_id=None,
+    tolerancia_importe=0.01,
+    score_minimo=90,
+    limite=500,
+):
+    """
+    Ejecuta conciliaciones automáticas solo cuando el candidato es único y fuerte.
+
+    Seguridad aplicada:
+    - Importe pendiente igual dentro de tolerancia estricta.
+    - Signo financiero coincidente.
+    - Score mínimo alto.
+    - Referencia/concepto/tercero deben sostener la coincidencia.
+    - Si un banco u operación tiene más de un candidato competitivo, pasa a revisión asistida.
+    """
+
+    sugerencias = generar_sugerencias_conciliacion(
+        empresa_id=empresa_id,
+        tolerancia_importe=tolerancia_importe,
+        dias_maximos=None,
+        limite=limite,
+        confianza_minima="Media",
+    )
+
+    resultado = {
+        "ok": True,
+        "mensaje": "Conciliación automática segura finalizada.",
+        "conciliadas": 0,
+        "revision_asistida": 0,
+        "errores": 0,
+        "detalle_conciliadas": [],
+        "detalle_revision": [],
+        "detalle_errores": [],
+    }
+
+    if sugerencias.empty:
+        resultado["mensaje"] = "No se encontraron candidatos para conciliación automática."
+        return resultado
+
+    usadas_movimientos = set()
+    usadas_operaciones = set()
+
+    candidatas = sugerencias[
+        (sugerencias["es_candidato_auto"] == True)  # noqa: E712
+        & (sugerencias["score"].astype(int) >= int(score_minimo))
+        & (sugerencias["diferencia_importe"].astype(float) <= float(tolerancia_importe))
+    ].copy()
+
+    candidatas = candidatas.sort_values(
+        by=["score", "diferencia_importe", "diferencia_dias"],
+        ascending=[False, True, True],
+    )
+
+    for _, fila in candidatas.iterrows():
+        movimiento_banco_id = int(fila["movimiento_banco_id"])
+        operacion_tesoreria_id = int(fila["operacion_tesoreria_id"])
+
+        if movimiento_banco_id in usadas_movimientos or operacion_tesoreria_id in usadas_operaciones:
+            resultado["revision_asistida"] += 1
+            resultado["detalle_revision"].append({
+                "movimiento_banco_id": movimiento_banco_id,
+                "operacion_tesoreria_id": operacion_tesoreria_id,
+                "score": int(fila["score"]),
+                "motivo": "candidato fuerte omitido porque el movimiento u operación ya fue conciliado en esta corrida",
+            })
+            continue
+
+        observacion = (
+            "Conciliación automática segura Banco/Tesorería. "
+            f"Score {int(fila['score'])}. "
+            f"Motivo: {_texto(fila.get('motivo'))}. "
+            "La fecha no fue condición bloqueante; solo sumó confianza si correspondía."
+        )
+
+        confirmar = confirmar_conciliacion_tesoreria(
+            empresa_id=empresa_id,
+            movimiento_banco_id=movimiento_banco_id,
+            operacion_tesoreria_id=operacion_tesoreria_id,
+            importe_conciliar=float(fila["importe_sugerido"]),
+            usuario_id=usuario_id,
+            observacion=observacion,
+        )
+
+        if confirmar.get("ok"):
+            usadas_movimientos.add(movimiento_banco_id)
+            usadas_operaciones.add(operacion_tesoreria_id)
+            resultado["conciliadas"] += 1
+            resultado["detalle_conciliadas"].append({
+                "conciliacion_id": confirmar.get("conciliacion_id"),
+                "movimiento_banco_id": movimiento_banco_id,
+                "operacion_tesoreria_id": operacion_tesoreria_id,
+                "importe_conciliado": confirmar.get("importe_conciliado"),
+                "score": int(fila["score"]),
+                "motivo": _texto(fila.get("motivo")),
+            })
+        else:
+            resultado["errores"] += 1
+            resultado["detalle_errores"].append({
+                "movimiento_banco_id": movimiento_banco_id,
+                "operacion_tesoreria_id": operacion_tesoreria_id,
+                "score": int(fila["score"]),
+                "mensaje": confirmar.get("mensaje"),
+            })
+
+    movimientos_auto = set(candidatas["movimiento_banco_id"].astype(int).tolist()) if not candidatas.empty else set()
+    operaciones_auto = set(candidatas["operacion_tesoreria_id"].astype(int).tolist()) if not candidatas.empty else set()
+
+    revision = sugerencias[
+        ~(
+            sugerencias["movimiento_banco_id"].astype(int).isin(movimientos_auto)
+            & sugerencias["operacion_tesoreria_id"].astype(int).isin(operaciones_auto)
+            & (sugerencias["es_candidato_auto"] == True)  # noqa: E712
+        )
+    ].copy()
+
+    resultado["revision_asistida"] += int(len(revision))
+
+    for _, fila in revision.head(100).iterrows():
+        resultado["detalle_revision"].append({
+            "movimiento_banco_id": int(fila["movimiento_banco_id"]),
+            "operacion_tesoreria_id": int(fila["operacion_tesoreria_id"]),
+            "score": int(fila["score"]),
+            "confianza": fila.get("confianza"),
+            "clasificacion": fila.get("clasificacion"),
+            "accion_recomendada": fila.get("accion_recomendada"),
+            "motivo_control": fila.get("motivo_control"),
+            "motivo": fila.get("motivo"),
+        })
+
+    if resultado["errores"]:
+        resultado["ok"] = False
+        resultado["mensaje"] = "Conciliación automática segura finalizada con errores parciales."
+
+    return resultado
+
+
+# Compatibilidad semántica para llamadas desde UI/tests futuros.
+def conciliar_automaticamente_seguro(*args, **kwargs):
+    return ejecutar_conciliacion_automatica_segura(*args, **kwargs)
 
 # ======================================================
 # CONFIRMACIÓN Y DESCONCILIACIÓN

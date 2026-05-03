@@ -7,6 +7,7 @@ from core.ui import preparar_vista
 from services.conciliacion_service import (
     confirmar_conciliacion_tesoreria,
     desconciliar_conciliacion_tesoreria,
+    ejecutar_conciliacion_automatica_segura,
     generar_sugerencias_conciliacion,
     inicializar_conciliacion,
     obtener_conciliaciones_tesoreria,
@@ -56,6 +57,34 @@ def _numero(valor):
         return 0.0
 
 
+def _bool(valor):
+    if isinstance(valor, bool):
+        return valor
+
+    if valor is None:
+        return False
+
+    texto = _texto(valor).lower()
+
+    if texto in {"true", "1", "si", "sí", "yes", "y"}:
+        return True
+
+    if texto in {"false", "0", "no", "n", ""}:
+        return False
+
+    try:
+        return bool(valor)
+    except Exception:
+        return False
+
+
+def _serie_bool(df, columna):
+    if df.empty or columna not in df.columns:
+        return pd.Series(False, index=df.index)
+
+    return df[columna].apply(_bool)
+
+
 def _formatear_estado(valor):
     return _texto(valor).replace("_", " ").title()
 
@@ -90,6 +119,69 @@ def _etiqueta_operacion(row):
     )
 
 
+def _obtener_candidatas_auto(sugerencias, score_minimo=90, tolerancia_importe=0.01):
+    if sugerencias.empty:
+        return sugerencias.copy()
+
+    df = sugerencias.copy()
+
+    if "es_candidato_auto" not in df.columns:
+        return df.iloc[0:0].copy()
+
+    return df[
+        (_serie_bool(df, "es_candidato_auto"))
+        & (df["score"].astype(int) >= int(score_minimo))
+        & (df["diferencia_importe"].astype(float) <= float(tolerancia_importe))
+    ].copy()
+
+
+def _obtener_revision_asistida(sugerencias, candidatas_auto=None):
+    if sugerencias.empty:
+        return sugerencias.copy()
+
+    df = sugerencias.copy()
+
+    if candidatas_auto is not None and not candidatas_auto.empty:
+        claves_auto = set(
+            zip(
+                candidatas_auto["movimiento_banco_id"].astype(int),
+                candidatas_auto["operacion_tesoreria_id"].astype(int),
+            )
+        )
+
+        claves_df = list(
+            zip(
+                df["movimiento_banco_id"].astype(int),
+                df["operacion_tesoreria_id"].astype(int),
+            )
+        )
+
+        df = df[[clave not in claves_auto for clave in claves_df]].copy()
+
+    if "accion_recomendada" in df.columns:
+        revision = df[df["accion_recomendada"].astype(str) == "REVISION_ASISTIDA"].copy()
+
+        if not revision.empty:
+            return revision
+
+    return df[~_serie_bool(df, "es_candidato_auto")].copy()
+
+
+def _obtener_movimientos_sin_candidato(movimientos, sugerencias):
+    if movimientos.empty:
+        return movimientos.copy()
+
+    if sugerencias.empty or "movimiento_banco_id" not in sugerencias.columns:
+        return movimientos.copy()
+
+    ids_con_candidato = set(sugerencias["movimiento_banco_id"].astype(int).tolist())
+    return movimientos[~movimientos["id"].astype(int).isin(ids_con_candidato)].copy()
+
+
+# ======================================================
+# PREPARACIÓN DE TABLAS
+# ======================================================
+
 def _preparar_sugerencias_vista(df):
     if df.empty:
         return df
@@ -99,20 +191,29 @@ def _preparar_sugerencias_vista(df):
     columnas = [
         "score",
         "confianza",
+        "clasificacion",
+        "accion_recomendada",
+        "motivo_control",
+        "ambigua",
         "fecha_banco",
         "banco",
+        "referencia_banco",
         "concepto_banco",
         "importe_banco",
         "pendiente_banco",
         "fecha_tesoreria",
         "tipo_operacion",
         "tercero_nombre",
+        "tercero_cuit",
+        "referencia_externa",
         "descripcion_tesoreria",
         "importe_tesoreria",
         "pendiente_tesoreria",
         "importe_sugerido",
         "diferencia_importe",
         "diferencia_dias",
+        "score_referencia",
+        "score_texto",
         "motivo",
     ]
 
@@ -121,20 +222,29 @@ def _preparar_sugerencias_vista(df):
     return vista[columnas].rename(columns={
         "score": "Puntaje",
         "confianza": "Confianza",
+        "clasificacion": "Clasificación",
+        "accion_recomendada": "Acción sugerida",
+        "motivo_control": "Control",
+        "ambigua": "Ambigua",
         "fecha_banco": "Fecha banco",
         "banco": "Banco",
+        "referencia_banco": "Referencia banco",
         "concepto_banco": "Concepto banco",
         "importe_banco": "Importe banco",
         "pendiente_banco": "Pendiente banco",
         "fecha_tesoreria": "Fecha tesorería",
         "tipo_operacion": "Tipo operación",
         "tercero_nombre": "Tercero",
+        "tercero_cuit": "CUIT",
+        "referencia_externa": "Referencia tesorería",
         "descripcion_tesoreria": "Descripción tesorería",
         "importe_tesoreria": "Importe tesorería",
         "pendiente_tesoreria": "Pendiente tesorería",
         "importe_sugerido": "Importe sugerido",
         "diferencia_importe": "Dif. importe",
         "diferencia_dias": "Dif. días",
+        "score_referencia": "Puntaje referencia",
+        "score_texto": "Puntaje texto",
         "motivo": "Motivo sugerencia",
     })
 
@@ -260,6 +370,43 @@ def _preparar_conciliaciones_vista(df):
     })
 
 
+def _preparar_detalle_resultado_vista(detalle):
+    df = pd.DataFrame(detalle or [])
+
+    if df.empty:
+        return df
+
+    columnas = [
+        "conciliacion_id",
+        "movimiento_banco_id",
+        "operacion_tesoreria_id",
+        "importe_conciliado",
+        "score",
+        "confianza",
+        "clasificacion",
+        "accion_recomendada",
+        "motivo_control",
+        "motivo",
+        "mensaje",
+    ]
+
+    columnas = [c for c in columnas if c in df.columns]
+
+    return df[columnas].rename(columns={
+        "conciliacion_id": "Conciliación",
+        "movimiento_banco_id": "Movimiento banco",
+        "operacion_tesoreria_id": "Operación tesorería",
+        "importe_conciliado": "Importe conciliado",
+        "score": "Puntaje",
+        "confianza": "Confianza",
+        "clasificacion": "Clasificación",
+        "accion_recomendada": "Acción sugerida",
+        "motivo_control": "Control",
+        "motivo": "Motivo",
+        "mensaje": "Mensaje",
+    })
+
+
 # ======================================================
 # MÓDULO PRINCIPAL
 # ======================================================
@@ -267,9 +414,10 @@ def _preparar_conciliaciones_vista(df):
 def mostrar_conciliacion():
     inicializar_conciliacion()
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Tablero",
         "Sugerencias automáticas",
+        "Revisión asistida",
         "Conciliación manual",
         "Conciliaciones confirmadas",
         "Desconciliar",
@@ -282,12 +430,15 @@ def mostrar_conciliacion():
         mostrar_sugerencias_automaticas()
 
     with tab3:
-        mostrar_conciliacion_manual()
+        mostrar_revision_asistida()
 
     with tab4:
-        mostrar_conciliaciones_confirmadas()
+        mostrar_conciliacion_manual()
 
     with tab5:
+        mostrar_conciliaciones_confirmadas()
+
+    with tab6:
         mostrar_desconciliacion()
 
 
@@ -350,128 +501,311 @@ def mostrar_tablero_conciliacion():
 
 
 # ======================================================
-# SUGERENCIAS
+# SUGERENCIAS AUTOMÁTICAS / AUTOMÁTICA SEGURA
 # ======================================================
 
 def mostrar_sugerencias_automaticas():
-    st.subheader("Sugerencias automáticas")
+    st.subheader("Sugerencias automáticas seguras")
 
     st.info(
-        "El sistema propone coincidencias por signo, importe, fecha, referencia, tercero y descripción. "
-        "Nada se confirma solo: la decisión final queda en el usuario."
+        "La conciliación automática solo se ejecuta cuando hay una coincidencia única y fuerte. "
+        "La fecha no bloquea candidatos: referencia, concepto, importe y signo financiero son la base del control; "
+        "la fecha solo suma confianza cuando acompaña."
     )
 
     empresa_id = empresa_actual_id()
 
-    col1, col2, col3, col4 = st.columns(4)
+    resultado_previo = st.session_state.get("conciliacion_auto_resultado")
+
+    if resultado_previo:
+        mostrar_resultado_conciliacion_automatica(resultado_previo)
+
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         tolerancia = st.number_input(
-            "Tolerancia de importe",
+            "Tolerancia automática",
             min_value=0.0,
-            max_value=10000.0,
-            value=1.0,
-            step=0.5,
+            max_value=1000.0,
+            value=0.01,
+            step=0.01,
+            help="Para conciliación automática conviene usar tolerancia estricta. Si hay diferencia mayor, pasa a revisión asistida.",
+            key="conciliacion_auto_tolerancia",
         )
 
     with col2:
-        dias = st.number_input(
-            "Días de diferencia",
-            min_value=0,
-            max_value=60,
-            value=7,
+        score_minimo = st.number_input(
+            "Puntaje mínimo automático",
+            min_value=80,
+            max_value=100,
+            value=90,
             step=1,
+            key="conciliacion_auto_score_minimo",
         )
 
     with col3:
-        confianza = st.selectbox("Confianza mínima", ["Alta", "Media", "Baja"], index=1)
-
-    with col4:
-        limite = st.number_input("Máximo sugerencias", min_value=10, max_value=1000, value=200, step=10)
+        limite = st.number_input(
+            "Máximo candidatos a analizar",
+            min_value=50,
+            max_value=2000,
+            value=500,
+            step=50,
+            key="conciliacion_auto_limite",
+        )
 
     sugerencias = generar_sugerencias_conciliacion(
         empresa_id=empresa_id,
         tolerancia_importe=float(tolerancia),
-        dias_maximos=int(dias),
+        dias_maximos=None,
+        limite=int(limite),
+        confianza_minima="Media",
+    )
+
+    movimientos = obtener_movimientos_bancarios_pendientes(empresa_id=empresa_id)
+    candidatas_auto = _obtener_candidatas_auto(
+        sugerencias,
+        score_minimo=int(score_minimo),
+        tolerancia_importe=float(tolerancia),
+    )
+    revision = _obtener_revision_asistida(sugerencias, candidatas_auto)
+    ambiguas = revision[_serie_bool(revision, "ambigua")].copy() if not revision.empty else revision.copy()
+    sin_candidato = _obtener_movimientos_sin_candidato(movimientos, sugerencias)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Automáticas seguras", len(candidatas_auto))
+    c2.metric("Revisión asistida", len(revision))
+    c3.metric("Ambiguas", len(ambiguas))
+    c4.metric("Sin candidato", len(sin_candidato))
+
+    if candidatas_auto.empty:
+        st.warning("No hay coincidencias únicas y fuertes para conciliar automáticamente con estos parámetros.")
+    else:
+        st.markdown("#### Candidatas a conciliar automáticamente")
+        st.dataframe(
+            preparar_vista(_preparar_sugerencias_vista(candidatas_auto)),
+            use_container_width=True,
+        )
+
+    st.divider()
+    st.markdown("#### Ejecutar conciliación automática segura")
+
+    st.warning(
+        "Al ejecutar, el sistema conciliará solo las filas candidatas que sigan siendo únicas, fuertes y compatibles al momento de grabar. "
+        "Todo caso dudoso queda fuera y pasa a revisión asistida."
+    )
+
+    aceptar = st.checkbox(
+        "Confirmo ejecutar solo la conciliación automática segura. Los casos ambiguos deben quedar para revisión asistida.",
+        key="conciliacion_auto_aceptar",
+    )
+
+    if st.button(
+        "Ejecutar conciliación automática segura",
+        type="primary",
+        disabled=not aceptar or candidatas_auto.empty,
+        use_container_width=True,
+    ):
+        resultado = ejecutar_conciliacion_automatica_segura(
+            empresa_id=empresa_id,
+            usuario_id=usuario_actual_id(),
+            tolerancia_importe=float(tolerancia),
+            score_minimo=int(score_minimo),
+            limite=int(limite),
+        )
+
+        st.session_state["conciliacion_auto_resultado"] = resultado
+        st.rerun()
+
+    if not revision.empty:
+        with st.expander("Ver casos derivados a revisión asistida", expanded=False):
+            st.dataframe(
+                preparar_vista(_preparar_sugerencias_vista(revision.head(100))),
+                use_container_width=True,
+            )
+
+    if not sin_candidato.empty:
+        with st.expander("Ver movimientos bancarios sin candidato", expanded=False):
+            st.dataframe(
+                preparar_vista(_preparar_movimientos_vista(sin_candidato.head(200))),
+                use_container_width=True,
+            )
+
+
+def mostrar_resultado_conciliacion_automatica(resultado):
+    if not resultado:
+        return
+
+    ok = bool(resultado.get("ok", False))
+    mensaje = resultado.get("mensaje") or "Conciliación automática procesada."
+
+    if ok:
+        st.success(mensaje)
+    else:
+        st.error(mensaje)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Conciliadas", int(resultado.get("conciliadas", 0) or 0))
+    c2.metric("A revisión", int(resultado.get("revision_asistida", 0) or 0))
+    c3.metric("Errores", int(resultado.get("errores", 0) or 0))
+
+    detalle_conciliadas = _preparar_detalle_resultado_vista(resultado.get("detalle_conciliadas"))
+    detalle_revision = _preparar_detalle_resultado_vista(resultado.get("detalle_revision"))
+    detalle_errores = _preparar_detalle_resultado_vista(resultado.get("detalle_errores"))
+
+    if not detalle_conciliadas.empty:
+        with st.expander("Detalle conciliado automáticamente", expanded=True):
+            st.dataframe(preparar_vista(detalle_conciliadas), use_container_width=True)
+
+    if not detalle_revision.empty:
+        with st.expander("Detalle enviado a revisión asistida", expanded=False):
+            st.dataframe(preparar_vista(detalle_revision), use_container_width=True)
+
+    if not detalle_errores.empty:
+        with st.expander("Errores detectados", expanded=True):
+            st.dataframe(preparar_vista(detalle_errores), use_container_width=True)
+
+    if st.button("Limpiar resultado mostrado", use_container_width=True, key="conciliacion_auto_limpiar_resultado"):
+        st.session_state.pop("conciliacion_auto_resultado", None)
+        st.rerun()
+
+
+# ======================================================
+# REVISIÓN ASISTIDA
+# ======================================================
+
+def mostrar_revision_asistida():
+    st.subheader("Revisión asistida")
+
+    st.info(
+        "Acá quedan las coincidencias posibles que no deben confirmarse solas: ambigüedades, puntaje insuficiente, "
+        "diferencias de importe o vínculos que requieren criterio humano."
+    )
+
+    empresa_id = empresa_actual_id()
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        tolerancia = st.number_input(
+            "Tolerancia para revisar",
+            min_value=0.0,
+            max_value=10000.0,
+            value=1.0,
+            step=0.5,
+            key="conciliacion_revision_tolerancia",
+        )
+
+    with col2:
+        confianza = st.selectbox(
+            "Confianza mínima",
+            ["Alta", "Media", "Baja"],
+            index=1,
+            key="conciliacion_revision_confianza",
+        )
+
+    with col3:
+        limite = st.number_input(
+            "Máximo sugerencias",
+            min_value=10,
+            max_value=1000,
+            value=200,
+            step=10,
+            key="conciliacion_revision_limite",
+        )
+
+    sugerencias = generar_sugerencias_conciliacion(
+        empresa_id=empresa_id,
+        tolerancia_importe=float(tolerancia),
+        dias_maximos=None,
         limite=int(limite),
         confianza_minima=confianza,
     )
 
-    if sugerencias.empty:
-        st.warning("No se encontraron sugerencias con los criterios seleccionados.")
+    movimientos = obtener_movimientos_bancarios_pendientes(empresa_id=empresa_id)
+    candidatas_auto = _obtener_candidatas_auto(sugerencias, score_minimo=90, tolerancia_importe=0.01)
+    revision = _obtener_revision_asistida(sugerencias, candidatas_auto)
+    ambiguas = revision[_serie_bool(revision, "ambigua")].copy() if not revision.empty else revision.copy()
+    sin_candidato = _obtener_movimientos_sin_candidato(movimientos, sugerencias)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Sugerencias a revisar", len(revision))
+    c2.metric("Ambiguas", len(ambiguas))
+    c3.metric("Automáticas no mostradas", len(candidatas_auto))
+    c4.metric("Sin candidato", len(sin_candidato))
+
+    if revision.empty:
+        st.warning("No hay sugerencias para revisión asistida con los criterios seleccionados.")
+
+        if not sin_candidato.empty:
+            with st.expander("Movimientos bancarios sin candidato", expanded=True):
+                st.dataframe(
+                    preparar_vista(_preparar_movimientos_vista(sin_candidato.head(200))),
+                    use_container_width=True,
+                )
+
         return
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Sugerencias", len(sugerencias))
-    col2.metric("Alta confianza", len(sugerencias[sugerencias["confianza"] == "Alta"]))
-    col3.metric("Importe sugerido", moneda(float(sugerencias["importe_sugerido"].sum())))
-
     st.dataframe(
-        preparar_vista(_preparar_sugerencias_vista(sugerencias)),
+        preparar_vista(_preparar_sugerencias_vista(revision)),
         use_container_width=True,
     )
 
     st.divider()
-    st.markdown("#### Confirmar una sugerencia")
+    st.markdown("#### Confirmar manualmente una sugerencia revisada")
 
     idx = st.selectbox(
-        "Sugerencia a confirmar",
-        list(range(len(sugerencias))),
+        "Sugerencia revisada a confirmar",
+        list(range(len(revision))),
         format_func=lambda i: (
-            f"Score {int(sugerencias.iloc[int(i)]['score'])} | "
-            f"{sugerencias.iloc[int(i)]['confianza']} | "
-            f"Banco #{int(sugerencias.iloc[int(i)]['movimiento_banco_id'])} ↔ "
-            f"Tesorería #{int(sugerencias.iloc[int(i)]['operacion_tesoreria_id'])} | "
-            f"{moneda(_numero(sugerencias.iloc[int(i)]['importe_sugerido']))}"
+            f"Score {int(revision.iloc[int(i)]['score'])} | "
+            f"{revision.iloc[int(i)]['confianza']} | "
+            f"Banco #{int(revision.iloc[int(i)]['movimiento_banco_id'])} ↔ "
+            f"Tesorería #{int(revision.iloc[int(i)]['operacion_tesoreria_id'])} | "
+            f"{moneda(_numero(revision.iloc[int(i)]['importe_sugerido']))}"
         ),
-        key="conciliacion_sugerencia_idx",
+        key="conciliacion_revision_idx",
     )
 
-    sugerencia = sugerencias.iloc[int(idx)]
+    sugerencia = revision.iloc[int(idx)]
+    mostrar_detalle_sugerencia(sugerencia)
 
-    col1, col2 = st.columns(2)
+    importe_maximo = float(
+        min(
+            _numero(sugerencia.get("pendiente_banco")),
+            _numero(sugerencia.get("pendiente_tesoreria")),
+        )
+    )
 
-    with col1:
-        st.markdown("**Banco**")
-        st.write(f"Fecha: {_texto(sugerencia.get('fecha_banco'))}")
-        st.write(f"Banco: {_texto(sugerencia.get('banco'))}")
-        st.write(f"Concepto: {_texto(sugerencia.get('concepto_banco'))}")
-        st.write(f"Importe: {moneda(_numero(sugerencia.get('importe_banco')))}")
-        st.write(f"Pendiente: {moneda(_numero(sugerencia.get('pendiente_banco')))}")
-
-    with col2:
-        st.markdown("**Tesorería**")
-        st.write(f"Fecha: {_texto(sugerencia.get('fecha_tesoreria'))}")
-        st.write(f"Tipo: {_formatear_estado(sugerencia.get('tipo_operacion'))}")
-        st.write(f"Tercero: {_texto(sugerencia.get('tercero_nombre'))}")
-        st.write(f"Descripción: {_texto(sugerencia.get('descripcion_tesoreria'))}")
-        st.write(f"Importe: {moneda(_numero(sugerencia.get('importe_tesoreria')))}")
-        st.write(f"Pendiente: {moneda(_numero(sugerencia.get('pendiente_tesoreria')))}")
+    importe_sugerido = min(float(_numero(sugerencia.get("importe_sugerido"))), importe_maximo)
 
     importe = st.number_input(
         "Importe a conciliar",
         min_value=0.0,
-        max_value=float(min(_numero(sugerencia.get("pendiente_banco")), _numero(sugerencia.get("pendiente_tesoreria")))),
-        value=float(_numero(sugerencia.get("importe_sugerido"))),
+        max_value=importe_maximo,
+        value=importe_sugerido,
         step=0.01,
-        key="conciliacion_sugerencia_importe",
+        key="conciliacion_revision_importe",
     )
 
     observacion = st.text_area(
         "Observación",
-        value=f"Conciliación sugerida por sistema. Motivo: {_texto(sugerencia.get('motivo'))}",
-        key="conciliacion_sugerencia_observacion",
+        value=(
+            "Conciliación confirmada desde revisión asistida. "
+            f"Control: {_texto(sugerencia.get('motivo_control'))}. "
+            f"Motivo: {_texto(sugerencia.get('motivo'))}"
+        ),
+        key="conciliacion_revision_observacion",
     )
 
     aceptar = st.checkbox(
-        "Confirmo que revisé la sugerencia y quiero conciliar Banco contra Tesorería.",
-        key="conciliacion_sugerencia_aceptar",
+        "Confirmo que revisé la sugerencia y que el vínculo Banco/Tesorería es correcto.",
+        key="conciliacion_revision_aceptar",
     )
 
     if st.button(
-        "Confirmar conciliación sugerida",
+        "Confirmar conciliación revisada",
         type="primary",
-        disabled=not aceptar,
+        disabled=not aceptar or importe <= 0,
         use_container_width=True,
     ):
         resultado = confirmar_conciliacion_tesoreria(
@@ -489,13 +823,49 @@ def mostrar_sugerencias_automaticas():
         else:
             st.error(resultado.get("mensaje", "No se pudo confirmar la conciliación."))
 
+    if not sin_candidato.empty:
+        with st.expander("Movimientos bancarios sin candidato", expanded=False):
+            st.dataframe(
+                preparar_vista(_preparar_movimientos_vista(sin_candidato.head(200))),
+                use_container_width=True,
+            )
+
+
+def mostrar_detalle_sugerencia(sugerencia):
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("**Banco**")
+        st.write(f"Fecha: {_texto(sugerencia.get('fecha_banco'))}")
+        st.write(f"Banco: {_texto(sugerencia.get('banco'))}")
+        st.write(f"Referencia: {_texto(sugerencia.get('referencia_banco'))}")
+        st.write(f"Concepto: {_texto(sugerencia.get('concepto_banco'))}")
+        st.write(f"Importe: {moneda(_numero(sugerencia.get('importe_banco')))}")
+        st.write(f"Pendiente: {moneda(_numero(sugerencia.get('pendiente_banco')))}")
+
+    with col2:
+        st.markdown("**Tesorería**")
+        st.write(f"Fecha: {_texto(sugerencia.get('fecha_tesoreria'))}")
+        st.write(f"Tipo: {_formatear_estado(sugerencia.get('tipo_operacion'))}")
+        st.write(f"Tercero: {_texto(sugerencia.get('tercero_nombre'))}")
+        st.write(f"CUIT: {_texto(sugerencia.get('tercero_cuit'))}")
+        st.write(f"Referencia: {_texto(sugerencia.get('referencia_externa'))}")
+        st.write(f"Descripción: {_texto(sugerencia.get('descripcion_tesoreria'))}")
+        st.write(f"Importe: {moneda(_numero(sugerencia.get('importe_tesoreria')))}")
+        st.write(f"Pendiente: {moneda(_numero(sugerencia.get('pendiente_tesoreria')))}")
+
+    st.caption(
+        f"Control: {_texto(sugerencia.get('motivo_control')) or 'Sin observación de control.'} "
+        f"| Motivo: {_texto(sugerencia.get('motivo'))}"
+    )
+
 
 # ======================================================
 # MANUAL
 # ======================================================
 
 def mostrar_conciliacion_manual():
-    st.subheader("Conciliación manual asistida")
+    st.subheader("Conciliación manual")
 
     st.info(
         "Usá esta opción cuando el sistema no encuentre una sugerencia suficiente, pero vos puedas identificar "
@@ -592,7 +962,7 @@ def mostrar_conciliacion_manual():
     if st.button(
         "Confirmar conciliación manual",
         type="primary",
-        disabled=not aceptar,
+        disabled=not aceptar or importe <= 0,
         use_container_width=True,
     ):
         resultado = confirmar_conciliacion_tesoreria(
