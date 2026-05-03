@@ -9,6 +9,13 @@ from services.datos_base_service import (
     inicializar_datos_base
 )
 
+from services.empresas_service import (
+    obtener_resumen_empresa_operativa,
+    preparar_controles_empresa_para_vista,
+    inicializar_empresa_operativa,
+    obtener_recomendaciones_empresa,
+)
+
 from services.backups_service import crear_backup_sqlite
 
 from services.actividades_service import (
@@ -91,6 +98,18 @@ def limpiar_valor(v):
         return str(v).strip()
     except Exception:
         return ""
+
+
+def empresa_actual_id():
+    empresa_id = st.session_state.get("empresa_id")
+
+    if empresa_id is None:
+        return None
+
+    try:
+        return int(empresa_id)
+    except Exception:
+        return None
 
 
 def normalizar_conceptos_fiscales_df(df):
@@ -488,6 +507,23 @@ def seleccionar_cuenta(label, df_plan, key):
     return codigo, nombre
 
 
+def mostrar_pasos_inicializacion(pasos):
+    df_pasos = pd.DataFrame(pasos or [])
+
+    if df_pasos.empty:
+        st.info("No hay pasos de inicialización para mostrar.")
+        return
+
+    columnas = ["paso", "ok", "mensaje"]
+
+    columnas = [c for c in columnas if c in df_pasos.columns]
+
+    st.dataframe(
+        preparar_vista(df_pasos[columnas]),
+        use_container_width=True,
+    )
+
+
 # ======================================================
 # PANTALLA PRINCIPAL
 # ======================================================
@@ -495,8 +531,8 @@ def seleccionar_cuenta(label, df_plan, key):
 def mostrar_configuracion():
     init_tablas_configuracion()
 
-
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "Estado de Empresa",
         "Tipos de Comprobantes",
         "Plan de Cuentas",
         "Categorías de Compra",
@@ -504,6 +540,9 @@ def mostrar_configuracion():
         "Inicialización",
         "Actividades ARCA"
     ])
+
+    with tab0:
+        mostrar_estado_empresa_operativa()
 
     with tab1:
         mostrar_tipos_comprobantes()
@@ -522,6 +561,143 @@ def mostrar_configuracion():
 
     with tab6:
         mostrar_actividades_arca()
+
+
+# ======================================================
+# TAB 0 - ESTADO DE EMPRESA
+# ======================================================
+
+def mostrar_estado_empresa_operativa():
+    st.subheader("Estado operativo de la empresa")
+
+    st.info(
+        "Esta vista controla si la empresa activa tiene la base mínima para operar: "
+        "datos fiscales, tipos de comprobantes, plan de cuentas, categorías, conceptos fiscales, "
+        "actividad, tesorería, caja y bancos. No borra datos ni modifica movimientos."
+    )
+
+    empresa_id = empresa_actual_id()
+
+    if empresa_id is None:
+        st.warning(
+            "No hay empresa activa seleccionada. Revisá Seguridad o el selector de empresa."
+        )
+        return
+
+    try:
+        resumen = obtener_resumen_empresa_operativa(empresa_id)
+        controles = preparar_controles_empresa_para_vista(empresa_id)
+        recomendaciones = obtener_recomendaciones_empresa(empresa_id)
+    except Exception as e:
+        st.error("No se pudo obtener el diagnóstico operativo de la empresa.")
+        st.exception(e)
+        return
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("Empresa", resumen.get("nombre") or "Sin nombre")
+    col2.metric("CUIT", resumen.get("cuit") or "Sin CUIT")
+    col3.metric("Preparación", f"{resumen.get('porcentaje_preparacion', 0)}%")
+    col4.metric("Faltantes críticos", int(resumen.get("faltantes_criticos", 0) or 0))
+
+    if resumen.get("lista_para_operar"):
+        st.success(resumen.get("mensaje", "La empresa tiene la base crítica para operar."))
+    else:
+        st.warning(resumen.get("mensaje", "La empresa todavía tiene faltantes críticos antes de operar."))
+
+    st.divider()
+
+    st.markdown("### Controles de preparación")
+
+    if controles.empty:
+        st.info("No hay controles para mostrar.")
+    else:
+        st.dataframe(
+            preparar_vista(controles),
+            use_container_width=True,
+        )
+
+    st.divider()
+
+    st.markdown("### Recomendaciones")
+
+    if not recomendaciones:
+        st.success("No hay recomendaciones pendientes.")
+    else:
+        for recomendacion in recomendaciones:
+            st.write(f"- {recomendacion}")
+
+    st.divider()
+
+    st.markdown("### Inicialización segura de empresa")
+
+    st.warning(
+        "Esta acción completa catálogos y configuraciones base faltantes. "
+        "No borra datos, no elimina movimientos, no imputa comprobantes y no concilia bancos."
+    )
+
+    incluir_tesoreria = st.checkbox(
+        "Incluir inicialización de Tesorería / Banco recomendada",
+        value=True,
+        help=(
+            "Usa servicios existentes para asegurar medios de pago, cuentas bancarias recomendadas "
+            "y configuración contable bancaria default cuando corresponda."
+        ),
+        key="config_estado_empresa_incluir_tesoreria",
+    )
+
+    if "confirmar_inicializar_empresa_operativa" not in st.session_state:
+        st.session_state["confirmar_inicializar_empresa_operativa"] = False
+
+    if st.button(
+        "Inicializar / completar base operativa de esta empresa",
+        type="primary",
+        use_container_width=True,
+        key="btn_inicializar_empresa_operativa",
+    ):
+        st.session_state["confirmar_inicializar_empresa_operativa"] = True
+
+    if st.session_state["confirmar_inicializar_empresa_operativa"]:
+        st.warning(
+            "¿Confirmás inicializar datos base de la empresa activa? "
+            "Se creará un backup antes de ejecutar."
+        )
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            if st.button(
+                "Sí, inicializar empresa",
+                type="primary",
+                use_container_width=True,
+                key="confirmar_si_inicializar_empresa",
+            ):
+                crear_backup_sqlite("antes_inicializar_empresa_operativa")
+
+                resultado = inicializar_empresa_operativa(
+                    empresa_id=empresa_id,
+                    incluir_tesoreria=bool(incluir_tesoreria),
+                )
+
+                if resultado.get("ok"):
+                    st.success(resultado.get("mensaje", "Empresa inicializada correctamente."))
+                else:
+                    st.warning(resultado.get("mensaje", "Inicialización parcial. Revisar detalle."))
+
+                mostrar_pasos_inicializacion(resultado.get("pasos", []))
+
+                st.session_state["confirmar_inicializar_empresa_operativa"] = False
+
+                st.rerun()
+
+        with c2:
+            if st.button(
+                "Cancelar",
+                use_container_width=True,
+                key="cancelar_inicializar_empresa",
+            ):
+                st.session_state["confirmar_inicializar_empresa_operativa"] = False
+                st.rerun()
 
 
 # ======================================================

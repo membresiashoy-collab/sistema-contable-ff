@@ -84,7 +84,6 @@ def _empresa_datos_minimos_ok(nombre, cuit, razon_social, domicilio, actividad):
 
 def _mensaje_datos_empresa_faltantes(nombre, cuit, razon_social, domicilio, actividad):
     faltantes = []
-
     cuit_norm = _solo_digitos(cuit)
 
     if not _texto(nombre):
@@ -227,12 +226,14 @@ def _filtrar_empresas(df, texto_busqueda="", solo_activas=False):
 
     if buscar:
         campos = []
+
         for col in ["nombre", "cuit", "razon_social", "domicilio", "actividad"]:
             if col in filtrado.columns:
                 campos.append(filtrado[col].astype(str))
 
         if campos:
             texto = campos[0]
+
             for campo in campos[1:]:
                 texto = texto + " " + campo
 
@@ -267,6 +268,15 @@ def _separar_dependencias(dependencias):
     administrativas = df[df["bloquea_borrado"].astype(int) == 0].copy()
 
     return operativas, administrativas
+
+
+def _reiniciar_selector_empresa_lateral():
+    for clave in [
+        "selector_empresa_activa",
+        "radio_menu_principal",
+    ]:
+        if clave in st.session_state:
+            del st.session_state[clave]
 
 
 # ======================================================
@@ -367,8 +377,8 @@ def mostrar_crear_empresa():
     st.markdown("### Crear empresa")
 
     st.caption(
-        "El alta exige datos mínimos completos. El botón no se ejecuta con Enter desde un formulario; "
-        "se guarda solo al presionar Crear empresa y el servicio vuelve a validar antes de insertar."
+        "El alta exige datos mínimos completos. Se guarda solo al presionar Crear empresa "
+        "y el servicio vuelve a validar antes de insertar."
     )
 
     col1, col2 = st.columns(2)
@@ -418,6 +428,7 @@ def mostrar_crear_empresa():
         )
 
         if _mostrar_resultado_servicio(resultado, "Empresa creada correctamente."):
+            _reiniciar_selector_empresa_lateral()
             st.rerun()
 
 
@@ -428,19 +439,31 @@ def mostrar_editar_empresa(df_empresas):
         st.warning("No hay empresas para editar.")
         return
 
+    empresa_ids = df_empresas["id"].astype(int).tolist()
+
     empresa_id = st.selectbox(
         "Empresa a editar",
-        df_empresas["id"].astype(int).tolist(),
+        empresa_ids,
         format_func=lambda x: _etiqueta_empresa(df_empresas, x),
         key="empresa_editar_id",
     )
 
     fila = df_empresas[df_empresas["id"].astype(int) == int(empresa_id)].iloc[0]
 
+    st.caption(
+        "Empresa seleccionada para editar: "
+        f"#{int(fila['id'])} — {_texto(fila.get('nombre'))}"
+    )
+
     if not _empresa_activa(fila):
         st.warning(
             "La empresa seleccionada está inactiva. Podés corregir sus datos, pero para operar debe reactivarse."
         )
+
+    # IMPORTANTE:
+    # Las keys de los inputs incluyen empresa_id.
+    # Esto evita que Streamlit conserve valores de otra empresa al cambiar el selectbox.
+    sufijo = int(empresa_id)
 
     col1, col2 = st.columns(2)
 
@@ -448,34 +471,34 @@ def mostrar_editar_empresa(df_empresas):
         nombre = st.text_input(
             "Nombre interno *",
             value=_texto(fila.get("nombre")),
-            key="empresa_editar_nombre",
+            key=f"empresa_editar_nombre_{sufijo}",
         )
         cuit = st.text_input(
             "CUIT *",
             value=_texto(fila.get("cuit")),
-            key="empresa_editar_cuit",
+            key=f"empresa_editar_cuit_{sufijo}",
         )
         razon_social = st.text_input(
             "Razón social *",
             value=_texto(fila.get("razon_social")),
-            key="empresa_editar_razon_social",
+            key=f"empresa_editar_razon_social_{sufijo}",
         )
 
     with col2:
         domicilio = st.text_input(
             "Domicilio *",
             value=_texto(fila.get("domicilio")),
-            key="empresa_editar_domicilio",
+            key=f"empresa_editar_domicilio_{sufijo}",
         )
         actividad = st.text_input(
             "Actividad *",
             value=_texto(fila.get("actividad")),
-            key="empresa_editar_actividad",
+            key=f"empresa_editar_actividad_{sufijo}",
         )
         motivo = st.text_input(
             "Motivo / observación de cambio",
             value="Corrección de datos de empresa.",
-            key="empresa_editar_motivo",
+            key=f"empresa_editar_motivo_{sufijo}",
         )
 
     datos_ok = _empresa_datos_minimos_ok(nombre, cuit, razon_social, domicilio, actividad)
@@ -496,7 +519,7 @@ def mostrar_editar_empresa(df_empresas):
         type="primary",
         disabled=not datos_ok,
         use_container_width=True,
-        key="empresa_editar_boton",
+        key=f"empresa_editar_boton_{sufijo}",
     ):
         resultado = actualizar_empresa(
             empresa_id=int(empresa_id),
@@ -510,6 +533,12 @@ def mostrar_editar_empresa(df_empresas):
         )
 
         if _mostrar_resultado_servicio(resultado, "Empresa actualizada correctamente."):
+            _reiniciar_selector_empresa_lateral()
+
+            # Si se editó la empresa operativa actual, actualizamos nombre visible en sesión.
+            if int(st.session_state.get("empresa_id") or 0) == int(empresa_id):
+                st.session_state["empresa_nombre"] = _texto(nombre)
+
             st.rerun()
 
 
@@ -541,12 +570,12 @@ def mostrar_estado_empresa(df_empresas):
         motivo = st.text_area(
             "Motivo de desactivación",
             value="Baja lógica de empresa desde Seguridad.",
-            key="empresa_desactivar_motivo",
+            key=f"empresa_desactivar_motivo_{int(empresa_id)}",
         )
 
         aceptar = st.checkbox(
             "Confirmo desactivar esta empresa sin borrar sus movimientos ni registros históricos.",
-            key="empresa_desactivar_aceptar",
+            key=f"empresa_desactivar_aceptar_{int(empresa_id)}",
         )
 
         if st.button(
@@ -554,7 +583,7 @@ def mostrar_estado_empresa(df_empresas):
             type="primary",
             disabled=not aceptar,
             use_container_width=True,
-            key="empresa_desactivar_boton",
+            key=f"empresa_desactivar_boton_{int(empresa_id)}",
         ):
             resultado = desactivar_empresa(
                 empresa_id=int(empresa_id),
@@ -563,6 +592,12 @@ def mostrar_estado_empresa(df_empresas):
             )
 
             if _mostrar_resultado_servicio(resultado, "Empresa desactivada correctamente."):
+                _reiniciar_selector_empresa_lateral()
+
+                if int(st.session_state.get("empresa_id") or 0) == int(empresa_id):
+                    st.session_state["empresa_id"] = None
+                    st.session_state["empresa_nombre"] = "Sin empresa activa"
+
                 st.rerun()
 
     else:
@@ -574,12 +609,12 @@ def mostrar_estado_empresa(df_empresas):
         motivo = st.text_area(
             "Motivo de reactivación",
             value="Reactivación de empresa desde Seguridad.",
-            key="empresa_reactivar_motivo",
+            key=f"empresa_reactivar_motivo_{int(empresa_id)}",
         )
 
         aceptar = st.checkbox(
             "Confirmo reactivar esta empresa.",
-            key="empresa_reactivar_aceptar",
+            key=f"empresa_reactivar_aceptar_{int(empresa_id)}",
         )
 
         if st.button(
@@ -587,7 +622,7 @@ def mostrar_estado_empresa(df_empresas):
             type="primary",
             disabled=not aceptar,
             use_container_width=True,
-            key="empresa_reactivar_boton",
+            key=f"empresa_reactivar_boton_{int(empresa_id)}",
         ):
             resultado = reactivar_empresa(
                 empresa_id=int(empresa_id),
@@ -596,6 +631,7 @@ def mostrar_estado_empresa(df_empresas):
             )
 
             if _mostrar_resultado_servicio(resultado, "Empresa reactivada correctamente."):
+                _reiniciar_selector_empresa_lateral()
                 st.rerun()
 
 
@@ -659,7 +695,7 @@ def mostrar_eliminar_empresa_vacia(df_empresas):
     motivo = st.text_area(
         "Motivo",
         value="Eliminación física de empresa creada por error, inactiva y sin movimientos operativos.",
-        key="empresa_eliminar_motivo",
+        key=f"empresa_eliminar_motivo_{int(empresa_id)}",
     )
 
     puede_eliminar = (
@@ -674,7 +710,7 @@ def mostrar_eliminar_empresa_vacia(df_empresas):
 
     aceptar = st.checkbox(
         "Confirmo que esta eliminación física solo debe ejecutarse si el servicio verifica nuevamente que la empresa está inactiva y sin movimientos operativos.",
-        key="empresa_eliminar_aceptar",
+        key=f"empresa_eliminar_aceptar_{int(empresa_id)}",
     )
 
     st.caption(
@@ -686,7 +722,7 @@ def mostrar_eliminar_empresa_vacia(df_empresas):
         type="primary",
         disabled=not aceptar or not puede_eliminar,
         use_container_width=True,
-        key="empresa_eliminar_boton",
+        key=f"empresa_eliminar_boton_{int(empresa_id)}",
     ):
         resultado = eliminar_empresa_si_vacia(
             empresa_id=int(empresa_id),
@@ -695,6 +731,7 @@ def mostrar_eliminar_empresa_vacia(df_empresas):
         )
 
         if _mostrar_resultado_servicio(resultado, "Empresa vacía eliminada correctamente."):
+            _reiniciar_selector_empresa_lateral()
             st.rerun()
 
 

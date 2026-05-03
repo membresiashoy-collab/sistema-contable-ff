@@ -125,8 +125,46 @@ def _obtener_empresa_desde_df(empresa_id):
 
 
 def obtener_empresa(empresa_id):
-    empresa = _obtener_empresa_desde_df(empresa_id)
-    return empresa
+    return _obtener_empresa_desde_df(empresa_id)
+
+
+def _usuario_es_administrador(usuario_id):
+    if usuario_id is None:
+        return False
+
+    df = ejecutar_query("""
+        SELECT rol
+        FROM usuarios
+        WHERE id = ?
+          AND activo = 1
+    """, (int(usuario_id),), fetch=True)
+
+    if df.empty:
+        return False
+
+    rol = _texto(df.iloc[0]["rol"]).upper()
+    return rol in {"ADMINISTRADOR", "ADMIN", "SUPERADMIN"}
+
+
+def _asegurar_usuario_empresa(usuario_id, empresa_id):
+    if usuario_id is None or empresa_id is None:
+        return
+
+    if not _tabla_existe("usuario_empresas"):
+        return
+
+    ejecutar_query("""
+        INSERT OR IGNORE INTO usuario_empresas
+        (usuario_id, empresa_id, activo)
+        VALUES (?, ?, 1)
+    """, (int(usuario_id), int(empresa_id)))
+
+    ejecutar_query("""
+        UPDATE usuario_empresas
+        SET activo = 1
+        WHERE usuario_id = ?
+          AND empresa_id = ?
+    """, (int(usuario_id), int(empresa_id)))
 
 
 def _buscar_conflicto_empresa(nombre, cuit="", razon_social="", excluir_empresa_id=None):
@@ -184,7 +222,15 @@ def _buscar_conflicto_empresa(nombre, cuit="", razon_social="", excluir_empresa_
     return None
 
 
-def validar_datos_empresa(nombre, cuit="", razon_social="", domicilio="", actividad="", excluir_empresa_id=None, exigir_datos_completos=True):
+def validar_datos_empresa(
+    nombre,
+    cuit="",
+    razon_social="",
+    domicilio="",
+    actividad="",
+    excluir_empresa_id=None,
+    exigir_datos_completos=True,
+):
     nombre = _texto(nombre)
     razon_social = _texto(razon_social)
     domicilio = _texto(domicilio)
@@ -209,7 +255,9 @@ def validar_datos_empresa(nombre, cuit="", razon_social="", domicilio="", activi
         if faltantes:
             return _respuesta(
                 False,
-                "Para crear u operar una empresa deben completarse todos los datos mínimos: " + ", ".join(faltantes) + ".",
+                "Para crear u operar una empresa deben completarse todos los datos mínimos: "
+                + ", ".join(faltantes)
+                + ".",
             )
 
     if cuit_norm and len(cuit_norm) != 11:
@@ -227,7 +275,16 @@ def validar_datos_empresa(nombre, cuit="", razon_social="", domicilio="", activi
 
     return _respuesta(True, "Datos de empresa válidos.")
 
-def _registrar_auditoria_segura(usuario_id, empresa_id, accion, entidad_id="", valor_anterior=None, valor_nuevo=None, motivo=""):
+
+def _registrar_auditoria_segura(
+    usuario_id,
+    empresa_id,
+    accion,
+    entidad_id="",
+    valor_anterior=None,
+    valor_nuevo=None,
+    motivo="",
+):
     if usuario_id is None:
         return
 
@@ -324,6 +381,7 @@ def obtener_dependencias_empresa(empresa_id, incluir_administrativas=False):
             continue
 
         cantidad = 0
+
         if not df_count.empty and "cantidad" in df_count.columns:
             cantidad = _entero(df_count.iloc[0]["cantidad"], 0)
 
@@ -343,6 +401,7 @@ def obtener_dependencias_empresa(empresa_id, incluir_administrativas=False):
         })
 
     return pd.DataFrame(dependencias)
+
 
 def empresa_tiene_movimientos(empresa_id):
     dependencias = obtener_dependencias_empresa(empresa_id, incluir_administrativas=False)
@@ -482,12 +541,7 @@ def crear_admin_si_no_existe():
 
     if not df_admin.empty:
         usuario_id = int(df_admin.iloc[0]["id"])
-
-        ejecutar_query("""
-            INSERT OR IGNORE INTO usuario_empresas
-            (usuario_id, empresa_id, activo)
-            VALUES (?, 1, 1)
-        """, (usuario_id,))
+        _asegurar_usuario_empresa(usuario_id, 1)
 
 
 def login_usuario(usuario, password):
@@ -565,11 +619,7 @@ def crear_usuario(usuario, nombre, email, password, rol, empresa_ids):
     usuario_id = int(df.iloc[0]["id"])
 
     for empresa_id in empresa_ids:
-        ejecutar_query("""
-            INSERT OR IGNORE INTO usuario_empresas
-            (usuario_id, empresa_id, activo)
-            VALUES (?, ?, 1)
-        """, (usuario_id, int(empresa_id)))
+        _asegurar_usuario_empresa(usuario_id, empresa_id)
 
 
 def resetear_password_usuario(usuario_id, nueva_password):
@@ -623,6 +673,22 @@ def obtener_usuarios():
 # ======================================================
 
 def obtener_empresas_usuario(usuario_id):
+    """
+    Devuelve empresas activas operables por el usuario.
+
+    Regla:
+    - ADMINISTRADOR ve todas las empresas activas.
+    - Usuarios no administradores ven solo empresas activas asignadas.
+    """
+
+    if _usuario_es_administrador(usuario_id):
+        return ejecutar_query("""
+            SELECT id, nombre, cuit, razon_social
+            FROM empresas
+            WHERE activo = 1
+            ORDER BY nombre
+        """, fetch=True)
+
     df = ejecutar_query("""
         SELECT e.id, e.nombre, e.cuit, e.razon_social
         FROM empresas e
@@ -672,20 +738,29 @@ def crear_empresa(nombre, cuit="", razon_social="", domicilio="", actividad="", 
         VALUES (?, ?, ?, ?, ?, 1)
     """, (nombre, cuit_norm, razon_social, domicilio, actividad))
 
-    df = obtener_empresas()
+    df_id = ejecutar_query("SELECT last_insert_rowid() AS id", fetch=True)
     empresa_id = None
 
-    if not df.empty:
-        candidatos = df[
-            (df["nombre"].apply(_normalizar_clave) == _normalizar_clave(nombre))
-            & (df["activo"].astype(int) == 1)
-        ].copy()
+    if not df_id.empty and "id" in df_id.columns:
+        empresa_id = int(df_id.iloc[0]["id"])
 
-        if cuit_norm:
-            candidatos = candidatos[candidatos["cuit"].apply(normalizar_cuit) == cuit_norm]
+    if empresa_id is None:
+        df = obtener_empresas()
 
-        if not candidatos.empty:
-            empresa_id = int(candidatos.sort_values("id", ascending=False).iloc[0]["id"])
+        if not df.empty:
+            candidatos = df[
+                (df["nombre"].apply(_normalizar_clave) == _normalizar_clave(nombre))
+                & (df["activo"].astype(int) == 1)
+            ].copy()
+
+            if cuit_norm:
+                candidatos = candidatos[candidatos["cuit"].apply(normalizar_cuit) == cuit_norm]
+
+            if not candidatos.empty:
+                empresa_id = int(candidatos.sort_values("id", ascending=False).iloc[0]["id"])
+
+    if usuario_id is not None and empresa_id is not None:
+        _asegurar_usuario_empresa(usuario_id, empresa_id)
 
     valor_nuevo = {
         "id": empresa_id,
@@ -760,6 +835,9 @@ def actualizar_empresa(empresa_id, nombre, cuit="", razon_social="", domicilio="
         "actividad": actividad,
     }
 
+    if usuario_id is not None:
+        _asegurar_usuario_empresa(usuario_id, empresa_id)
+
     _registrar_auditoria_segura(
         usuario_id=usuario_id,
         empresa_id=empresa_id,
@@ -795,7 +873,7 @@ def actualizar_estado_empresa(empresa_id, activo, usuario_id=None, motivo=""):
         if not validacion.get("ok"):
             return _respuesta(
                 False,
-                "No se puede reactivar la empresa porque sus datos chocan con otra empresa activa o registrada.",
+                "No se puede reactivar la empresa porque sus datos están incompletos o chocan con otra empresa.",
                 detalle=validacion,
             )
 
@@ -808,6 +886,9 @@ def actualizar_estado_empresa(empresa_id, activo, usuario_id=None, motivo=""):
     nuevo = obtener_empresa(empresa_id) or anterior.copy()
     accion = "REACTIVAR_EMPRESA" if activo == 1 else "DESACTIVAR_EMPRESA"
     mensaje = "Empresa reactivada correctamente." if activo == 1 else "Empresa desactivada correctamente."
+
+    if activo == 1 and usuario_id is not None:
+        _asegurar_usuario_empresa(usuario_id, empresa_id)
 
     _registrar_auditoria_segura(
         usuario_id=usuario_id,
@@ -937,7 +1018,17 @@ def guardar_permisos_rol(rol, permisos):
 # AUDITORÍA
 # ======================================================
 
-def registrar_auditoria(usuario_id, empresa_id, modulo, accion, entidad="", entidad_id="", valor_anterior="", valor_nuevo="", motivo=""):
+def registrar_auditoria(
+    usuario_id,
+    empresa_id,
+    modulo,
+    accion,
+    entidad="",
+    entidad_id="",
+    valor_anterior="",
+    valor_nuevo="",
+    motivo="",
+):
     ejecutar_query("""
         INSERT INTO auditoria_cambios
         (usuario_id, empresa_id, modulo, accion, entidad, entidad_id, valor_anterior, valor_nuevo, motivo)
