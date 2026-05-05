@@ -6,9 +6,24 @@ import pandas as pd
 from database import ejecutar_query
 
 
+try:
+    from services.iva_movimientos_fiscales_service import (
+        asegurar_estructura_iva_movimientos_fiscales as _asegurar_movimientos_fiscales,
+        listar_movimientos_fiscales as _listar_movimientos_fiscales,
+        obtener_impacto_posicion_iva_periodo as _obtener_impacto_movimientos_fiscales,
+        obtener_resumen_movimientos_fiscales_por_origen as _obtener_resumen_movimientos_fiscales_origen,
+    )
+except Exception:
+    _asegurar_movimientos_fiscales = None
+    _listar_movimientos_fiscales = None
+    _obtener_impacto_movimientos_fiscales = None
+    _obtener_resumen_movimientos_fiscales_origen = None
+
+
 # ======================================================
 # MÓDULO IVA PRO - SERVICIO BASE
 # Etapa 1: Posición mensual IVA
+# Etapa 2: Integración de movimientos fiscales adicionales
 # ======================================================
 #
 # Criterio de diseño:
@@ -17,18 +32,22 @@ from database import ejecutar_query
 # - Este servicio NO modifica Banco/Caja ni Conciliación.
 # - Lee información fiscal ya persistida.
 # - Calcula una posición mensual IVA confiable.
-# - Deja preparado el concepto de "origen fiscal" para que más adelante
-#   puedan incorporarse gastos bancarios, percepciones bancarias,
-#   liquidaciones de tarjetas/acreditadoras y ajustes manuales.
+# - Integra movimientos fiscales adicionales CONFIRMADOS.
 #
 # Orígenes actuales:
 # - VENTAS
 # - COMPRAS
+# - MOVIMIENTOS_FISCALES
 #
-# Orígenes previstos para próximas etapas:
+# Orígenes posibles dentro de movimientos fiscales:
 # - BANCO
-# - AJUSTE_MANUAL
-# - TARJETAS / ACREDITADORAS
+# - MANUAL
+# - TARJETA
+# - ACREDITADORA
+# - RETENCION
+# - PERCEPCION
+# - SALDO_ANTERIOR
+# - AJUSTE_TECNICO
 
 
 # ======================================================
@@ -37,6 +56,7 @@ from database import ejecutar_query
 
 ORIGEN_VENTAS = "VENTAS"
 ORIGEN_COMPRAS = "COMPRAS"
+ORIGEN_MOVIMIENTOS_FISCALES = "MOVIMIENTOS_FISCALES"
 ORIGEN_BANCO = "BANCO"
 ORIGEN_AJUSTE_MANUAL = "AJUSTE_MANUAL"
 
@@ -61,21 +81,45 @@ COLUMNAS_POSICION = [
     "anio",
     "mes",
     "periodo",
+
     "neto_ventas",
-    "iva_debito_fiscal",
+    "iva_debito_fiscal_ventas",
     "total_ventas",
+
     "neto_compras",
     "iva_total_compras",
+    "credito_fiscal_computable_compras",
+    "iva_no_computable_compras",
+    "percepciones_iva_compras",
+    "percepciones_iibb_compras_informativas",
+    "total_compras",
+
+    "neto_movimientos_fiscales",
+    "iva_debito_adicional",
+    "credito_fiscal_computable_adicional",
+    "iva_no_computable_adicional",
+    "percepciones_iva_adicionales",
+    "retenciones_iva_sufridas",
+    "percepciones_iibb_adicionales_informativas",
+    "saldo_tecnico_anterior",
+    "saldo_libre_disponibilidad",
+    "pago_a_cuenta",
+    "otros_tributos_adicionales",
+    "total_movimientos_fiscales",
+
+    "iva_debito_fiscal",
     "credito_fiscal_computable",
     "iva_no_computable",
     "percepciones_iva",
     "percepciones_iibb_informativas",
-    "total_compras",
+
     "saldo_tecnico_iva",
     "percepciones_iva_sufridas",
     "saldo_preliminar_periodo",
+
     "cantidad_ventas",
     "cantidad_compras",
+    "cantidad_movimientos_fiscales",
 ]
 
 
@@ -221,22 +265,14 @@ def _obtener_columnas_tabla(nombre_tabla):
         return set()
 
 
-def _columna_existe(nombre_tabla, columna):
-    return columna in _obtener_columnas_tabla(nombre_tabla)
-
-
 def _serie_numerica(df, columna, default=0.0):
-    if df is None or df.empty or columna not in df.columns:
-        return pd.Series([default] * len(df), index=df.index if df is not None else None)
+    if df is None:
+        return pd.Series(dtype=float)
+
+    if df.empty or columna not in df.columns:
+        return pd.Series([default] * len(df), index=df.index)
 
     return df[columna].apply(lambda x: _float(x, default))
-
-
-def _serie_texto(df, columna, default=""):
-    if df is None or df.empty or columna not in df.columns:
-        return pd.Series([default] * len(df), index=df.index if df is not None else None)
-
-    return df[columna].apply(lambda x: _texto(x, default))
 
 
 def _primer_importe_no_cero(fila, columnas):
@@ -344,7 +380,7 @@ def importe_con_signo_fiscal(valor, codigo=None, tipo=None):
 
 
 # ======================================================
-# LECTURA DE DATOS
+# LECTURA DE DATOS BASE
 # ======================================================
 
 def leer_tabla_periodo(nombre_tabla, empresa_id=1, anio=None, mes=None):
@@ -412,6 +448,110 @@ def leer_compras_periodo(empresa_id=1, anio=None, mes=None):
         anio=anio,
         mes=mes,
     )
+
+
+# ======================================================
+# MOVIMIENTOS FISCALES ADICIONALES
+# ======================================================
+
+def _impacto_movimientos_fiscales_cero():
+    return {
+        "cantidad_movimientos_fiscales": 0,
+        "neto_gravado_movimientos_fiscales": 0.0,
+        "iva_debito_adicional": 0.0,
+        "credito_fiscal_computable_adicional": 0.0,
+        "iva_no_computable_adicional": 0.0,
+        "percepcion_iva_adicional": 0.0,
+        "retencion_iva_adicional": 0.0,
+        "percepcion_iibb_informativa_adicional": 0.0,
+        "saldo_tecnico_anterior": 0.0,
+        "saldo_libre_disponibilidad": 0.0,
+        "pago_a_cuenta": 0.0,
+        "otros_tributos_adicionales": 0.0,
+        "total_movimientos_fiscales": 0.0,
+        "deducciones_saldo_preliminar": 0.0,
+    }
+
+
+def obtener_impacto_movimientos_fiscales_periodo(empresa_id=1, anio=None, mes=None):
+    """
+    Obtiene impacto fiscal adicional del período.
+
+    Si el servicio todavía no está disponible, devuelve cero.
+    """
+    if _obtener_impacto_movimientos_fiscales is None:
+        return _impacto_movimientos_fiscales_cero()
+
+    try:
+        if _asegurar_movimientos_fiscales is not None:
+            _asegurar_movimientos_fiscales()
+
+        impacto = _obtener_impacto_movimientos_fiscales(
+            empresa_id=empresa_id,
+            anio=anio,
+            mes=mes,
+        )
+
+        base = _impacto_movimientos_fiscales_cero()
+        base.update(impacto or {})
+
+        for clave, valor in base.items():
+            if clave == "cantidad_movimientos_fiscales":
+                base[clave] = _int(valor)
+            else:
+                base[clave] = _round2(valor)
+
+        return base
+
+    except Exception:
+        return _impacto_movimientos_fiscales_cero()
+
+
+def leer_movimientos_fiscales_periodo(empresa_id=1, anio=None, mes=None):
+    """
+    Lee movimientos fiscales adicionales del período.
+
+    Solo lista no anulados.
+    La posición IVA solo suma los confirmados.
+    """
+    if _listar_movimientos_fiscales is None:
+        return pd.DataFrame()
+
+    try:
+        if _asegurar_movimientos_fiscales is not None:
+            _asegurar_movimientos_fiscales()
+
+        df = _listar_movimientos_fiscales(
+            empresa_id=empresa_id,
+            anio=anio,
+            mes=mes,
+            incluir_anulados=False,
+        )
+
+        return _resultado_a_dataframe(df)
+
+    except Exception:
+        return pd.DataFrame()
+
+
+def leer_resumen_movimientos_fiscales_origen(empresa_id=1, anio=None, mes=None):
+    if _obtener_resumen_movimientos_fiscales_origen is None:
+        return pd.DataFrame()
+
+    try:
+        if _asegurar_movimientos_fiscales is not None:
+            _asegurar_movimientos_fiscales()
+
+        df = _obtener_resumen_movimientos_fiscales_origen(
+            empresa_id=empresa_id,
+            anio=anio,
+            mes=mes,
+        )
+
+        return _resultado_a_dataframe(df)
+
+    except Exception:
+        return pd.DataFrame()
 
 
 # ======================================================
@@ -868,19 +1008,21 @@ def generar_alertas_control(
     mes,
     detalle_ventas,
     detalle_compras,
+    detalle_movimientos_fiscales,
     posicion,
 ):
     alertas = []
 
     cantidad_ventas = int(posicion.get("cantidad_ventas", 0))
     cantidad_compras = int(posicion.get("cantidad_compras", 0))
+    cantidad_movimientos_fiscales = int(posicion.get("cantidad_movimientos_fiscales", 0))
 
-    if cantidad_ventas == 0 and cantidad_compras == 0:
+    if cantidad_ventas == 0 and cantidad_compras == 0 and cantidad_movimientos_fiscales == 0:
         _agregar_alerta(
             alertas,
             "INFO",
             "Período sin movimientos",
-            "No se encontraron comprobantes de ventas ni compras para el período seleccionado.",
+            "No se encontraron ventas, compras ni movimientos fiscales adicionales para el período seleccionado.",
         )
 
     if cantidad_ventas == 0 and cantidad_compras > 0:
@@ -961,32 +1103,56 @@ def generar_alertas_control(
                 ),
             )
 
-    _agregar_alerta(
-        alertas,
-        "INFO",
-        "Origen BANCO pendiente para próxima etapa",
-        (
-            "Esta posición calcula IVA desde Ventas y Compras. "
-            "Los gastos/comisiones bancarias con IVA y percepciones bancarias "
-            "deben incorporarse luego como origen fiscal BANCO, sin registrar todo el extracto como compra manual."
-        ),
-    )
+    if cantidad_movimientos_fiscales > 0:
+        _agregar_alerta(
+            alertas,
+            "INFO",
+            "Movimientos fiscales adicionales incorporados",
+            (
+                f"Se incorporaron {cantidad_movimientos_fiscales} movimiento(s) fiscal(es) adicional(es) "
+                "confirmado(s) a la posición IVA del período."
+            ),
+        )
+
+    if detalle_movimientos_fiscales is not None and not detalle_movimientos_fiscales.empty:
+        if "estado" in detalle_movimientos_fiscales.columns:
+            borradores = detalle_movimientos_fiscales[
+                detalle_movimientos_fiscales["estado"] == "BORRADOR"
+            ]
+        else:
+            borradores = pd.DataFrame()
+
+        if not borradores.empty:
+            _agregar_alerta(
+                alertas,
+                "INFO",
+                "Movimientos fiscales en borrador",
+                (
+                    f"Existen {len(borradores)} movimiento(s) fiscal(es) en borrador. "
+                    "No impactan la posición IVA hasta ser confirmados."
+                ),
+            )
 
     return alertas
 
 
+# ======================================================
+# RESUMEN POR ORIGEN
+# ======================================================
+
 def resumen_por_origen(posicion):
     """
     Devuelve una tabla simple por origen fiscal.
-    En esta etapa BANCO y AJUSTE_MANUAL quedan visibles en cero como diseño futuro.
     """
     filas = [
         {
             "origen": ORIGEN_VENTAS,
             "neto": _round2(posicion.get("neto_ventas", 0)),
-            "iva_debito": _round2(posicion.get("iva_debito_fiscal", 0)),
+            "iva_debito": _round2(posicion.get("iva_debito_fiscal_ventas", 0)),
             "iva_credito": 0.0,
+            "iva_no_computable": 0.0,
             "percepcion_iva": 0.0,
+            "retencion_iva": 0.0,
             "percepcion_iibb_informativa": 0.0,
             "total": _round2(posicion.get("total_ventas", 0)),
             "estado": "Operativo",
@@ -995,33 +1161,29 @@ def resumen_por_origen(posicion):
             "origen": ORIGEN_COMPRAS,
             "neto": _round2(posicion.get("neto_compras", 0)),
             "iva_debito": 0.0,
-            "iva_credito": _round2(posicion.get("credito_fiscal_computable", 0)),
-            "percepcion_iva": _round2(posicion.get("percepciones_iva", 0)),
+            "iva_credito": _round2(posicion.get("credito_fiscal_computable_compras", 0)),
+            "iva_no_computable": _round2(posicion.get("iva_no_computable_compras", 0)),
+            "percepcion_iva": _round2(posicion.get("percepciones_iva_compras", 0)),
+            "retencion_iva": 0.0,
             "percepcion_iibb_informativa": _round2(
-                posicion.get("percepciones_iibb_informativas", 0)
+                posicion.get("percepciones_iibb_compras_informativas", 0)
             ),
             "total": _round2(posicion.get("total_compras", 0)),
             "estado": "Operativo",
         },
         {
-            "origen": ORIGEN_BANCO,
-            "neto": 0.0,
-            "iva_debito": 0.0,
-            "iva_credito": 0.0,
-            "percepcion_iva": 0.0,
-            "percepcion_iibb_informativa": 0.0,
-            "total": 0.0,
-            "estado": "Pendiente próxima etapa",
-        },
-        {
-            "origen": ORIGEN_AJUSTE_MANUAL,
-            "neto": 0.0,
-            "iva_debito": 0.0,
-            "iva_credito": 0.0,
-            "percepcion_iva": 0.0,
-            "percepcion_iibb_informativa": 0.0,
-            "total": 0.0,
-            "estado": "Pendiente próxima etapa",
+            "origen": ORIGEN_MOVIMIENTOS_FISCALES,
+            "neto": _round2(posicion.get("neto_movimientos_fiscales", 0)),
+            "iva_debito": _round2(posicion.get("iva_debito_adicional", 0)),
+            "iva_credito": _round2(posicion.get("credito_fiscal_computable_adicional", 0)),
+            "iva_no_computable": _round2(posicion.get("iva_no_computable_adicional", 0)),
+            "percepcion_iva": _round2(posicion.get("percepciones_iva_adicionales", 0)),
+            "retencion_iva": _round2(posicion.get("retenciones_iva_sufridas", 0)),
+            "percepcion_iibb_informativa": _round2(
+                posicion.get("percepciones_iibb_adicionales_informativas", 0)
+            ),
+            "total": _round2(posicion.get("total_movimientos_fiscales", 0)),
+            "estado": "Operativo si existen confirmados",
         },
     ]
 
@@ -1041,7 +1203,9 @@ def calcular_posicion_iva_periodo(empresa_id=1, anio=None, mes=None):
         "posicion": dict,
         "detalle_ventas": DataFrame,
         "detalle_compras": DataFrame,
+        "detalle_movimientos_fiscales": DataFrame,
         "resumen_origenes": DataFrame,
+        "resumen_movimientos_fiscales_origen": DataFrame,
         "alertas": list[dict],
     }
     """
@@ -1063,7 +1227,9 @@ def calcular_posicion_iva_periodo(empresa_id=1, anio=None, mes=None):
             "posicion": posicion_vacia,
             "detalle_ventas": preparar_detalle_ventas(pd.DataFrame()),
             "detalle_compras": preparar_detalle_compras(pd.DataFrame()),
+            "detalle_movimientos_fiscales": pd.DataFrame(),
             "resumen_origenes": resumen_por_origen(posicion_vacia),
+            "resumen_movimientos_fiscales_origen": pd.DataFrame(),
             "alertas": [{
                 "nivel": "ERROR",
                 "titulo": "Período inválido",
@@ -1086,15 +1252,68 @@ def calcular_posicion_iva_periodo(empresa_id=1, anio=None, mes=None):
     detalle_ventas = preparar_detalle_ventas(df_ventas)
     detalle_compras = preparar_detalle_compras(df_compras)
 
+    detalle_movimientos_fiscales = leer_movimientos_fiscales_periodo(
+        empresa_id=empresa_id,
+        anio=anio,
+        mes=mes,
+    )
+
+    resumen_movimientos_fiscales_origen = leer_resumen_movimientos_fiscales_origen(
+        empresa_id=empresa_id,
+        anio=anio,
+        mes=mes,
+    )
+
     resumen_ventas = resumir_ventas(detalle_ventas)
     resumen_compras = resumir_compras(detalle_compras)
 
-    iva_debito = _round2(resumen_ventas["iva_debito_fiscal"])
-    credito_fiscal = _round2(resumen_compras["credito_fiscal_computable"])
-    percepciones_iva = _round2(resumen_compras["percepciones_iva"])
+    impacto_movimientos = obtener_impacto_movimientos_fiscales_periodo(
+        empresa_id=empresa_id,
+        anio=anio,
+        mes=mes,
+    )
 
-    saldo_tecnico = _round2(iva_debito - credito_fiscal)
-    saldo_preliminar = _round2(saldo_tecnico - percepciones_iva)
+    iva_debito_ventas = _round2(resumen_ventas["iva_debito_fiscal"])
+    credito_compras = _round2(resumen_compras["credito_fiscal_computable"])
+    iva_no_computable_compras = _round2(resumen_compras["iva_no_computable"])
+    percepciones_iva_compras = _round2(resumen_compras["percepciones_iva"])
+    percepciones_iibb_compras = _round2(resumen_compras["percepciones_iibb_informativas"])
+
+    iva_debito_adicional = _round2(impacto_movimientos["iva_debito_adicional"])
+    credito_adicional = _round2(impacto_movimientos["credito_fiscal_computable_adicional"])
+    iva_no_computable_adicional = _round2(impacto_movimientos["iva_no_computable_adicional"])
+    percepcion_iva_adicional = _round2(impacto_movimientos["percepcion_iva_adicional"])
+    retencion_iva_adicional = _round2(impacto_movimientos["retencion_iva_adicional"])
+    percepcion_iibb_adicional = _round2(
+        impacto_movimientos["percepcion_iibb_informativa_adicional"]
+    )
+
+    saldo_tecnico_anterior = _round2(impacto_movimientos["saldo_tecnico_anterior"])
+    saldo_libre_disponibilidad = _round2(impacto_movimientos["saldo_libre_disponibilidad"])
+    pago_a_cuenta = _round2(impacto_movimientos["pago_a_cuenta"])
+
+    iva_debito_total = _round2(iva_debito_ventas + iva_debito_adicional)
+    credito_fiscal_total = _round2(credito_compras + credito_adicional)
+    iva_no_computable_total = _round2(iva_no_computable_compras + iva_no_computable_adicional)
+
+    percepciones_iva_total = _round2(percepciones_iva_compras + percepcion_iva_adicional)
+    percepciones_iibb_total = _round2(percepciones_iibb_compras + percepcion_iibb_adicional)
+
+    saldo_tecnico = _round2(iva_debito_total - credito_fiscal_total)
+
+    # Criterio:
+    # - saldo_tecnico_anterior se carga positivo cuando es saldo a favor aplicable.
+    # - saldo_libre_disponibilidad se carga positivo cuando se aplica contra IVA.
+    # - pago_a_cuenta se carga positivo cuando reduce saldo del período.
+    # - retenciones/percepciones IVA sufridas reducen saldo preliminar.
+    saldo_preliminar = _round2(
+        saldo_tecnico
+        - percepciones_iva_total
+        - retencion_iva_adicional
+        - saldo_tecnico_anterior
+        - saldo_libre_disponibilidad
+        - pago_a_cuenta
+    )
 
     posicion = {
         "empresa_id": int(empresa_id) if empresa_id is not None else None,
@@ -1103,25 +1322,47 @@ def calcular_posicion_iva_periodo(empresa_id=1, anio=None, mes=None):
         "periodo": _periodo_texto(anio, mes),
 
         "neto_ventas": _round2(resumen_ventas["neto_ventas"]),
-        "iva_debito_fiscal": iva_debito,
+        "iva_debito_fiscal_ventas": iva_debito_ventas,
         "total_ventas": _round2(resumen_ventas["total_ventas"]),
 
         "neto_compras": _round2(resumen_compras["neto_compras"]),
         "iva_total_compras": _round2(resumen_compras["iva_total_compras"]),
-        "credito_fiscal_computable": credito_fiscal,
-        "iva_no_computable": _round2(resumen_compras["iva_no_computable"]),
-        "percepciones_iva": percepciones_iva,
-        "percepciones_iibb_informativas": _round2(
-            resumen_compras["percepciones_iibb_informativas"]
-        ),
+        "credito_fiscal_computable_compras": credito_compras,
+        "iva_no_computable_compras": iva_no_computable_compras,
+        "percepciones_iva_compras": percepciones_iva_compras,
+        "percepciones_iibb_compras_informativas": percepciones_iibb_compras,
         "total_compras": _round2(resumen_compras["total_compras"]),
 
+        "neto_movimientos_fiscales": _round2(
+            impacto_movimientos["neto_gravado_movimientos_fiscales"]
+        ),
+        "iva_debito_adicional": iva_debito_adicional,
+        "credito_fiscal_computable_adicional": credito_adicional,
+        "iva_no_computable_adicional": iva_no_computable_adicional,
+        "percepciones_iva_adicionales": percepcion_iva_adicional,
+        "retenciones_iva_sufridas": retencion_iva_adicional,
+        "percepciones_iibb_adicionales_informativas": percepcion_iibb_adicional,
+        "saldo_tecnico_anterior": saldo_tecnico_anterior,
+        "saldo_libre_disponibilidad": saldo_libre_disponibilidad,
+        "pago_a_cuenta": pago_a_cuenta,
+        "otros_tributos_adicionales": _round2(impacto_movimientos["otros_tributos_adicionales"]),
+        "total_movimientos_fiscales": _round2(impacto_movimientos["total_movimientos_fiscales"]),
+
+        "iva_debito_fiscal": iva_debito_total,
+        "credito_fiscal_computable": credito_fiscal_total,
+        "iva_no_computable": iva_no_computable_total,
+        "percepciones_iva": percepciones_iva_total,
+        "percepciones_iibb_informativas": percepciones_iibb_total,
+
         "saldo_tecnico_iva": saldo_tecnico,
-        "percepciones_iva_sufridas": percepciones_iva,
+        "percepciones_iva_sufridas": percepciones_iva_total,
         "saldo_preliminar_periodo": saldo_preliminar,
 
         "cantidad_ventas": int(resumen_ventas["cantidad_ventas"]),
         "cantidad_compras": int(resumen_compras["cantidad_compras"]),
+        "cantidad_movimientos_fiscales": int(
+            impacto_movimientos["cantidad_movimientos_fiscales"]
+        ),
     }
 
     resumen_origenes = resumen_por_origen(posicion)
@@ -1131,6 +1372,7 @@ def calcular_posicion_iva_periodo(empresa_id=1, anio=None, mes=None):
         mes=mes,
         detalle_ventas=detalle_ventas,
         detalle_compras=detalle_compras,
+        detalle_movimientos_fiscales=detalle_movimientos_fiscales,
         posicion=posicion,
     )
 
@@ -1138,7 +1380,9 @@ def calcular_posicion_iva_periodo(empresa_id=1, anio=None, mes=None):
         "posicion": posicion,
         "detalle_ventas": detalle_ventas,
         "detalle_compras": detalle_compras,
+        "detalle_movimientos_fiscales": detalle_movimientos_fiscales,
         "resumen_origenes": resumen_origenes,
+        "resumen_movimientos_fiscales_origen": resumen_movimientos_fiscales_origen,
         "alertas": alertas,
     }
 
@@ -1149,7 +1393,7 @@ def calcular_posicion_iva_periodo(empresa_id=1, anio=None, mes=None):
 
 def obtener_periodos_disponibles_iva(empresa_id=1):
     """
-    Devuelve períodos con movimientos en ventas o compras.
+    Devuelve períodos con movimientos en ventas, compras o movimientos fiscales.
     """
     ventas = leer_ventas_periodo(empresa_id=empresa_id)
     compras = leer_compras_periodo(empresa_id=empresa_id)
@@ -1168,6 +1412,7 @@ def obtener_periodos_disponibles_iva(empresa_id=1):
                 "origen": ORIGEN_VENTAS,
                 "cantidad_ventas": int(len(grupo)),
                 "cantidad_compras": 0,
+                "cantidad_movimientos_fiscales": 0,
             })
 
     if compras is not None and not compras.empty:
@@ -1182,7 +1427,37 @@ def obtener_periodos_disponibles_iva(empresa_id=1):
                 "origen": ORIGEN_COMPRAS,
                 "cantidad_ventas": 0,
                 "cantidad_compras": int(len(grupo)),
+                "cantidad_movimientos_fiscales": 0,
             })
+
+    try:
+        if _listar_movimientos_fiscales is not None:
+            movimientos = _listar_movimientos_fiscales(
+                empresa_id=empresa_id,
+                incluir_anulados=False,
+            )
+            movimientos = _resultado_a_dataframe(movimientos)
+
+            if not movimientos.empty:
+                movimientos = _asegurar_columnas_periodo(movimientos)
+                movimientos_validos = movimientos[
+                    (movimientos["anio"] > 0)
+                    & (movimientos["mes"] > 0)
+                    & (movimientos["estado"] == "CONFIRMADO")
+                ]
+
+                for (anio, mes), grupo in movimientos_validos.groupby(["anio", "mes"]):
+                    filas.append({
+                        "anio": int(anio),
+                        "mes": int(mes),
+                        "periodo": _periodo_texto(anio, mes),
+                        "origen": ORIGEN_MOVIMIENTOS_FISCALES,
+                        "cantidad_ventas": 0,
+                        "cantidad_compras": 0,
+                        "cantidad_movimientos_fiscales": int(len(grupo)),
+                    })
+    except Exception:
+        pass
 
     if not filas:
         return pd.DataFrame(columns=[
@@ -1191,6 +1466,7 @@ def obtener_periodos_disponibles_iva(empresa_id=1):
             "periodo",
             "cantidad_ventas",
             "cantidad_compras",
+            "cantidad_movimientos_fiscales",
             "cantidad_total",
         ])
 
@@ -1201,10 +1477,16 @@ def obtener_periodos_disponibles_iva(empresa_id=1):
         .agg({
             "cantidad_ventas": "sum",
             "cantidad_compras": "sum",
+            "cantidad_movimientos_fiscales": "sum",
         })
     )
 
-    resumen["cantidad_total"] = resumen["cantidad_ventas"] + resumen["cantidad_compras"]
+    resumen["cantidad_total"] = (
+        resumen["cantidad_ventas"]
+        + resumen["cantidad_compras"]
+        + resumen["cantidad_movimientos_fiscales"]
+    )
+
     resumen = resumen.sort_values(["anio", "mes"], ascending=[False, False])
 
     return resumen.reset_index(drop=True)
@@ -1270,15 +1552,32 @@ def preparar_dataframe_posicion_para_mostrar(df):
 
     columnas_monetarias = [
         "neto_ventas",
-        "iva_debito_fiscal",
+        "iva_debito_fiscal_ventas",
         "total_ventas",
         "neto_compras",
         "iva_total_compras",
+        "credito_fiscal_computable_compras",
+        "iva_no_computable_compras",
+        "percepciones_iva_compras",
+        "percepciones_iibb_compras_informativas",
+        "total_compras",
+        "neto_movimientos_fiscales",
+        "iva_debito_adicional",
+        "credito_fiscal_computable_adicional",
+        "iva_no_computable_adicional",
+        "percepciones_iva_adicionales",
+        "retenciones_iva_sufridas",
+        "percepciones_iibb_adicionales_informativas",
+        "saldo_tecnico_anterior",
+        "saldo_libre_disponibilidad",
+        "pago_a_cuenta",
+        "otros_tributos_adicionales",
+        "total_movimientos_fiscales",
+        "iva_debito_fiscal",
         "credito_fiscal_computable",
         "iva_no_computable",
         "percepciones_iva",
         "percepciones_iibb_informativas",
-        "total_compras",
         "saldo_tecnico_iva",
         "percepciones_iva_sufridas",
         "saldo_preliminar_periodo",
@@ -1338,7 +1637,12 @@ def generar_papel_trabajo_excel_iva(empresa_id=1, anio=None, mes=None):
     posicion = resultado["posicion"]
     detalle_ventas = resultado["detalle_ventas"]
     detalle_compras = resultado["detalle_compras"]
+    detalle_movimientos_fiscales = resultado.get("detalle_movimientos_fiscales", pd.DataFrame())
     resumen_origenes = resultado["resumen_origenes"]
+    resumen_movimientos_fiscales_origen = resultado.get(
+        "resumen_movimientos_fiscales_origen",
+        pd.DataFrame(),
+    )
     alertas = pd.DataFrame(resultado["alertas"])
 
     df_posicion = pd.DataFrame([posicion])
@@ -1350,6 +1654,33 @@ def generar_papel_trabajo_excel_iva(empresa_id=1, anio=None, mes=None):
         resumen_origenes.to_excel(writer, sheet_name="Resumen origenes", index=False)
         detalle_ventas.to_excel(writer, sheet_name="Libro IVA Ventas", index=False)
         detalle_compras.to_excel(writer, sheet_name="Libro IVA Compras", index=False)
+
+        if detalle_movimientos_fiscales is not None and not detalle_movimientos_fiscales.empty:
+            detalle_movimientos_fiscales.to_excel(
+                writer,
+                sheet_name="Movimientos fiscales",
+                index=False,
+            )
+        else:
+            pd.DataFrame(columns=[
+                "id",
+                "fecha",
+                "origen",
+                "tipo_concepto",
+                "descripcion",
+                "estado",
+            ]).to_excel(writer, sheet_name="Movimientos fiscales", index=False)
+
+        if (
+            resumen_movimientos_fiscales_origen is not None
+            and not resumen_movimientos_fiscales_origen.empty
+        ):
+            resumen_movimientos_fiscales_origen.to_excel(
+                writer,
+                sheet_name="Resumen mov fiscales",
+                index=False,
+            )
+
         alertas.to_excel(writer, sheet_name="Alertas", index=False)
 
         workbook = writer.book
@@ -1378,6 +1709,7 @@ def nombre_archivo_papel_trabajo_iva(empresa_id=1, anio=None, mes=None):
 __all__ = [
     "ORIGEN_VENTAS",
     "ORIGEN_COMPRAS",
+    "ORIGEN_MOVIMIENTOS_FISCALES",
     "ORIGEN_BANCO",
     "ORIGEN_AJUSTE_MANUAL",
     "es_nota_credito",
@@ -1385,8 +1717,11 @@ __all__ = [
     "signo_fiscal_comprobante",
     "leer_ventas_periodo",
     "leer_compras_periodo",
+    "leer_movimientos_fiscales_periodo",
+    "leer_resumen_movimientos_fiscales_origen",
     "preparar_detalle_ventas",
     "preparar_detalle_compras",
+    "obtener_impacto_movimientos_fiscales_periodo",
     "calcular_posicion_iva_periodo",
     "obtener_periodos_disponibles_iva",
     "obtener_resumen_posiciones_iva",
