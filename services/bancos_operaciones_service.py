@@ -5,6 +5,13 @@ import pandas as pd
 from database import conectar, ejecutar_query
 
 from services.bancos_service import CONFIG_CONTABLE_DEFAULT
+from services.iva_movimientos_fiscales_service import (
+    ESTADO_ANULADO,
+    ESTADO_BORRADOR,
+    ESTADO_CONFIRMADO,
+    asegurar_estructura_iva_movimientos_fiscales,
+    registrar_movimiento_fiscal,
+)
 
 
 # ======================================================
@@ -1825,6 +1832,516 @@ def registrar_pago_fiscal(
 
     finally:
         conn.close()
+
+
+
+# ======================================================
+# INTEGRACIÓN BANCO FISCAL -> IVA PRO
+# ======================================================
+
+ORIGEN_IVA_BANCO = "BANCO"
+ORIGEN_TABLA_GRUPOS_FISCALES = "bancos_grupos_fiscales"
+
+TIPOS_CONCEPTO_BANCO_IVA = {
+    "IVA_CREDITO": "IVA crédito fiscal bancario",
+    "IVA_NO_COMPUTABLE": "IVA bancario pendiente/no computable",
+    "PERCEPCION_IVA": "Percepción IVA bancaria",
+    "PERCEPCION_IIBB_INFORMATIVA": "Percepción IIBB bancaria informativa",
+    "OTRO": "Otros tributos bancarios informativos",
+}
+
+
+def _fecha_anio_mes(fecha):
+    texto = _texto(fecha)
+
+    try:
+        if (
+            len(texto) == 10
+            and texto[4] == "-"
+            and texto[7] == "-"
+            and texto[:4].isdigit()
+            and texto[5:7].isdigit()
+            and texto[8:10].isdigit()
+        ):
+            f = pd.to_datetime(texto, format="%Y-%m-%d", errors="raise")
+        else:
+            f = pd.to_datetime(fecha, errors="raise", dayfirst=True)
+
+        return int(f.year), int(f.month), f.strftime("%Y-%m-%d")
+    except Exception:
+        return None, None, _texto(fecha)
+
+
+def _row_get(row, columna, default=0):
+    try:
+        return row.get(columna, default)
+    except Exception:
+        return default
+
+
+def _sumar_columnas(row, columnas):
+    total = 0.0
+
+    for columna in columnas:
+        total += _numero(_row_get(row, columna, 0))
+
+    return round(total, 2)
+
+
+def _obtener_fiscales_iva_generados(conn, empresa_id):
+    asegurar_estructura_iva_movimientos_fiscales()
+
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT
+                id,
+                origen_id,
+                tipo_concepto,
+                estado,
+                IFNULL(incluido_en_posicion, 1) AS incluido_en_posicion,
+                IFNULL(incluido_en_portal_iva, 0) AS incluido_en_portal_iva
+            FROM iva_movimientos_fiscales
+            WHERE empresa_id = ?
+              AND origen = ?
+              AND origen_tabla = ?
+              AND estado <> ?
+            """,
+            conn,
+            params=(
+                empresa_id,
+                ORIGEN_IVA_BANCO,
+                ORIGEN_TABLA_GRUPOS_FISCALES,
+                ESTADO_ANULADO,
+            ),
+        )
+    except Exception:
+        return {}
+
+    generados = {}
+
+    if df.empty:
+        return generados
+
+    for _, fila in df.iterrows():
+        origen_id = _normalizar_entero_dict(fila, "origen_id")
+        tipo_concepto = _texto(fila.get("tipo_concepto")).upper()
+
+        if origen_id <= 0 or not tipo_concepto:
+            continue
+
+        generados[(origen_id, tipo_concepto)] = {
+            "iva_movimiento_id": int(fila.get("id")),
+            "estado_iva": _texto(fila.get("estado")),
+            "incluido_en_posicion": int(fila.get("incluido_en_posicion") or 0),
+            "incluido_en_portal_iva": int(fila.get("incluido_en_portal_iva") or 0),
+        }
+
+    return generados
+
+
+def _normalizar_entero_dict(dic, clave, default=0):
+    try:
+        return int(float(dic.get(clave, default) or default))
+    except Exception:
+        return default
+
+
+def _armar_candidatos_iva_desde_grupo(row):
+    grupo_id = _normalizar_entero_dict(row, "id")
+    importacion_id = _normalizar_entero_dict(row, "importacion_id")
+    movimiento_banco_id = _normalizar_entero_dict(row, "movimiento_banco_id")
+
+    anio, mes, fecha = _fecha_anio_mes(row.get("fecha"))
+
+    if not anio or not mes:
+        return []
+
+    banco = _texto(row.get("banco"))
+    cuenta = _texto(row.get("nombre_cuenta"))
+    referencia = _texto(row.get("referencia"))
+    causal = _texto(row.get("causal"))
+    concepto = _texto(row.get("concepto"))
+    motivo = _texto(row.get("motivo"))
+    confianza = _texto(row.get("confianza"))
+
+    descripcion_base = " | ".join([
+        item for item in [
+            f"Banco {banco}" if banco else "Banco",
+            cuenta,
+            f"Ref {referencia}" if referencia else "",
+            f"Causal {causal}" if causal else "",
+            concepto[:120],
+        ]
+        if item
+    ])
+
+    if not descripcion_base:
+        descripcion_base = f"Control fiscal bancario grupo #{grupo_id}"
+
+    total_iva_credito = _sumar_columnas(row, ["iva_credito_21", "iva_credito_105"])
+    iva_sin_base = _numero(row.get("iva_sin_base"))
+    percepcion_iva = _numero(row.get("percepcion_iva"))
+    percepcion_iibb = _numero(row.get("percepcion_iibb"))
+    impuesto_debitos_creditos = _numero(row.get("impuesto_debitos_creditos"))
+    base_gasto_bancario = _numero(row.get("base_gasto_bancario"))
+
+    candidatos = []
+
+    def agregar(tipo_concepto, importe, campos):
+        importe = _numero(importe)
+
+        if importe <= 0:
+            return
+
+        candidatos.append({
+            "grupo_fiscal_id": grupo_id,
+            "movimiento_banco_id": movimiento_banco_id or None,
+            "importacion_id": importacion_id or None,
+            "anio": anio,
+            "mes": mes,
+            "periodo": f"{anio}-{mes:02d}",
+            "fecha": fecha,
+            "origen": ORIGEN_IVA_BANCO,
+            "origen_tabla": ORIGEN_TABLA_GRUPOS_FISCALES,
+            "origen_id": grupo_id,
+            "tipo_concepto": tipo_concepto,
+            "tipo_concepto_visible": TIPOS_CONCEPTO_BANCO_IVA.get(tipo_concepto, tipo_concepto),
+            "descripcion": f"{TIPOS_CONCEPTO_BANCO_IVA.get(tipo_concepto, tipo_concepto)} - {descripcion_base}",
+            "contraparte": banco,
+            "cuit": "",
+            "comprobante_codigo": "",
+            "comprobante_tipo": "EXTRACTO_BANCARIO",
+            "punto_venta": "",
+            "numero": str(referencia or grupo_id),
+            "neto_gravado": _numero(campos.get("neto_gravado", 0)),
+            "iva_debito": _numero(campos.get("iva_debito", 0)),
+            "credito_fiscal_computable": _numero(campos.get("credito_fiscal_computable", 0)),
+            "iva_no_computable": _numero(campos.get("iva_no_computable", 0)),
+            "percepcion_iva": _numero(campos.get("percepcion_iva", 0)),
+            "retencion_iva": _numero(campos.get("retencion_iva", 0)),
+            "percepcion_iibb_informativa": _numero(campos.get("percepcion_iibb_informativa", 0)),
+            "otros_tributos": _numero(campos.get("otros_tributos", 0)),
+            "total": importe,
+            "banco": banco,
+            "nombre_cuenta": cuenta,
+            "referencia": referencia,
+            "causal": causal,
+            "concepto_banco": concepto,
+            "confianza": confianza,
+            "motivo": motivo,
+        })
+
+    agregar(
+        "IVA_CREDITO",
+        total_iva_credito,
+        {
+            "neto_gravado": base_gasto_bancario,
+            "credito_fiscal_computable": total_iva_credito,
+        },
+    )
+
+    agregar(
+        "IVA_NO_COMPUTABLE",
+        iva_sin_base,
+        {
+            "iva_no_computable": iva_sin_base,
+        },
+    )
+
+    agregar(
+        "PERCEPCION_IVA",
+        percepcion_iva,
+        {
+            "percepcion_iva": percepcion_iva,
+        },
+    )
+
+    agregar(
+        "PERCEPCION_IIBB_INFORMATIVA",
+        percepcion_iibb,
+        {
+            "percepcion_iibb_informativa": percepcion_iibb,
+        },
+    )
+
+    agregar(
+        "OTRO",
+        impuesto_debitos_creditos,
+        {
+            "otros_tributos": impuesto_debitos_creditos,
+        },
+    )
+
+    return candidatos
+
+
+def obtener_vista_previa_movimientos_fiscales_banco_iva(
+    empresa_id=1,
+    anio=None,
+    mes=None,
+    incluir_generados=True,
+):
+    """
+    Devuelve los conceptos fiscales bancarios convertibles en movimientos IVA.
+
+    No graba datos.
+    Permite que la UI muestre una vista previa antes de generar.
+    """
+    asegurar_estructura_iva_movimientos_fiscales()
+
+    conn = conectar()
+
+    try:
+        if not _tabla_tiene_columna(conn, "bancos_grupos_fiscales", "id"):
+            return pd.DataFrame()
+
+        df_grupos = pd.read_sql_query(
+            """
+            SELECT *
+            FROM bancos_grupos_fiscales
+            WHERE empresa_id = ?
+            ORDER BY fecha DESC, id DESC
+            """,
+            conn,
+            params=(empresa_id,),
+        )
+
+        if df_grupos.empty:
+            return pd.DataFrame()
+
+        generados = _obtener_fiscales_iva_generados(conn, empresa_id)
+        candidatos = []
+
+        for _, row in df_grupos.iterrows():
+            for candidato in _armar_candidatos_iva_desde_grupo(row.to_dict()):
+                clave = (
+                    int(candidato.get("grupo_fiscal_id") or 0),
+                    _texto(candidato.get("tipo_concepto")).upper(),
+                )
+
+                generado = generados.get(clave)
+
+                candidato["ya_generado_iva"] = generado is not None
+                candidato["iva_movimiento_id"] = generado.get("iva_movimiento_id") if generado else None
+                candidato["estado_iva"] = generado.get("estado_iva") if generado else "PENDIENTE"
+                candidato["incluido_en_posicion_actual"] = generado.get("incluido_en_posicion") if generado else 0
+                candidato["incluido_en_portal_iva_actual"] = generado.get("incluido_en_portal_iva") if generado else 0
+
+                if not incluir_generados and candidato["ya_generado_iva"]:
+                    continue
+
+                candidatos.append(candidato)
+
+        df = pd.DataFrame(candidatos)
+
+        if df.empty:
+            return df
+
+        if anio is not None:
+            df = df[df["anio"].astype(int) == int(anio)]
+
+        if mes is not None:
+            df = df[df["mes"].astype(int) == int(mes)]
+
+        columnas_monetarias = [
+            "neto_gravado",
+            "iva_debito",
+            "credito_fiscal_computable",
+            "iva_no_computable",
+            "percepcion_iva",
+            "retencion_iva",
+            "percepcion_iibb_informativa",
+            "otros_tributos",
+            "total",
+        ]
+
+        for columna in columnas_monetarias:
+            if columna in df.columns:
+                df[columna] = pd.to_numeric(df[columna], errors="coerce").fillna(0).round(2)
+
+        return df.reset_index(drop=True)
+
+    except Exception:
+        return pd.DataFrame()
+
+    finally:
+        conn.close()
+
+
+def generar_movimientos_fiscales_banco_iva(
+    empresa_id=1,
+    selecciones=None,
+    anio=None,
+    mes=None,
+    estado=ESTADO_BORRADOR,
+    incluido_en_posicion=False,
+    incluido_en_portal_iva=False,
+    motivo_no_inclusion="",
+    usuario="",
+    usuario_id=None,
+):
+    """
+    Genera movimientos fiscales IVA desde Control fiscal bancario.
+
+    selecciones:
+    - Lista de dicts con grupo_fiscal_id y tipo_concepto.
+    - Si viene vacía/None, no genera nada para evitar acciones masivas accidentales.
+    """
+    asegurar_estructura_iva_movimientos_fiscales()
+
+    estado = _texto(estado).upper() or ESTADO_BORRADOR
+
+    if estado not in {ESTADO_BORRADOR, ESTADO_CONFIRMADO}:
+        return {
+            "ok": False,
+            "mensaje": "El estado inicial debe ser BORRADOR o CONFIRMADO.",
+            "creados": 0,
+            "omitidos": 0,
+            "errores": [],
+        }
+
+    selecciones = selecciones or []
+
+    if not selecciones:
+        return {
+            "ok": False,
+            "mensaje": "Seleccioná al menos un concepto fiscal bancario para generar.",
+            "creados": 0,
+            "omitidos": 0,
+            "errores": [],
+        }
+
+    claves_seleccionadas = {
+        (
+            int(sel.get("grupo_fiscal_id") or sel.get("origen_id") or 0),
+            _texto(sel.get("tipo_concepto")).upper(),
+        )
+        for sel in selecciones
+    }
+
+    preview = obtener_vista_previa_movimientos_fiscales_banco_iva(
+        empresa_id=empresa_id,
+        anio=anio,
+        mes=mes,
+        incluir_generados=True,
+    )
+
+    if preview.empty:
+        return {
+            "ok": False,
+            "mensaje": "No hay conceptos fiscales bancarios disponibles para generar en IVA.",
+            "creados": 0,
+            "omitidos": 0,
+            "errores": [],
+        }
+
+    creados = []
+    omitidos = []
+    errores = []
+
+    for _, row in preview.iterrows():
+        clave = (
+            int(row.get("grupo_fiscal_id") or 0),
+            _texto(row.get("tipo_concepto")).upper(),
+        )
+
+        if clave not in claves_seleccionadas:
+            continue
+
+        if bool(row.get("ya_generado_iva")):
+            omitidos.append({
+                "grupo_fiscal_id": clave[0],
+                "tipo_concepto": clave[1],
+                "motivo": "Ya existe movimiento fiscal IVA activo para este origen/concepto.",
+            })
+            continue
+
+        try:
+            movimiento = registrar_movimiento_fiscal(
+                empresa_id=empresa_id,
+                anio=int(row.get("anio")),
+                mes=int(row.get("mes")),
+                fecha=row.get("fecha"),
+                origen=ORIGEN_IVA_BANCO,
+                tipo_concepto=row.get("tipo_concepto"),
+                descripcion=row.get("descripcion"),
+                contraparte=row.get("contraparte"),
+                cuit=row.get("cuit"),
+                comprobante_codigo=row.get("comprobante_codigo"),
+                comprobante_tipo=row.get("comprobante_tipo"),
+                punto_venta=row.get("punto_venta"),
+                numero=row.get("numero"),
+                neto_gravado=row.get("neto_gravado"),
+                iva_debito=row.get("iva_debito"),
+                credito_fiscal_computable=row.get("credito_fiscal_computable"),
+                iva_no_computable=row.get("iva_no_computable"),
+                percepcion_iva=row.get("percepcion_iva"),
+                retencion_iva=row.get("retencion_iva"),
+                percepcion_iibb_informativa=row.get("percepcion_iibb_informativa"),
+                otros_tributos=row.get("otros_tributos"),
+                total=row.get("total"),
+                estado=estado,
+                incluido_en_posicion=bool(incluido_en_posicion),
+                incluido_en_portal_iva=bool(incluido_en_portal_iva),
+                periodo_declaracion=row.get("periodo") if incluido_en_portal_iva else "",
+                motivo_no_inclusion=motivo_no_inclusion,
+                usuario_inclusion_posicion=usuario,
+                usuario_declaracion_portal=usuario,
+                origen_tabla=ORIGEN_TABLA_GRUPOS_FISCALES,
+                origen_id=int(row.get("grupo_fiscal_id")),
+                observacion=(
+                    "Generado desde Banco/Caja > Control fiscal bancario. "
+                    f"Grupo fiscal #{int(row.get('grupo_fiscal_id'))}. "
+                    f"Movimiento bancario vinculado: {row.get('movimiento_banco_id') or 'sin vínculo directo'}."
+                ),
+                usuario=usuario,
+            )
+
+            creados.append({
+                "grupo_fiscal_id": clave[0],
+                "tipo_concepto": clave[1],
+                "iva_movimiento_id": movimiento.get("id") if movimiento else None,
+                "total": _numero(row.get("total")),
+            })
+
+        except Exception as exc:
+            errores.append({
+                "grupo_fiscal_id": clave[0],
+                "tipo_concepto": clave[1],
+                "error": str(exc),
+            })
+
+    ok = len(errores) == 0
+
+    if creados:
+        mensaje = f"Se generaron {len(creados)} movimientos fiscales IVA desde Banco/Caja."
+    elif omitidos and not errores:
+        mensaje = "No se generaron movimientos nuevos: los conceptos seleccionados ya estaban enviados a IVA."
+    else:
+        mensaje = "No se pudieron generar movimientos fiscales IVA."
+
+    _registrar_auditoria_segura(
+        usuario_id=usuario_id,
+        empresa_id=empresa_id,
+        modulo="Banco / Caja",
+        accion="Generar movimientos fiscales IVA desde Banco",
+        entidad="iva_movimientos_fiscales",
+        entidad_id="BANCO_FISCAL_IVA",
+        valor_anterior={"selecciones": list(claves_seleccionadas)},
+        valor_nuevo={"creados": creados, "omitidos": omitidos, "errores": errores},
+        motivo="Integración Banco Fiscal -> IVA PRO.",
+    )
+
+    return {
+        "ok": ok,
+        "mensaje": mensaje,
+        "creados": len(creados),
+        "omitidos": len(omitidos),
+        "errores": errores,
+        "detalle_creados": creados,
+        "detalle_omitidos": omitidos,
+    }
 
 
 # ======================================================

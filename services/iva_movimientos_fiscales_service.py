@@ -33,8 +33,10 @@ from database import conectar, ejecutar_query
 # - Ajuste técnico controlado.
 #
 # Regla importante:
-# Solo los movimientos CONFIRMADOS deben impactar en la posición IVA.
+# Solo los movimientos CONFIRMADOS e incluidos en posición deben impactar
+# en la posición IVA declarable.
 # BORRADOR no impacta.
+# CONFIRMADO no incluido queda como crédito/control pendiente.
 # ANULADO no impacta.
 
 
@@ -154,6 +156,22 @@ def _round2(valor):
     return round(_float(valor), 2)
 
 
+def _bool_int(valor, default=0):
+    if valor is None:
+        return 1 if default else 0
+
+    if isinstance(valor, str):
+        texto = valor.strip().upper()
+
+        if texto in {"1", "SI", "SÍ", "TRUE", "T", "YES", "Y"}:
+            return 1
+
+        if texto in {"0", "NO", "FALSE", "F", "N"}:
+            return 0
+
+    return 1 if bool(valor) else 0
+
+
 def _now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -170,6 +188,22 @@ def _fecha_iso(valor=None):
     """
     if valor is None or _texto(valor) == "":
         return datetime.now().strftime("%Y-%m-%d")
+
+    texto = _texto(valor)
+
+    if (
+        len(texto) == 10
+        and texto[4] == "-"
+        and texto[7] == "-"
+        and texto[:4].isdigit()
+        and texto[5:7].isdigit()
+        and texto[8:10].isdigit()
+    ):
+        try:
+            fecha = pd.to_datetime(texto, format="%Y-%m-%d", errors="raise")
+            return fecha.strftime("%Y-%m-%d")
+        except Exception:
+            pass
 
     try:
         fecha = pd.to_datetime(valor, errors="raise", dayfirst=True)
@@ -384,6 +418,15 @@ def asegurar_estructura_iva_movimientos_fiscales():
 
                 estado TEXT NOT NULL DEFAULT 'CONFIRMADO',
 
+                incluido_en_posicion INTEGER NOT NULL DEFAULT 1,
+                incluido_en_portal_iva INTEGER NOT NULL DEFAULT 0,
+                periodo_declaracion TEXT,
+                motivo_no_inclusion TEXT,
+                fecha_inclusion_posicion TIMESTAMP,
+                usuario_inclusion_posicion TEXT,
+                fecha_declaracion_portal TIMESTAMP,
+                usuario_declaracion_portal TEXT,
+
                 origen_tabla TEXT,
                 origen_id INTEGER,
 
@@ -397,6 +440,8 @@ def asegurar_estructura_iva_movimientos_fiscales():
 
                 CHECK (mes BETWEEN 1 AND 12),
                 CHECK (estado IN ('BORRADOR', 'CONFIRMADO', 'ANULADO')),
+                CHECK (incluido_en_posicion IN (0, 1)),
+                CHECK (incluido_en_portal_iva IN (0, 1)),
                 CHECK (
                     origen IN (
                         'MANUAL',
@@ -456,6 +501,14 @@ def asegurar_estructura_iva_movimientos_fiscales():
             "otros_tributos": "REAL NOT NULL DEFAULT 0",
             "total": "REAL NOT NULL DEFAULT 0",
             "estado": "TEXT NOT NULL DEFAULT 'CONFIRMADO'",
+            "incluido_en_posicion": "INTEGER NOT NULL DEFAULT 1",
+            "incluido_en_portal_iva": "INTEGER NOT NULL DEFAULT 0",
+            "periodo_declaracion": "TEXT",
+            "motivo_no_inclusion": "TEXT",
+            "fecha_inclusion_posicion": "TIMESTAMP",
+            "usuario_inclusion_posicion": "TEXT",
+            "fecha_declaracion_portal": "TIMESTAMP",
+            "usuario_declaracion_portal": "TEXT",
             "origen_tabla": "TEXT",
             "origen_id": "INTEGER",
             "observacion": "TEXT",
@@ -482,6 +535,17 @@ def asegurar_estructura_iva_movimientos_fiscales():
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_iva_mov_fiscales_estado
             ON iva_movimientos_fiscales (estado)
+        """)
+
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_iva_mov_fiscales_inclusion
+            ON iva_movimientos_fiscales (empresa_id, anio, mes, estado, incluido_en_posicion)
+        """)
+
+        cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_iva_mov_fiscales_origen_concepto_activo
+            ON iva_movimientos_fiscales (empresa_id, origen, origen_tabla, origen_id, tipo_concepto)
+            WHERE origen_id IS NOT NULL AND estado <> 'ANULADO'
         """)
 
         cur.execute("""
@@ -674,6 +738,12 @@ def registrar_movimiento_fiscal(
     otros_tributos=0,
     total=None,
     estado=ESTADO_CONFIRMADO,
+    incluido_en_posicion=True,
+    incluido_en_portal_iva=False,
+    periodo_declaracion="",
+    motivo_no_inclusion="",
+    usuario_inclusion_posicion="",
+    usuario_declaracion_portal="",
     origen_tabla="",
     origen_id=None,
     observacion="",
@@ -683,7 +753,8 @@ def registrar_movimiento_fiscal(
     Registra un movimiento fiscal adicional de IVA.
 
     Importante:
-    - Si estado = CONFIRMADO, impactará en la posición IVA futura.
+    - Si estado = CONFIRMADO e incluido_en_posicion = True, impactará en la posición IVA.
+    - Si estado = CONFIRMADO e incluido_en_posicion = False, quedará como crédito/control pendiente.
     - Si estado = BORRADOR, quedará guardado sin impactar.
     - ANULADO solo debería usarse por función anular_movimiento_fiscal,
       pero se permite para migraciones o importaciones controladas.
@@ -727,8 +798,26 @@ def registrar_movimiento_fiscal(
         "total": _round2(total) if total is not None else 0.0,
     }
 
+    incluido_en_posicion = _bool_int(incluido_en_posicion, default=1)
+    incluido_en_portal_iva = _bool_int(incluido_en_portal_iva, default=0)
+
+    if estado != ESTADO_CONFIRMADO:
+        incluido_en_posicion = 0
+        incluido_en_portal_iva = 0
+
+    if not incluido_en_posicion:
+        incluido_en_portal_iva = 0
+
+    periodo_declaracion = _texto(periodo_declaracion)
+    motivo_no_inclusion = _texto(motivo_no_inclusion)
+
+    if incluido_en_portal_iva and not periodo_declaracion:
+        periodo_declaracion = periodo
+
     fecha_confirmacion = _now() if estado == ESTADO_CONFIRMADO else None
     fecha_anulacion = _now() if estado == ESTADO_ANULADO else None
+    fecha_inclusion_posicion = _now() if incluido_en_posicion else None
+    fecha_declaracion_portal = _now() if incluido_en_portal_iva else None
 
     conn = conectar()
 
@@ -766,6 +855,14 @@ def registrar_movimiento_fiscal(
                 otros_tributos,
                 total,
                 estado,
+                incluido_en_posicion,
+                incluido_en_portal_iva,
+                periodo_declaracion,
+                motivo_no_inclusion,
+                fecha_inclusion_posicion,
+                usuario_inclusion_posicion,
+                fecha_declaracion_portal,
+                usuario_declaracion_portal,
                 origen_tabla,
                 origen_id,
                 observacion,
@@ -775,7 +872,7 @@ def registrar_movimiento_fiscal(
                 fecha_anulacion,
                 motivo_anulacion
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 empresa_id,
@@ -805,6 +902,14 @@ def registrar_movimiento_fiscal(
                 valores["otros_tributos"],
                 valores["total"],
                 estado,
+                incluido_en_posicion,
+                incluido_en_portal_iva,
+                periodo_declaracion,
+                motivo_no_inclusion,
+                fecha_inclusion_posicion,
+                _texto(usuario_inclusion_posicion) if incluido_en_posicion else "",
+                fecha_declaracion_portal,
+                _texto(usuario_declaracion_portal) if incluido_en_portal_iva else "",
                 _texto(origen_tabla),
                 origen_id,
                 _texto(observacion),
@@ -823,7 +928,11 @@ def registrar_movimiento_fiscal(
             movimiento_id=movimiento_id,
             empresa_id=empresa_id,
             evento="CREACION",
-            detalle=f"Movimiento fiscal IVA creado en estado {estado}.",
+            detalle=(
+                f"Movimiento fiscal IVA creado en estado {estado}. "
+                f"Incluido en posición: {'sí' if incluido_en_posicion else 'no'}. "
+                f"Declarado Portal IVA: {'sí' if incluido_en_portal_iva else 'no'}."
+            ),
             usuario=usuario,
         )
 
@@ -899,6 +1008,8 @@ def listar_movimientos_fiscales(
     estado=None,
     origen=None,
     tipo_concepto=None,
+    incluido_en_posicion=None,
+    incluido_en_portal_iva=None,
     incluir_anulados=False,
 ):
     """
@@ -938,6 +1049,14 @@ def listar_movimientos_fiscales(
         condiciones.append("tipo_concepto = ?")
         params.append(_normalizar_tipo_concepto(tipo_concepto))
 
+    if incluido_en_posicion is not None:
+        condiciones.append("IFNULL(incluido_en_posicion, 1) = ?")
+        params.append(_bool_int(incluido_en_posicion, default=1))
+
+    if incluido_en_portal_iva is not None:
+        condiciones.append("IFNULL(incluido_en_portal_iva, 0) = ?")
+        params.append(_bool_int(incluido_en_portal_iva, default=0))
+
     sql = """
         SELECT *
         FROM iva_movimientos_fiscales
@@ -961,6 +1080,10 @@ def confirmar_movimiento_fiscal(
     movimiento_id,
     usuario="",
     detalle="Confirmación manual del movimiento fiscal IVA.",
+    incluido_en_posicion=True,
+    incluido_en_portal_iva=False,
+    periodo_declaracion="",
+    motivo_no_inclusion="",
 ):
     asegurar_estructura_iva_movimientos_fiscales()
 
@@ -973,7 +1096,26 @@ def confirmar_movimiento_fiscal(
         raise ValueError("No se puede confirmar un movimiento fiscal IVA anulado.")
 
     if movimiento.get("estado") == ESTADO_CONFIRMADO:
-        return movimiento
+        return actualizar_inclusion_movimiento_fiscal(
+            movimiento_id=movimiento_id,
+            incluido_en_posicion=incluido_en_posicion,
+            incluido_en_portal_iva=incluido_en_portal_iva,
+            periodo_declaracion=periodo_declaracion,
+            motivo_no_inclusion=motivo_no_inclusion,
+            usuario=usuario,
+            detalle=detalle,
+        )
+
+    incluido_en_posicion = _bool_int(incluido_en_posicion, default=1)
+    incluido_en_portal_iva = _bool_int(incluido_en_portal_iva, default=0)
+
+    if not incluido_en_posicion:
+        incluido_en_portal_iva = 0
+
+    periodo_declaracion = _texto(periodo_declaracion)
+
+    if incluido_en_portal_iva and not periodo_declaracion:
+        periodo_declaracion = _periodo_texto(_int(movimiento.get("anio")), _int(movimiento.get("mes")))
 
     conn = conectar()
 
@@ -983,14 +1125,30 @@ def confirmar_movimiento_fiscal(
             UPDATE iva_movimientos_fiscales
             SET
                 estado = ?,
+                incluido_en_posicion = ?,
+                incluido_en_portal_iva = ?,
+                periodo_declaracion = ?,
+                motivo_no_inclusion = ?,
                 fecha_confirmacion = ?,
+                fecha_inclusion_posicion = ?,
+                usuario_inclusion_posicion = ?,
+                fecha_declaracion_portal = ?,
+                usuario_declaracion_portal = ?,
                 fecha_anulacion = NULL,
                 motivo_anulacion = NULL
             WHERE id = ?
             """,
             (
                 ESTADO_CONFIRMADO,
+                incluido_en_posicion,
+                incluido_en_portal_iva,
+                periodo_declaracion,
+                _texto(motivo_no_inclusion),
                 _now(),
+                _now() if incluido_en_posicion else None,
+                _texto(usuario) if incluido_en_posicion else "",
+                _now() if incluido_en_portal_iva else None,
+                _texto(usuario) if incluido_en_portal_iva else "",
                 _int(movimiento_id),
             ),
         )
@@ -1001,6 +1159,107 @@ def confirmar_movimiento_fiscal(
             empresa_id=_int(movimiento.get("empresa_id"), 1),
             evento="CONFIRMACION",
             detalle=detalle,
+            usuario=usuario,
+        )
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+    return obtener_movimiento_fiscal(movimiento_id)
+
+
+
+def actualizar_inclusion_movimiento_fiscal(
+    movimiento_id,
+    incluido_en_posicion=True,
+    incluido_en_portal_iva=False,
+    periodo_declaracion="",
+    motivo_no_inclusion="",
+    usuario="",
+    detalle="Actualización de inclusión en posición IVA.",
+):
+    """
+    Actualiza si un movimiento fiscal confirmado se toma o no en la posición IVA.
+
+    Uso contable:
+    - incluido_en_posicion = 1: impacta la posición IVA declarable.
+    - incluido_en_posicion = 0: queda como crédito/control pendiente.
+    - incluido_en_portal_iva = 1: marca que además fue declarado/tomado en Portal IVA.
+    """
+    asegurar_estructura_iva_movimientos_fiscales()
+
+    movimiento = obtener_movimiento_fiscal(movimiento_id)
+
+    if movimiento is None:
+        raise ValueError("No se encontró el movimiento fiscal IVA.")
+
+    if movimiento.get("estado") == ESTADO_ANULADO:
+        raise ValueError("No se puede modificar la inclusión de un movimiento fiscal IVA anulado.")
+
+    incluido_en_posicion = _bool_int(incluido_en_posicion, default=1)
+    incluido_en_portal_iva = _bool_int(incluido_en_portal_iva, default=0)
+
+    if movimiento.get("estado") != ESTADO_CONFIRMADO:
+        incluido_en_posicion = 0
+        incluido_en_portal_iva = 0
+
+    if not incluido_en_posicion:
+        incluido_en_portal_iva = 0
+
+    periodo_declaracion = _texto(periodo_declaracion)
+
+    if incluido_en_portal_iva and not periodo_declaracion:
+        periodo_declaracion = _periodo_texto(
+            _int(movimiento.get("anio")),
+            _int(movimiento.get("mes")),
+        )
+
+    conn = conectar()
+
+    try:
+        conn.execute(
+            """
+            UPDATE iva_movimientos_fiscales
+            SET
+                incluido_en_posicion = ?,
+                incluido_en_portal_iva = ?,
+                periodo_declaracion = ?,
+                motivo_no_inclusion = ?,
+                fecha_inclusion_posicion = ?,
+                usuario_inclusion_posicion = ?,
+                fecha_declaracion_portal = ?,
+                usuario_declaracion_portal = ?
+            WHERE id = ?
+            """,
+            (
+                incluido_en_posicion,
+                incluido_en_portal_iva,
+                periodo_declaracion,
+                _texto(motivo_no_inclusion),
+                _now() if incluido_en_posicion else None,
+                _texto(usuario) if incluido_en_posicion else "",
+                _now() if incluido_en_portal_iva else None,
+                _texto(usuario) if incluido_en_portal_iva else "",
+                _int(movimiento_id),
+            ),
+        )
+
+        _registrar_evento_conn(
+            conn=conn,
+            movimiento_id=_int(movimiento_id),
+            empresa_id=_int(movimiento.get("empresa_id"), 1),
+            evento="INCLUSION_POSICION",
+            detalle=(
+                f"{detalle} Incluido en posición: {'sí' if incluido_en_posicion else 'no'}. "
+                f"Declarado Portal IVA: {'sí' if incluido_en_portal_iva else 'no'}. "
+                f"Motivo: {_texto(motivo_no_inclusion)}"
+            ),
             usuario=usuario,
         )
 
@@ -1051,6 +1310,8 @@ def anular_movimiento_fiscal(
             UPDATE iva_movimientos_fiscales
             SET
                 estado = ?,
+                incluido_en_posicion = 0,
+                incluido_en_portal_iva = 0,
                 fecha_anulacion = ?,
                 motivo_anulacion = ?
             WHERE id = ?
@@ -1093,6 +1354,7 @@ def obtener_totales_movimientos_fiscales_periodo(
     anio=None,
     mes=None,
     incluir_borradores=False,
+    solo_incluidos_en_posicion=True,
 ):
     """
     Devuelve totales de movimientos fiscales adicionales para un período.
@@ -1101,6 +1363,7 @@ def obtener_totales_movimientos_fiscales_periodo(
     - Incluye solo CONFIRMADOS.
     - Excluye BORRADOR.
     - Excluye ANULADO.
+    - Por defecto incluye únicamente movimientos marcados como incluidos en posición.
 
     Estos totales luego se integran a services/iva_service.py.
     """
@@ -1121,6 +1384,11 @@ def obtener_totales_movimientos_fiscales_periodo(
         mes,
         *estados,
     ]
+
+    filtro_inclusion = ""
+
+    if solo_incluidos_en_posicion:
+        filtro_inclusion = "AND IFNULL(incluido_en_posicion, 1) = 1"
 
     df = ejecutar_query(
         f"""
@@ -1147,6 +1415,7 @@ def obtener_totales_movimientos_fiscales_periodo(
           AND anio = ?
           AND mes = ?
           AND estado IN ({placeholders})
+          {filtro_inclusion}
         """,
         tuple(params),
         fetch=True,
@@ -1255,6 +1524,7 @@ def obtener_resumen_movimientos_fiscales_por_origen(
     anio=None,
     mes=None,
     incluir_borradores=False,
+    solo_incluidos_en_posicion=True,
 ):
     """
     Resume movimientos fiscales por origen y tipo de concepto.
@@ -1276,6 +1546,11 @@ def obtener_resumen_movimientos_fiscales_por_origen(
         mes,
         *estados,
     ]
+
+    filtro_inclusion = ""
+
+    if solo_incluidos_en_posicion:
+        filtro_inclusion = "AND IFNULL(incluido_en_posicion, 1) = 1"
 
     df = ejecutar_query(
         f"""
@@ -1300,6 +1575,7 @@ def obtener_resumen_movimientos_fiscales_por_origen(
           AND anio = ?
           AND mes = ?
           AND estado IN ({placeholders})
+          {filtro_inclusion}
         GROUP BY origen, tipo_concepto
         ORDER BY origen, tipo_concepto
         """,
@@ -1332,6 +1608,18 @@ def validar_movimiento_fiscal_dict(movimiento):
         }]
 
     tipo = _upper(movimiento.get("tipo_concepto"), "OTRO")
+    estado = _upper(movimiento.get("estado"), ESTADO_CONFIRMADO)
+    incluido_en_posicion = _bool_int(movimiento.get("incluido_en_posicion"), default=1)
+
+    if estado == ESTADO_CONFIRMADO and not incluido_en_posicion:
+        alertas.append({
+            "nivel": "INFO",
+            "titulo": "Movimiento confirmado no incluido en posición",
+            "detalle": (
+                "El crédito/control existe y queda trazado, pero no impactará la posición IVA "
+                "hasta que se marque como incluido."
+            ),
+        })
 
     importes = {
         "iva_debito": _round2(movimiento.get("iva_debito", 0)),
@@ -1457,6 +1745,7 @@ __all__ = [
     "obtener_movimiento_fiscal",
     "listar_movimientos_fiscales",
     "confirmar_movimiento_fiscal",
+    "actualizar_inclusion_movimiento_fiscal",
     "anular_movimiento_fiscal",
     "listar_eventos_movimiento",
 
