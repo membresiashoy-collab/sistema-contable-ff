@@ -1388,7 +1388,18 @@ def obtener_totales_movimientos_fiscales_periodo(
     filtro_inclusion = ""
 
     if solo_incluidos_en_posicion:
-        filtro_inclusion = "AND IFNULL(incluido_en_posicion, 1) = 1"
+        if incluir_borradores:
+            # Para control/revisión, los BORRADOR deben poder verse aunque
+            # no estén incluidos en posición. Esto mantiene compatibilidad
+            # con la regla histórica de incluir_borradores=True.
+            filtro_inclusion = (
+                "AND (IFNULL(incluido_en_posicion, 1) = 1 "
+                "OR estado = 'BORRADOR')"
+            )
+        else:
+            # Para posición IVA declarable, solo impactan movimientos
+            # confirmados e incluidos.
+            filtro_inclusion = "AND IFNULL(incluido_en_posicion, 1) = 1"
 
     df = ejecutar_query(
         f"""
@@ -1550,7 +1561,18 @@ def obtener_resumen_movimientos_fiscales_por_origen(
     filtro_inclusion = ""
 
     if solo_incluidos_en_posicion:
-        filtro_inclusion = "AND IFNULL(incluido_en_posicion, 1) = 1"
+        if incluir_borradores:
+            # Para control/revisión, los BORRADOR deben poder verse aunque
+            # no estén incluidos en posición. Esto mantiene compatibilidad
+            # con la regla histórica de incluir_borradores=True.
+            filtro_inclusion = (
+                "AND (IFNULL(incluido_en_posicion, 1) = 1 "
+                "OR estado = 'BORRADOR')"
+            )
+        else:
+            # Para posición IVA declarable, solo impactan movimientos
+            # confirmados e incluidos.
+            filtro_inclusion = "AND IFNULL(incluido_en_posicion, 1) = 1"
 
     df = ejecutar_query(
         f"""
