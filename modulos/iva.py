@@ -56,6 +56,37 @@ from services.iva_movimientos_fiscales_service import (
 # Por ahora se permite carga manual controlada con origen y trazabilidad.
 
 
+TIPOS_CONCEPTO_IVA_OPERATIVOS = {
+    "IVA_DEBITO",
+    "IVA_CREDITO",
+    "IVA_NO_COMPUTABLE",
+    "PERCEPCION_IVA",
+    "RETENCION_IVA",
+    "SALDO_TECNICO_ANTERIOR",
+    "SALDO_LIBRE_DISPONIBILIDAD",
+    "PAGO_A_CUENTA",
+    "AJUSTE_SALDO",
+}
+
+TIPOS_CONCEPTO_SOLO_CONTROL = {
+    "PERCEPCION_IIBB_INFORMATIVA",
+    "OTRO",
+}
+
+
+def _separar_movimientos_operativos_e_informativos(df):
+    if df is None or df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    if "tipo_concepto" not in df.columns:
+        return df.copy(), pd.DataFrame()
+
+    tipos = df["tipo_concepto"].astype(str).str.strip().str.upper()
+    operativo = df[tipos.isin(TIPOS_CONCEPTO_IVA_OPERATIVOS)].copy()
+    informativo = df[~tipos.isin(TIPOS_CONCEPTO_IVA_OPERATIVOS)].copy()
+    return operativo, informativo
+
+
 # ======================================================
 # HELPERS UI
 # ======================================================
@@ -1329,6 +1360,34 @@ def _resumen_movimientos_fiscales_por_concepto(df):
     return agrupado
 
 
+
+def _importe_relevante_para_iva(df):
+    """
+    Importe operativo para decidir IVA.
+    Excluye Percepción IIBB informativa y otros tributos para no mezclar controles con cómputo IVA.
+    """
+    if df is None or df.empty:
+        return 0.0
+
+    columnas = [
+        "iva_debito",
+        "credito_fiscal_computable",
+        "iva_no_computable",
+        "percepcion_iva",
+        "retencion_iva",
+        "saldo_tecnico_anterior",
+        "saldo_libre_disponibilidad",
+        "pago_a_cuenta",
+    ]
+
+    total = 0.0
+    for columna in columnas:
+        if columna in df.columns:
+            total += float(pd.to_numeric(df[columna], errors="coerce").fillna(0.0).sum())
+
+    return round(total, 2)
+
+
 def _mostrar_tablero_decisiones_movimientos(df):
     df = _preparar_movimientos_fiscales_con_decision(df)
 
@@ -1341,31 +1400,26 @@ def _mostrar_tablero_decisiones_movimientos(df):
     borrador = df[df["decision_periodo"] == "Pendiente de revisión"].copy()
     anulado = df[df["decision_periodo"] == "Anulado por error"].copy()
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     c1.metric(
-        "Tomado en IVA",
-        formato_moneda(tomado["total"].sum() if "total" in tomado.columns else 0),
-        help="CONFIRMADO + incluido en posición. Impacta la posición IVA.",
+        "Tomado en IVA del período",
+        formato_moneda(_importe_relevante_para_iva(tomado)),
+        help="Importes que impactan la posición IVA del mes.",
     )
     c2.metric(
-        "No tomado este mes",
-        formato_moneda(no_tomado["total"].sum() if "total" in no_tomado.columns else 0),
-        help="CONFIRMADO pero no incluido. Queda como crédito/control pendiente.",
+        "Pendiente / no tomado",
+        formato_moneda(_importe_relevante_para_iva(pd.concat([no_tomado, borrador], ignore_index=True))),
+        help="Importes que no impactan este mes porque quedaron pendientes o no tomados.",
     )
     c3.metric(
-        "Pendiente de revisión",
-        formato_moneda(borrador["total"].sum() if "total" in borrador.columns else 0),
-        help="BORRADOR. No impacta la posición IVA.",
-    )
-    c4.metric(
         "Anulado",
-        formato_moneda(anulado["total"].sum() if "total" in anulado.columns else 0),
-        help="ANULADO. No impacta la posición IVA.",
+        formato_moneda(_importe_relevante_para_iva(anulado)),
+        help="Importes anulados. No impactan IVA.",
     )
 
     st.caption(
-        "Regla fiscal vigente: CONFIRMADO + incluido impacta IVA; CONFIRMADO no incluido queda pendiente; "
-        "BORRADOR y ANULADO no impactan."
+        "Vista simple: tomado impacta IVA; pendiente/no tomado no impacta; anulado queda fuera. "
+        "Los estados técnicos quedan ocultos en el detalle."
     )
 
 
@@ -1378,39 +1432,35 @@ def _mostrar_resumen_agregado_movimientos_fiscales(df, titulo="Resumen mensual p
 
     st.markdown(f"#### {titulo}")
     st.caption(
-        "Primero se muestran importes agregados por concepto y decisión. "
-        "El detalle línea por línea queda abajo, dentro de desplegables."
+        "Importes agrupados. Para decidir el IVA mirá principalmente Crédito fiscal, Percepción IVA y Retención IVA. "
+        "IIBB y otros tributos quedan como información de control."
     )
 
     columnas = [
         "tipo_concepto",
         "decision_periodo",
         "movimientos",
-        "iva_debito",
         "credito_fiscal_computable",
-        "iva_no_computable",
         "percepcion_iva",
         "retencion_iva",
-        "percepcion_iibb_informativa",
+        "iva_debito",
+        "iva_no_computable",
         "saldo_tecnico_anterior",
         "saldo_libre_disponibilidad",
         "pago_a_cuenta",
-        "otros_tributos",
-        "total",
     ]
     columnas = [col for col in columnas if col in resumen.columns]
 
     df_ui = _preparar_df_ui(resumen[columnas])
     df_ui = df_ui.rename(columns={
-        "decision_periodo": "Decisión del período",
-        "tipo_concepto": "Tipo concepto",
+        "decision_periodo": "Decisión",
+        "tipo_concepto": "Concepto",
         "movimientos": "Movimientos",
     })
-    _mostrar_dataframe(df_ui, altura=280)
+    _mostrar_dataframe(df_ui, altura=260)
+
 
 def _mostrar_listado_movimientos_fiscales(empresa_id, anio, mes, key_prefix="movs"):
-    st.markdown("#### Movimientos fiscales del período")
-
     try:
         df = listar_movimientos_fiscales(
             empresa_id=empresa_id,
@@ -1427,234 +1477,192 @@ def _mostrar_listado_movimientos_fiscales(empresa_id, anio, mes, key_prefix="mov
         return
 
     df = _preparar_movimientos_fiscales_con_decision(df)
+    df_operativo, df_informativo = _separar_movimientos_operativos_e_informativos(df)
 
-    _mostrar_tablero_decisiones_movimientos(df)
-    _mostrar_resumen_agregado_movimientos_fiscales(df)
-
-    st.divider()
-    st.markdown("#### Decisión del período")
-    st.caption(
-        "La pantalla trabaja por decisión operativa. El detalle técnico y los eventos quedan en desplegables."
-    )
-
-    ids_disponibles = df["id"].tolist() if "id" in df.columns else []
-
-    if not ids_disponibles:
-        st.info("No hay identificadores de movimientos disponibles para operar.")
-        return
-
-    movimiento_id = st.selectbox(
-        "Movimiento fiscal a revisar",
-        ids_disponibles,
-        format_func=lambda x: _label_movimiento(df, x),
-        key=f"{key_prefix}_movimiento_id",
-    )
-
-    movimiento = df[df["id"] == movimiento_id].iloc[0].to_dict()
-    estado_actual = str(movimiento.get("estado", "")).upper()
-    decision_actual = movimiento.get("decision_periodo", "Sin decisión")
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Estado", estado_actual or "—")
-    c2.metric("Decisión actual", decision_actual)
-    c3.metric("Tipo", str(movimiento.get("tipo_concepto", "—")))
-    c4.metric("Total", formato_moneda(movimiento.get("total", 0)))
-
-    st.write(f"**Descripción:** {movimiento.get('descripcion', '')}")
-
-    decision = st.radio(
-        "Qué querés hacer con este movimiento",
-        [
-            "Tomar en IVA del período",
-            "No tomar este mes",
-            "Dejar pendiente de revisión",
-            "Anular por error",
-        ],
-        key=f"{key_prefix}_decision_simple",
-        help="Las opciones respetan la regla fiscal vigente de estado e inclusión en posición.",
-    )
-
-    if decision == "Tomar en IVA del período":
-        if estado_actual == ESTADO_ANULADO:
-            st.warning("Un movimiento anulado no puede tomarse en IVA desde esta pantalla.")
-        elif decision_actual == "Tomado en IVA del período":
-            st.success("Este movimiento ya está tomado en IVA del período.")
-        elif estado_actual == ESTADO_BORRADOR:
-            st.info(
-                "Este movimiento está en borrador. Al confirmarlo queda habilitado para la posición IVA "
-                "según la configuración fiscal guardada para el movimiento."
-            )
-            if _boton_accion(
-                "Confirmar movimiento",
-                key=f"{key_prefix}_confirmar",
-                tipo="primary",
-            ):
-                try:
-                    confirmar_movimiento_fiscal(
-                        movimiento_id=movimiento_id,
-                        usuario=_obtener_usuario_actual(),
-                    )
-                    st.success("Movimiento fiscal confirmado.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"No se pudo confirmar el movimiento: {e}")
-        else:
-            st.info(
-                "El movimiento ya está confirmado. Si figura como 'No tomado este mes', conserva esa decisión "
-                "fiscal porque fue generado como crédito/control pendiente."
-            )
-
-    elif decision == "No tomar este mes":
-        if decision_actual == "No tomado este mes":
-            st.success("Este movimiento ya está confirmado como no tomado en el mes.")
-        elif estado_actual == ESTADO_BORRADOR:
-            st.info(
-                "Para dejarlo sin impacto, mantenelo como BORRADOR o generá el movimiento desde Banco/Caja "
-                "con la opción 'No tomar este mes'."
-            )
-        elif estado_actual == ESTADO_CONFIRMADO:
-            st.info(
-                "El movimiento ya está confirmado. La decisión de no incluir en posición se define al generarlo "
-                "desde Banco/Caja o desde el servicio fiscal correspondiente."
-            )
-        else:
-            st.info("Este movimiento no requiere cambios para no impactar el IVA.")
-
-    elif decision == "Dejar pendiente de revisión":
-        if estado_actual == ESTADO_BORRADOR:
-            st.success("Este movimiento ya está pendiente de revisión y no impacta IVA.")
-        elif estado_actual == ESTADO_ANULADO:
-            st.info("El movimiento está anulado; no impacta IVA.")
-        else:
-            st.info(
-                "Para movimientos ya confirmados no se retrocede el estado desde esta pantalla. "
-                "Si fue un error, corresponde anularlo con motivo y volver a generarlo correctamente."
-            )
-
-    elif decision == "Anular por error":
-        if estado_actual == ESTADO_ANULADO:
-            st.success("El movimiento seleccionado ya está anulado.")
-        else:
-            motivo = st.text_input(
-                "Motivo de anulación",
-                key=f"{key_prefix}_motivo_anulacion",
-                placeholder="Obligatorio para anular",
-            )
-
-            if _boton_accion(
-                "Anular movimiento",
-                key=f"{key_prefix}_anular",
-                tipo="secondary",
-            ):
-                try:
-                    anular_movimiento_fiscal(
-                        movimiento_id=movimiento_id,
-                        motivo=motivo,
-                        usuario=_obtener_usuario_actual(),
-                    )
-                    st.success("Movimiento fiscal anulado correctamente.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"No se pudo anular el movimiento: {e}")
-
-    with st.expander("Ver detalle técnico y buscar movimientos", expanded=False):
-        col1, col2, col3 = st.columns([2, 1, 1])
-
-        with col1:
-            busqueda = st.text_input(
-                "Buscar movimientos fiscales",
-                placeholder="Descripción, origen, tipo, contraparte, CUIT...",
-                key=f"{key_prefix}_buscar",
-            )
-
-        with col2:
-            estados = ["TODOS", ESTADO_CONFIRMADO, ESTADO_BORRADOR, ESTADO_ANULADO]
-            estado_filtro = st.selectbox(
-                "Estado",
-                estados,
-                key=f"{key_prefix}_estado",
-            )
-
-        with col3:
-            decisiones = ["TODAS"] + sorted(df["decision_periodo"].dropna().unique().tolist())
-            decision_filtro = st.selectbox(
-                "Decisión",
-                decisiones,
-                key=f"{key_prefix}_decision_filtro",
-            )
-
-        mostrar_tecnicas = st.checkbox(
-            "Mostrar columnas técnicas",
-            value=False,
-            key=f"{key_prefix}_tecnicas",
+    if df_operativo.empty:
+        st.info(
+            "No hay movimientos fiscales que impacten IVA para este período. "
+            "Si existen IIBB, Ley 25.413 u otros conceptos, quedan abajo como control informativo."
+        )
+    else:
+        _mostrar_tablero_decisiones_movimientos(df_operativo)
+        _mostrar_resumen_agregado_movimientos_fiscales(
+            df_operativo,
+            titulo="Resumen IVA por concepto y decisión",
         )
 
-        df_filtrado = _aplicar_busqueda(df, busqueda)
+    with st.expander("Ver movimientos IVA línea por línea", expanded=False):
+        if df_operativo.empty:
+            st.info("No hay líneas operativas de IVA para mostrar.")
+        else:
+            col1, col2 = st.columns([2, 1])
 
-        if estado_filtro != "TODOS" and "estado" in df_filtrado.columns:
-            df_filtrado = df_filtrado[df_filtrado["estado"] == estado_filtro].copy()
+            with col1:
+                busqueda = st.text_input(
+                    "Buscar movimientos IVA",
+                    placeholder="Descripción, origen, tipo, contraparte, CUIT...",
+                    key=f"{key_prefix}_buscar",
+                )
 
-        if decision_filtro != "TODAS" and "decision_periodo" in df_filtrado.columns:
-            df_filtrado = df_filtrado[df_filtrado["decision_periodo"] == decision_filtro].copy()
+            with col2:
+                decisiones = ["TODAS"] + sorted(df_operativo["decision_periodo"].dropna().unique().tolist())
+                decision_filtro = st.selectbox(
+                    "Decisión",
+                    decisiones,
+                    key=f"{key_prefix}_decision_filtro",
+                )
 
-        columnas_base = [
-            "id",
-            "fecha",
-            "estado",
-            "decision_periodo",
-            "origen",
-            "tipo_concepto",
-            "descripcion",
-            "contraparte",
-            "cuit",
-            "credito_fiscal_computable",
-            "iva_no_computable",
-            "percepcion_iva",
-            "retencion_iva",
-            "percepcion_iibb_informativa",
-            "total",
-        ]
+            df_filtrado = _aplicar_busqueda(df_operativo, busqueda)
 
-        columnas_tecnicas = [
-            "empresa_id",
-            "anio",
-            "mes",
-            "periodo",
-            "comprobante_codigo",
-            "comprobante_tipo",
-            "punto_venta",
-            "numero",
-            "neto_gravado",
-            "iva_debito",
-            "saldo_tecnico_anterior",
-            "saldo_libre_disponibilidad",
-            "pago_a_cuenta",
-            "otros_tributos",
-            "origen_tabla",
-            "origen_id",
-            "observacion",
-            "usuario",
-            "fecha_carga",
-            "fecha_confirmacion",
-            "fecha_anulacion",
-            "motivo_anulacion",
-        ]
+            if decision_filtro != "TODAS" and "decision_periodo" in df_filtrado.columns:
+                df_filtrado = df_filtrado[df_filtrado["decision_periodo"] == decision_filtro].copy()
 
-        columnas = columnas_base + columnas_tecnicas if mostrar_tecnicas else columnas_base
-        columnas = [col for col in columnas if col in df_filtrado.columns]
+            columnas = [
+                "fecha",
+                "decision_periodo",
+                "origen",
+                "tipo_concepto",
+                "descripcion",
+                "credito_fiscal_computable",
+                "percepcion_iva",
+                "retencion_iva",
+                "iva_no_computable",
+                "total",
+            ]
+            columnas = [col for col in columnas if col in df_filtrado.columns]
 
-        st.caption(f"Movimientos visibles: {len(df_filtrado)}")
+            st.caption(f"Movimientos IVA visibles: {len(df_filtrado)}")
+            df_ui = _preparar_df_ui(df_filtrado[columnas])
+            df_ui = df_ui.rename(columns={"decision_periodo": "Decisión"})
+            _mostrar_dataframe(df_ui, altura=420)
 
-        df_ui = _preparar_df_ui(df_filtrado[columnas])
-        df_ui = df_ui.rename(columns={"decision_periodo": "Decisión del período"})
-        _mostrar_dataframe(df_ui, altura=420)
+    with st.expander("Ver conceptos informativos / control fiscal", expanded=False):
+        if df_informativo.empty:
+            st.info("No hay conceptos informativos fuera del IVA en este período.")
+        else:
+            st.caption(
+                "Estos conceptos no integran la decisión mensual de IVA. "
+                "Sirven para control contable/impositivo: IIBB, Ley 25.413 y otros tributos."
+            )
+            resumen_info = _resumen_movimientos_fiscales_por_concepto(df_informativo)
+            if not resumen_info.empty:
+                columnas_resumen = [
+                    "tipo_concepto",
+                    "decision_periodo",
+                    "movimientos",
+                    "percepcion_iibb_informativa",
+                    "otros_tributos",
+                    "total",
+                ]
+                columnas_resumen = [col for col in columnas_resumen if col in resumen_info.columns]
+                df_resumen_ui = _preparar_df_ui(resumen_info[columnas_resumen])
+                df_resumen_ui = df_resumen_ui.rename(columns={
+                    "tipo_concepto": "Concepto",
+                    "decision_periodo": "Decisión",
+                })
+                _mostrar_dataframe(df_resumen_ui, altura=220)
 
-    with st.expander("Ver eventos del movimiento seleccionado", expanded=False):
-        try:
-            eventos = listar_eventos_movimiento(movimiento_id)
-            _mostrar_dataframe(_preparar_df_ui(eventos), altura=260)
-        except Exception as e:
-            st.error(f"No se pudieron leer eventos: {e}")
+            with st.expander("Detalle informativo línea por línea", expanded=False):
+                columnas_info = [
+                    "fecha",
+                    "decision_periodo",
+                    "origen",
+                    "tipo_concepto",
+                    "descripcion",
+                    "percepcion_iibb_informativa",
+                    "otros_tributos",
+                    "total",
+                ]
+                columnas_info = [col for col in columnas_info if col in df_informativo.columns]
+                df_info_ui = _preparar_df_ui(df_informativo[columnas_info])
+                df_info_ui = df_info_ui.rename(columns={"decision_periodo": "Decisión"})
+                _mostrar_dataframe(df_info_ui, altura=320)
+
+    with st.expander("Corrección puntual / auditoría", expanded=False):
+        st.warning(
+            "Usá esta sección solo para corregir un movimiento puntual. "
+            "La decisión normal del banco se hace en Banco/Caja > Control fiscal bancario."
+        )
+
+        ids_disponibles = df["id"].tolist() if "id" in df.columns else []
+
+        if not ids_disponibles:
+            st.info("No hay identificadores de movimientos disponibles para operar.")
+            return
+
+        movimiento_id = st.selectbox(
+            "Movimiento fiscal",
+            ids_disponibles,
+            format_func=lambda x: _label_movimiento(df, x),
+            key=f"{key_prefix}_movimiento_id",
+        )
+
+        movimiento = df[df["id"] == movimiento_id].iloc[0].to_dict()
+        estado_actual = str(movimiento.get("estado", "")).upper()
+        decision_actual = movimiento.get("decision_periodo", "Sin decisión")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Estado técnico", estado_actual or "—")
+        c2.metric("Decisión", decision_actual)
+        c3.metric("Tipo", str(movimiento.get("tipo_concepto", "—")))
+        c4.metric("Importe IVA", formato_moneda(_importe_relevante_para_iva(pd.DataFrame([movimiento]))))
+
+        st.write(f"**Descripción:** {movimiento.get('descripcion', '')}")
+
+        col_confirmar, col_anular = st.columns(2)
+
+        with col_confirmar:
+            if estado_actual == ESTADO_BORRADOR:
+                st.info("Está pendiente. Podés confirmarlo si corresponde tomarlo según su configuración fiscal.")
+                if _boton_accion(
+                    "Confirmar movimiento pendiente",
+                    key=f"{key_prefix}_confirmar",
+                    tipo="primary",
+                ):
+                    try:
+                        confirmar_movimiento_fiscal(
+                            movimiento_id=movimiento_id,
+                            usuario=_obtener_usuario_actual(),
+                        )
+                        st.success("Movimiento fiscal confirmado.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"No se pudo confirmar el movimiento: {e}")
+            else:
+                st.caption("Solo los movimientos pendientes se confirman desde esta sección.")
+
+        with col_anular:
+            if estado_actual != ESTADO_ANULADO:
+                motivo = st.text_input(
+                    "Motivo de anulación",
+                    key=f"{key_prefix}_motivo_anulacion",
+                    placeholder="Obligatorio para anular",
+                )
+
+                if _boton_accion(
+                    "Anular por error",
+                    key=f"{key_prefix}_anular",
+                    tipo="secondary",
+                ):
+                    try:
+                        anular_movimiento_fiscal(
+                            movimiento_id=movimiento_id,
+                            motivo=motivo,
+                            usuario=_obtener_usuario_actual(),
+                        )
+                        st.success("Movimiento fiscal anulado correctamente.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"No se pudo anular el movimiento: {e}")
+            else:
+                st.caption("El movimiento seleccionado ya está anulado.")
+
+        with st.expander("Eventos del movimiento seleccionado", expanded=False):
+            try:
+                eventos = listar_eventos_movimiento(movimiento_id)
+                _mostrar_dataframe(_preparar_df_ui(eventos), altura=260)
+            except Exception as e:
+                st.error(f"No se pudieron leer eventos: {e}")
 
 
 def _label_movimiento(df, movimiento_id):
@@ -1676,75 +1684,104 @@ def _mostrar_detalle_movimientos_fiscales(detalle_movimientos_fiscales, key_pref
         return
 
     df_base = _preparar_movimientos_fiscales_con_decision(detalle_movimientos_fiscales.copy())
+    df_operativo, df_informativo = _separar_movimientos_operativos_e_informativos(df_base)
 
-    _mostrar_tablero_decisiones_movimientos(df_base)
-    _mostrar_resumen_agregado_movimientos_fiscales(
-        df_base,
-        titulo="Resumen por concepto y decisión",
-    )
+    if df_operativo.empty:
+        st.info("No hay movimientos adicionales que impacten IVA para este período.")
+    else:
+        _mostrar_tablero_decisiones_movimientos(df_operativo)
+        _mostrar_resumen_agregado_movimientos_fiscales(
+            df_operativo,
+            titulo="Resumen IVA por concepto y decisión",
+        )
 
-    with st.expander("Ver detalle línea por línea", expanded=False):
-        col1, col2 = st.columns([2, 1])
+    with st.expander("Ver detalle IVA línea por línea", expanded=False):
+        if df_operativo.empty:
+            st.info("No hay detalle operativo de IVA.")
+        else:
+            col1, col2 = st.columns([2, 1])
 
-        with col1:
-            busqueda = st.text_input(
-                "Buscar en movimientos fiscales",
-                placeholder="Descripción, origen, tipo, contraparte, CUIT...",
-                key=f"{key_prefix}_buscar",
+            with col1:
+                busqueda = st.text_input(
+                    "Buscar en movimientos IVA",
+                    placeholder="Descripción, origen, tipo, contraparte, CUIT...",
+                    key=f"{key_prefix}_buscar",
+                )
+
+            with col2:
+                mostrar_tecnicas = st.checkbox(
+                    "Mostrar columnas técnicas",
+                    value=False,
+                    key=f"{key_prefix}_tecnicas",
+                )
+
+            df = _aplicar_busqueda(df_operativo, busqueda)
+
+            columnas_base = [
+                "fecha",
+                "estado",
+                "decision_periodo",
+                "origen",
+                "tipo_concepto",
+                "descripcion",
+                "contraparte",
+                "cuit",
+                "credito_fiscal_computable",
+                "iva_no_computable",
+                "percepcion_iva",
+                "retencion_iva",
+                "total",
+            ]
+
+            columnas_tecnicas = [
+                "id",
+                "empresa_id",
+                "anio",
+                "mes",
+                "periodo",
+                "neto_gravado",
+                "iva_debito",
+                "saldo_tecnico_anterior",
+                "saldo_libre_disponibilidad",
+                "pago_a_cuenta",
+                "observacion",
+                "usuario",
+                "fecha_carga",
+                "fecha_confirmacion",
+            ]
+
+            columnas = columnas_base + columnas_tecnicas if mostrar_tecnicas else columnas_base
+            columnas = [col for col in columnas if col in df.columns]
+
+            st.caption(f"Movimientos IVA visibles: {len(df)}")
+
+            df_ui = _preparar_df_ui(df[columnas])
+            df_ui = df_ui.rename(columns={"decision_periodo": "Decisión del período"})
+            _mostrar_dataframe(df_ui, altura=420)
+
+    with st.expander("Ver conceptos informativos / control fiscal", expanded=False):
+        if df_informativo.empty:
+            st.info("No hay conceptos informativos fuera del IVA en este período.")
+        else:
+            st.caption(
+                "IIBB, Ley 25.413 y otros tributos no integran la decisión de IVA, "
+                "pero quedan trazados para control y papel de trabajo."
             )
-
-        with col2:
-            mostrar_tecnicas = st.checkbox(
-                "Mostrar columnas técnicas",
-                value=False,
-                key=f"{key_prefix}_tecnicas",
-            )
-
-        df = _aplicar_busqueda(df_base, busqueda)
-
-        columnas_base = [
-            "fecha",
-            "estado",
-            "decision_periodo",
-            "origen",
-            "tipo_concepto",
-            "descripcion",
-            "contraparte",
-            "cuit",
-            "credito_fiscal_computable",
-            "iva_no_computable",
-            "percepcion_iva",
-            "retencion_iva",
-            "percepcion_iibb_informativa",
-            "total",
-        ]
-
-        columnas_tecnicas = [
-            "id",
-            "empresa_id",
-            "anio",
-            "mes",
-            "periodo",
-            "neto_gravado",
-            "iva_debito",
-            "saldo_tecnico_anterior",
-            "saldo_libre_disponibilidad",
-            "pago_a_cuenta",
-            "otros_tributos",
-            "observacion",
-            "usuario",
-            "fecha_carga",
-            "fecha_confirmacion",
-        ]
-
-        columnas = columnas_base + columnas_tecnicas if mostrar_tecnicas else columnas_base
-        columnas = [col for col in columnas if col in df.columns]
-
-        st.caption(f"Movimientos visibles: {len(df)}")
-
-        df_ui = _preparar_df_ui(df[columnas])
-        df_ui = df_ui.rename(columns={"decision_periodo": "Decisión del período"})
-        _mostrar_dataframe(df_ui, altura=420)
+            columnas = [
+                "fecha",
+                "estado",
+                "decision_periodo",
+                "origen",
+                "tipo_concepto",
+                "descripcion",
+                "percepcion_iibb_informativa",
+                "otros_tributos",
+                "total",
+            ]
+            columnas = [col for col in columnas if col in df_informativo.columns]
+            df_ui = _preparar_df_ui(df_informativo[columnas])
+            df_ui = df_ui.rename(columns={"decision_periodo": "Decisión del período"})
+            _mostrar_dataframe(df_ui, altura=320)
 
 
 
@@ -1919,45 +1956,25 @@ def _pantalla_libro_iva_compras(empresa_id, periodos):
     _mostrar_detalle_compras(detalle_compras, key_prefix="libro_compras")
 
 
+
 def _pantalla_movimientos_fiscales(empresa_id, periodos):
     st.subheader("Movimientos fiscales adicionales")
 
     st.info(
-        "Acá se deciden conceptos fiscales adicionales que no vienen de Ventas ni Compras: "
-        "créditos bancarios, percepciones, retenciones, saldos y ajustes controlados. "
-        "Primero se muestran totales por decisión; el detalle técnico queda desplegable."
+        "Vista simple: acá se ve qué importes adicionales entran al IVA del período y qué queda pendiente. "
+        "La decisión principal de los importes bancarios se toma desde Banco/Caja > Control fiscal bancario."
     )
 
     anio, mes = _selector_periodo(periodos, "iva_movimientos")
 
     st.markdown(f"### {_periodo_largo(anio, mes)}")
 
-    try:
-        movimientos_periodo = listar_movimientos_fiscales(
-            empresa_id=empresa_id,
-            anio=anio,
-            mes=mes,
-            incluir_anulados=True,
-        )
-    except Exception as e:
-        st.error(f"No se pudieron obtener los movimientos fiscales del período: {e}")
-        movimientos_periodo = pd.DataFrame()
-
-    if not movimientos_periodo.empty:
-        movimientos_periodo = _preparar_movimientos_fiscales_con_decision(movimientos_periodo)
-        _mostrar_tablero_decisiones_movimientos(movimientos_periodo)
-        _mostrar_resumen_agregado_movimientos_fiscales(movimientos_periodo)
-    else:
-        st.info("No hay movimientos fiscales adicionales cargados para este período.")
-
-    st.divider()
-
-    tab_decision, tab_alta = st.tabs([
-        "Decisión del período",
+    tab_resumen, tab_alta = st.tabs([
+        "Resumen del período",
         "Cargar movimiento manual",
     ])
 
-    with tab_decision:
+    with tab_resumen:
         _mostrar_listado_movimientos_fiscales(
             empresa_id=empresa_id,
             anio=anio,
@@ -1971,7 +1988,6 @@ def _pantalla_movimientos_fiscales(empresa_id, periodos):
             anio=anio,
             mes=mes,
         )
-
 
 def _pantalla_papel_trabajo(empresa_id, periodos):
     st.subheader("Papel de trabajo / Exportación")

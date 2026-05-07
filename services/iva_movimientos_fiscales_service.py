@@ -542,11 +542,21 @@ def asegurar_estructura_iva_movimientos_fiscales():
             ON iva_movimientos_fiscales (empresa_id, anio, mes, estado, incluido_en_posicion)
         """)
 
-        cur.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_iva_mov_fiscales_origen_concepto_activo
-            ON iva_movimientos_fiscales (empresa_id, origen, origen_tabla, origen_id, tipo_concepto)
-            WHERE origen_id IS NOT NULL AND estado <> 'ANULADO'
-        """)
+        # Índice de protección contra duplicados activos por origen fiscal.
+        # En bases antiguas puede fallar si ya existen duplicados históricos;
+        # en ese caso no se rompe la app y se deja un índice común. La limpieza
+        # se realiza desde el sistema con normalizar_duplicados_activos_banco_iva().
+        try:
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_iva_mov_fiscales_origen_concepto_activo
+                ON iva_movimientos_fiscales (empresa_id, origen, origen_tabla, origen_id, tipo_concepto)
+                WHERE origen_id IS NOT NULL AND estado <> 'ANULADO'
+            """)
+        except Exception:
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_iva_mov_fiscales_origen_concepto_activo_control
+                ON iva_movimientos_fiscales (empresa_id, origen, origen_tabla, origen_id, tipo_concepto, estado)
+            """)
 
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_iva_mov_fiscales_origen
@@ -707,6 +717,409 @@ def listar_eventos_movimiento(movimiento_id):
     return _resultado_a_dataframe(df)
 
 
+def _prioridad_decision_fiscal(estado, incluido_en_posicion=False):
+    estado = _upper(estado)
+    incluido = _bool_int(incluido_en_posicion, default=0)
+
+    if estado == ESTADO_CONFIRMADO and incluido:
+        return 30
+
+    if estado == ESTADO_CONFIRMADO and not incluido:
+        return 20
+
+    if estado == ESTADO_BORRADOR:
+        return 10
+
+    return 0
+
+
+def _prioridad_movimiento_row(row):
+    return _prioridad_decision_fiscal(
+        row.get("estado"),
+        row.get("incluido_en_posicion"),
+    )
+
+
+def _clave_operativa_banco_row(row):
+    """
+    Clave de control para detectar duplicados Banco -> IVA aun cuando
+    existan grupos fiscales bancarios repetidos con distinto id.
+    """
+    return (
+        _int(row.get("empresa_id"), 1),
+        _upper(row.get("origen")),
+        _upper(row.get("tipo_concepto")),
+        _int(row.get("anio")),
+        _int(row.get("mes")),
+        _texto(row.get("fecha")),
+        _texto(row.get("contraparte")).upper(),
+        _texto(row.get("numero")).upper(),
+        _round2(row.get("neto_gravado")),
+        _round2(row.get("iva_debito")),
+        _round2(row.get("credito_fiscal_computable")),
+        _round2(row.get("iva_no_computable")),
+        _round2(row.get("percepcion_iva")),
+        _round2(row.get("retencion_iva")),
+        _round2(row.get("percepcion_iibb_informativa")),
+        _round2(row.get("otros_tributos")),
+        _round2(row.get("total")),
+    )
+
+
+def _buscar_movimiento_activo_origen_conn(
+    conn,
+    empresa_id,
+    origen,
+    origen_tabla,
+    origen_id,
+    tipo_concepto,
+):
+    origen_id = _normalizar_origen_id(origen_id)
+
+    if origen_id is None:
+        return None
+
+    df = pd.read_sql_query(
+        """
+        SELECT *
+        FROM iva_movimientos_fiscales
+        WHERE empresa_id = ?
+          AND origen = ?
+          AND IFNULL(origen_tabla, '') = ?
+          AND origen_id = ?
+          AND tipo_concepto = ?
+          AND estado <> ?
+        ORDER BY
+            CASE
+                WHEN estado = 'CONFIRMADO' AND IFNULL(incluido_en_posicion, 0) = 1 THEN 3
+                WHEN estado = 'CONFIRMADO' THEN 2
+                WHEN estado = 'BORRADOR' THEN 1
+                ELSE 0
+            END DESC,
+            id ASC
+        LIMIT 1
+        """,
+        conn,
+        params=(
+            _int(empresa_id, 1),
+            _normalizar_origen(origen),
+            _texto(origen_tabla),
+            origen_id,
+            _normalizar_tipo_concepto(tipo_concepto),
+            ESTADO_ANULADO,
+        ),
+    )
+
+    if df.empty:
+        return None
+
+    return df.iloc[0].to_dict()
+
+
+def _buscar_movimiento_activo_banco_equivalente_conn(
+    conn,
+    movimiento_normalizado,
+):
+    """
+    Busca duplicados operativos de Banco -> IVA aunque el grupo fiscal
+    bancario tenga otro id. Esto evita duplicar el mismo extracto/ref/importe.
+    """
+    if _upper(movimiento_normalizado.get("origen")) != "BANCO":
+        return None
+
+    df = pd.read_sql_query(
+        """
+        SELECT *
+        FROM iva_movimientos_fiscales
+        WHERE empresa_id = ?
+          AND origen = 'BANCO'
+          AND tipo_concepto = ?
+          AND anio = ?
+          AND mes = ?
+          AND fecha = ?
+          AND IFNULL(contraparte, '') = ?
+          AND IFNULL(numero, '') = ?
+          AND estado <> ?
+        ORDER BY
+            CASE
+                WHEN estado = 'CONFIRMADO' AND IFNULL(incluido_en_posicion, 0) = 1 THEN 3
+                WHEN estado = 'CONFIRMADO' THEN 2
+                WHEN estado = 'BORRADOR' THEN 1
+                ELSE 0
+            END DESC,
+            id ASC
+        """,
+        conn,
+        params=(
+            _int(movimiento_normalizado.get("empresa_id"), 1),
+            _upper(movimiento_normalizado.get("tipo_concepto")),
+            _int(movimiento_normalizado.get("anio")),
+            _int(movimiento_normalizado.get("mes")),
+            _texto(movimiento_normalizado.get("fecha")),
+            _texto(movimiento_normalizado.get("contraparte")),
+            _texto(movimiento_normalizado.get("numero")),
+            ESTADO_ANULADO,
+        ),
+    )
+
+    if df.empty:
+        return None
+
+    objetivo = _clave_operativa_banco_row(movimiento_normalizado)
+
+    for _, fila in df.iterrows():
+        row = fila.to_dict()
+        if _clave_operativa_banco_row(row) == objetivo:
+            return row
+
+    return None
+
+
+def _actualizar_movimiento_fiscal_existente_conn(
+    conn,
+    movimiento_id,
+    movimiento_actual,
+    datos,
+    usuario="",
+):
+    prioridad_actual = _prioridad_movimiento_row(movimiento_actual)
+    prioridad_nueva = _prioridad_decision_fiscal(
+        datos.get("estado"),
+        datos.get("incluido_en_posicion"),
+    )
+
+    if prioridad_actual > prioridad_nueva:
+        _registrar_evento_conn(
+            conn=conn,
+            movimiento_id=_int(movimiento_id),
+            empresa_id=_int(datos.get("empresa_id"), 1),
+            evento="DUPLICADO_OMITIDO",
+            detalle=(
+                "Se intentó registrar nuevamente el mismo concepto Banco -> IVA, "
+                "pero ya existía una decisión fiscal de mayor prioridad. "
+                f"Estado vigente: {movimiento_actual.get('estado')}."
+            ),
+            usuario=usuario,
+        )
+        return False
+
+    fecha_confirmacion = _now() if datos.get("estado") == ESTADO_CONFIRMADO else None
+    fecha_inclusion_posicion = _now() if _bool_int(datos.get("incluido_en_posicion"), default=0) else None
+    fecha_declaracion_portal = _now() if _bool_int(datos.get("incluido_en_portal_iva"), default=0) else None
+
+    conn.execute(
+        """
+        UPDATE iva_movimientos_fiscales
+        SET
+            anio = ?,
+            mes = ?,
+            periodo = ?,
+            fecha = ?,
+            descripcion = ?,
+            contraparte = ?,
+            cuit = ?,
+            comprobante_codigo = ?,
+            comprobante_tipo = ?,
+            punto_venta = ?,
+            numero = ?,
+            neto_gravado = ?,
+            iva_debito = ?,
+            credito_fiscal_computable = ?,
+            iva_no_computable = ?,
+            percepcion_iva = ?,
+            retencion_iva = ?,
+            percepcion_iibb_informativa = ?,
+            saldo_tecnico_anterior = ?,
+            saldo_libre_disponibilidad = ?,
+            pago_a_cuenta = ?,
+            otros_tributos = ?,
+            total = ?,
+            estado = ?,
+            incluido_en_posicion = ?,
+            incluido_en_portal_iva = ?,
+            periodo_declaracion = ?,
+            motivo_no_inclusion = ?,
+            fecha_confirmacion = COALESCE(?, fecha_confirmacion),
+            fecha_inclusion_posicion = ?,
+            usuario_inclusion_posicion = ?,
+            fecha_declaracion_portal = ?,
+            usuario_declaracion_portal = ?,
+            fecha_anulacion = NULL,
+            motivo_anulacion = '',
+            observacion = ?,
+            usuario = ?
+        WHERE id = ?
+        """,
+        (
+            datos["anio"],
+            datos["mes"],
+            datos["periodo"],
+            datos["fecha"],
+            datos["descripcion"],
+            datos["contraparte"],
+            datos["cuit"],
+            datos["comprobante_codigo"],
+            datos["comprobante_tipo"],
+            datos["punto_venta"],
+            datos["numero"],
+            datos["neto_gravado"],
+            datos["iva_debito"],
+            datos["credito_fiscal_computable"],
+            datos["iva_no_computable"],
+            datos["percepcion_iva"],
+            datos["retencion_iva"],
+            datos["percepcion_iibb_informativa"],
+            datos["saldo_tecnico_anterior"],
+            datos["saldo_libre_disponibilidad"],
+            datos["pago_a_cuenta"],
+            datos["otros_tributos"],
+            datos["total"],
+            datos["estado"],
+            datos["incluido_en_posicion"],
+            datos["incluido_en_portal_iva"],
+            datos["periodo_declaracion"],
+            datos["motivo_no_inclusion"],
+            fecha_confirmacion,
+            fecha_inclusion_posicion,
+            _texto(usuario) if datos["incluido_en_posicion"] else "",
+            fecha_declaracion_portal,
+            _texto(usuario) if datos["incluido_en_portal_iva"] else "",
+            datos["observacion"],
+            _texto(usuario),
+            _int(movimiento_id),
+        ),
+    )
+
+    _registrar_evento_conn(
+        conn=conn,
+        movimiento_id=_int(movimiento_id),
+        empresa_id=_int(datos.get("empresa_id"), 1),
+        evento="ACTUALIZACION_IDEMPOTENTE",
+        detalle=(
+            "Se actualizó una decisión Banco -> IVA existente en lugar de crear un duplicado. "
+            f"Estado: {datos['estado']}. Incluido en posición: "
+            f"{'sí' if datos['incluido_en_posicion'] else 'no'}."
+        ),
+        usuario=usuario,
+    )
+
+    return True
+
+
+def normalizar_duplicados_activos_banco_iva(empresa_id=1, usuario="sistema"):
+    """
+    Limpieza por sistema: anula duplicados activos Banco -> IVA y conserva
+    la decisión fiscal más fuerte para cada mismo movimiento/concepto.
+
+    Prioridad de conservación:
+    1) CONFIRMADO + incluido_en_posicion = 1
+    2) CONFIRMADO + incluido_en_posicion = 0
+    3) BORRADOR
+    """
+    asegurar_estructura_iva_movimientos_fiscales()
+
+    conn = conectar()
+
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT *
+            FROM iva_movimientos_fiscales
+            WHERE empresa_id = ?
+              AND origen = 'BANCO'
+              AND estado <> ?
+            ORDER BY anio, mes, fecha, tipo_concepto, id
+            """,
+            conn,
+            params=(_int(empresa_id, 1), ESTADO_ANULADO),
+        )
+
+        if df.empty:
+            return {
+                "ok": True,
+                "mensaje": "No hay movimientos Banco -> IVA activos para normalizar.",
+                "grupos_revisados": 0,
+                "anulados": 0,
+                "conservados": 0,
+            }
+
+        grupos = {}
+
+        for _, fila in df.iterrows():
+            row = fila.to_dict()
+            clave = _clave_operativa_banco_row(row)
+            grupos.setdefault(clave, []).append(row)
+
+        anulados = 0
+        conservados = 0
+        grupos_revisados = 0
+
+        for filas in grupos.values():
+            if len(filas) <= 1:
+                continue
+
+            grupos_revisados += 1
+            filas_ordenadas = sorted(
+                filas,
+                key=lambda r: (-_prioridad_movimiento_row(r), _int(r.get("id"))),
+            )
+            ganador = filas_ordenadas[0]
+            conservados += 1
+
+            for dup in filas_ordenadas[1:]:
+                conn.execute(
+                    """
+                    UPDATE iva_movimientos_fiscales
+                    SET
+                        estado = ?,
+                        incluido_en_posicion = 0,
+                        incluido_en_portal_iva = 0,
+                        fecha_anulacion = ?,
+                        motivo_anulacion = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        ESTADO_ANULADO,
+                        _now(),
+                        f"Anulación técnica por duplicado Banco -> IVA. Se conserva movimiento #{_int(ganador.get('id'))}.",
+                        _int(dup.get("id")),
+                    ),
+                )
+
+                _registrar_evento_conn(
+                    conn=conn,
+                    movimiento_id=_int(dup.get("id")),
+                    empresa_id=_int(empresa_id, 1),
+                    evento="ANULACION_DUPLICADO_BANCO_IVA",
+                    detalle=f"Duplicado operativo. Se conserva movimiento #{_int(ganador.get('id'))}.",
+                    usuario=usuario,
+                )
+                anulados += 1
+
+        conn.commit()
+
+        return {
+            "ok": True,
+            "mensaje": "Normalización Banco -> IVA finalizada.",
+            "grupos_revisados": grupos_revisados,
+            "anulados": anulados,
+            "conservados": conservados,
+        }
+
+    except Exception as exc:
+        conn.rollback()
+        return {
+            "ok": False,
+            "mensaje": f"No se pudo normalizar duplicados Banco -> IVA: {exc}",
+            "grupos_revisados": 0,
+            "anulados": 0,
+            "conservados": 0,
+        }
+
+    finally:
+        conn.close()
+
+
 # ======================================================
 # MOVIMIENTOS FISCALES
 # ======================================================
@@ -819,10 +1232,74 @@ def registrar_movimiento_fiscal(
     fecha_inclusion_posicion = _now() if incluido_en_posicion else None
     fecha_declaracion_portal = _now() if incluido_en_portal_iva else None
 
+    datos_normalizados = {
+        "empresa_id": empresa_id,
+        "anio": anio,
+        "mes": mes,
+        "periodo": periodo,
+        "fecha": fecha,
+        "origen": origen,
+        "tipo_concepto": tipo_concepto,
+        "descripcion": descripcion,
+        "contraparte": _texto(contraparte),
+        "cuit": _texto(cuit),
+        "comprobante_codigo": _texto(comprobante_codigo),
+        "comprobante_tipo": _texto(comprobante_tipo),
+        "punto_venta": _texto(punto_venta),
+        "numero": _texto(numero),
+        "neto_gravado": valores["neto_gravado"],
+        "iva_debito": valores["iva_debito"],
+        "credito_fiscal_computable": valores["credito_fiscal_computable"],
+        "iva_no_computable": valores["iva_no_computable"],
+        "percepcion_iva": valores["percepcion_iva"],
+        "retencion_iva": valores["retencion_iva"],
+        "percepcion_iibb_informativa": valores["percepcion_iibb_informativa"],
+        "saldo_tecnico_anterior": valores["saldo_tecnico_anterior"],
+        "saldo_libre_disponibilidad": valores["saldo_libre_disponibilidad"],
+        "pago_a_cuenta": valores["pago_a_cuenta"],
+        "otros_tributos": valores["otros_tributos"],
+        "total": valores["total"],
+        "estado": estado,
+        "incluido_en_posicion": incluido_en_posicion,
+        "incluido_en_portal_iva": incluido_en_portal_iva,
+        "periodo_declaracion": periodo_declaracion,
+        "motivo_no_inclusion": motivo_no_inclusion,
+        "origen_tabla": _texto(origen_tabla),
+        "origen_id": origen_id,
+        "observacion": _texto(observacion),
+    }
+
     conn = conectar()
 
     try:
         cur = conn.cursor()
+
+        existente = _buscar_movimiento_activo_origen_conn(
+            conn=conn,
+            empresa_id=empresa_id,
+            origen=origen,
+            origen_tabla=origen_tabla,
+            origen_id=origen_id,
+            tipo_concepto=tipo_concepto,
+        )
+
+        if existente is None:
+            existente = _buscar_movimiento_activo_banco_equivalente_conn(
+                conn=conn,
+                movimiento_normalizado=datos_normalizados,
+            )
+
+        if existente is not None:
+            movimiento_id = _int(existente.get("id"))
+            _actualizar_movimiento_fiscal_existente_conn(
+                conn=conn,
+                movimiento_id=movimiento_id,
+                movimiento_actual=existente,
+                datos=datos_normalizados,
+                usuario=usuario,
+            )
+            conn.commit()
+            return obtener_movimiento_fiscal(movimiento_id)
 
         cur.execute(
             """
@@ -1781,4 +2258,5 @@ __all__ = [
     "opciones_tipos_concepto",
     "opciones_estados",
     "formato_moneda",
+    "normalizar_duplicados_activos_banco_iva",
 ]

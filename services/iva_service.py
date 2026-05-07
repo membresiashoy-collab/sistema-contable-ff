@@ -62,6 +62,23 @@ ORIGEN_AJUSTE_MANUAL = "AJUSTE_MANUAL"
 
 TOLERANCIA_IMPORTES = 0.05
 
+TIPOS_CONCEPTO_IVA_OPERATIVOS = {
+    "IVA_DEBITO",
+    "IVA_CREDITO",
+    "IVA_NO_COMPUTABLE",
+    "PERCEPCION_IVA",
+    "RETENCION_IVA",
+    "SALDO_TECNICO_ANTERIOR",
+    "SALDO_LIBRE_DISPONIBILIDAD",
+    "PAGO_A_CUENTA",
+    "AJUSTE_SALDO",
+}
+
+TIPOS_CONCEPTO_SOLO_CONTROL = {
+    "PERCEPCION_IIBB_INFORMATIVA",
+    "OTRO",
+}
+
 CODIGOS_NOTAS_CREDITO = {
     "3", "8", "13", "53",
     "203", "208", "213",
@@ -307,6 +324,22 @@ def _asegurar_columnas_periodo(df):
         df.loc[df["mes"] <= 0, "mes"] = fechas.dt.month.fillna(0).astype(int)
 
     return df
+
+
+def _filtrar_movimientos_fiscales_operativos(df):
+    """
+    Devuelve solo movimientos fiscales que inciden en IVA.
+    IIBB informativo, Ley 25.413 y otros tributos quedan fuera de la
+    pantalla principal y de los períodos operativos de IVA.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    if "tipo_concepto" not in df.columns:
+        return df.copy()
+
+    tipos = df["tipo_concepto"].astype(str).str.strip().str.upper()
+    return df[tipos.isin(TIPOS_CONCEPTO_IVA_OPERATIVOS)].copy()
 
 
 # ======================================================
@@ -1440,6 +1473,7 @@ def obtener_periodos_disponibles_iva(empresa_id=1):
 
             if not movimientos.empty:
                 movimientos = _asegurar_columnas_periodo(movimientos)
+                movimientos = _filtrar_movimientos_fiscales_operativos(movimientos)
                 movimientos_validos = movimientos[
                     (movimientos["anio"] > 0)
                     & (movimientos["mes"] > 0)
