@@ -92,6 +92,58 @@ def fecha_iso_segura(valor):
         return None
 
 
+def fecha_mostrar_argentina(valor):
+    """
+    Formato único de visualización para toda la UI: DD/MM/YYYY.
+
+    La base sigue guardando fechas en ISO YYYY-MM-DD para ordenar, filtrar
+    y evitar ambigüedades técnicas. Esta función solo cambia la presentación
+    al usuario.
+    """
+    if valor is None:
+        return ""
+
+    try:
+        if pd.isna(valor):
+            return ""
+    except Exception:
+        pass
+
+    try:
+        fecha = pd.to_datetime(valor, errors="coerce")
+        if pd.isna(fecha):
+            return str(valor)
+        return fecha.strftime("%d/%m/%Y")
+    except Exception:
+        return str(valor)
+
+
+def rango_fechas_mostrar(fecha_desde, fecha_hasta):
+    desde = fecha_mostrar_argentina(fecha_desde)
+    hasta = fecha_mostrar_argentina(fecha_hasta)
+    if desde and hasta:
+        return f"{desde} al {hasta}"
+    if desde:
+        return f"Desde {desde}"
+    if hasta:
+        return f"Hasta {hasta}"
+    return "Sin rango"
+
+
+def date_input_argentino(*args, **kwargs):
+    """
+    st.date_input con formato argentino cuando la versión de Streamlit lo soporte.
+    Si el entorno tuviera una versión anterior sin parámetro format, mantiene
+    compatibilidad y usa el date_input estándar.
+    """
+    kwargs.setdefault("format", "DD/MM/YYYY")
+    try:
+        return st.date_input(*args, **kwargs)
+    except TypeError:
+        kwargs.pop("format", None)
+        return st.date_input(*args, **kwargs)
+
+
 def empresa_actual_id():
     return int(st.session_state.get("empresa_id", 1) or 1)
 
@@ -187,7 +239,8 @@ def _opciones_ejercicios(empresa_id, incluir_anulados=False):
         ejercicio_id = int(fila["id"])
         etiqueta_actual = " · actual" if int(fila.get("es_actual") or 0) == 1 else ""
         etiqueta = (
-            f"{fila.get('nombre')} · {fila.get('fecha_inicio')} al {fila.get('fecha_cierre')} "
+            f"{fila.get('nombre')} · "
+            f"{rango_fechas_mostrar(fila.get('fecha_inicio'), fila.get('fecha_cierre'))} "
             f"· {fila.get('estado')}{etiqueta_actual}"
         )
         opciones.append(ejercicio_id)
@@ -387,21 +440,21 @@ def aplicar_filtros_contables(df, key_prefix):
 
                 with col_periodo_3:
                     st.caption("Corte aplicado")
-                    st.code(f"{fecha_desde} al {fecha_hasta}\nEstado: {estado}")
+                    st.code(f"{rango_fechas_mostrar(fecha_desde, fecha_hasta)}\nEstado: {estado}")
 
     elif modo == "RANGO_MANUAL":
         fecha_minima = _to_date(df["fecha_iso"].dropna().min(), date(date.today().year, 1, 1))
         fecha_maxima = _to_date(df["fecha_iso"].dropna().max(), date.today())
 
         with col_periodo_2:
-            desde_input = st.date_input(
+            desde_input = date_input_argentino(
                 "Desde",
                 value=fecha_minima,
                 key=f"{key_prefix}_fecha_desde",
             )
 
         with col_periodo_3:
-            hasta_input = st.date_input(
+            hasta_input = date_input_argentino(
                 "Hasta",
                 value=fecha_maxima,
                 key=f"{key_prefix}_fecha_hasta",
@@ -556,7 +609,7 @@ def mostrar_ejercicios_contables():
     if actual:
         st.info(
             f"Ejercicio actual: **{actual.get('nombre')}** · "
-            f"{actual.get('fecha_inicio')} al {actual.get('fecha_cierre')} · "
+            f"{rango_fechas_mostrar(actual.get('fecha_inicio'), actual.get('fecha_cierre'))} · "
             f"Estado: **{actual.get('estado')}**"
         )
     else:
@@ -583,14 +636,14 @@ def mostrar_ejercicios_contables():
                 )
 
             with col2:
-                fecha_inicio = st.date_input(
+                fecha_inicio = date_input_argentino(
                     "Fecha de inicio",
                     value=inicio_default,
                     key="ejercicio_fecha_inicio_nuevo",
                 )
 
             with col3:
-                fecha_cierre = st.date_input(
+                fecha_cierre = date_input_argentino(
                     "Fecha de cierre",
                     value=cierre_default,
                     key="ejercicio_fecha_cierre_nuevo",
@@ -645,6 +698,10 @@ def mostrar_ejercicios_contables():
         "fecha_creacion",
     ]].copy()
 
+    for columna_fecha in ["fecha_inicio", "fecha_cierre", "bloqueo_hasta", "fecha_creacion"]:
+        if columna_fecha in vista.columns:
+            vista[columna_fecha] = vista[columna_fecha].apply(fecha_mostrar_argentina)
+
     vista = vista.rename(columns={
         "id": "ID",
         "nombre": "Ejercicio",
@@ -684,8 +741,8 @@ def mostrar_ejercicios_contables():
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Estado", estado)
-    c2.metric("Inicio", str(fila.get("fecha_inicio")))
-    c3.metric("Cierre", str(fila.get("fecha_cierre")))
+    c2.metric("Inicio", fecha_mostrar_argentina(fila.get("fecha_inicio")))
+    c3.metric("Cierre", fecha_mostrar_argentina(fila.get("fecha_cierre")))
     c4.metric("Actual", "Sí" if int(fila.get("es_actual") or 0) == 1 else "No")
 
     acciones = st.columns(4)
@@ -892,9 +949,9 @@ def mostrar_inicio_contable():
                 with col1:
                     nombre = st.text_input("Nombre del ejercicio", value=f"Ejercicio {hoy.year}")
                 with col2:
-                    fecha_inicio = st.date_input("Inicio del ejercicio", value=date(hoy.year, 1, 1))
+                    fecha_inicio = date_input_argentino("Inicio del ejercicio", value=date(hoy.year, 1, 1))
                 with col3:
-                    fecha_cierre = st.date_input("Cierre del ejercicio", value=date(hoy.year, 12, 31))
+                    fecha_cierre = date_input_argentino("Cierre del ejercicio", value=date(hoy.year, 12, 31))
                 obs = st.text_input("Observación", value="Primer ejercicio cargado desde Inicio contable")
                 enviar = st.form_submit_button("Crear primer ejercicio", type="primary")
             if enviar:
@@ -912,7 +969,7 @@ def mostrar_inicio_contable():
                     st.rerun()
         else:
             st.success(
-                f"Ejercicio actual: {actual.get('nombre')} · {actual.get('fecha_inicio')} al {actual.get('fecha_cierre')} · {actual.get('estado')}"
+                f"Ejercicio actual: {actual.get('nombre')} · {rango_fechas_mostrar(actual.get('fecha_inicio'), actual.get('fecha_cierre'))} · {actual.get('estado')}"
             )
 
         st.markdown("#### Próximo paso sugerido")
@@ -960,7 +1017,7 @@ def mostrar_capital_y_socios_inicio(empresa_id, usuario):
         )
         col1, col2, col3 = st.columns(3)
         with col1:
-            fecha_instrumento = st.date_input("Fecha del instrumento / inicio", value=date.today(), key="capital_fecha_instrumento")
+            fecha_instrumento = date_input_argentino("Fecha del instrumento / inicio", value=date.today(), key="capital_fecha_instrumento")
         with col2:
             capital_total = st.number_input("Capital social total", min_value=0.0, step=1000.0, value=0.0, key="capital_total_inicio")
         with col3:
@@ -1036,7 +1093,9 @@ def mostrar_capital_y_socios_inicio(empresa_id, usuario):
             "id", "fecha_instrumento", "descripcion", "capital_social_total",
             "total_suscripto", "total_integrado", "total_pendiente_integracion",
             "estado", "asiento_suscripcion_propuesto_id", "asiento_integracion_propuesto_id",
-        ]].rename(columns={
+        ]].copy()
+        vista["fecha_instrumento"] = vista["fecha_instrumento"].apply(fecha_mostrar_argentina)
+        vista = vista.rename(columns={
             "id": "ID",
             "fecha_instrumento": "Fecha",
             "descripcion": "Descripción",
@@ -1383,7 +1442,7 @@ def mostrar_nuevo_asiento_origen(empresa_id, usuario, solo_apertura=False):
         )
 
     with col_fecha:
-        fecha = st.date_input(
+        fecha = date_input_argentino(
             "Fecha del asiento",
             value=date.today(),
             key="nuevo_asiento_origen_fecha",
