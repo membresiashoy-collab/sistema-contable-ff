@@ -9,6 +9,8 @@ from services.iva_movimientos_fiscales_service import (
     ESTADO_ANULADO,
     ESTADO_BORRADOR,
     ESTADO_CONFIRMADO,
+    anular_movimiento_fiscal,
+    anular_movimientos_banco_sin_grupo_fiscal_activo,
     asegurar_estructura_iva_movimientos_fiscales,
     normalizar_duplicados_activos_banco_iva,
     registrar_movimiento_fiscal,
@@ -1000,6 +1002,7 @@ def eliminar_importacion_bancaria(
             (empresa_id, importacion_id),
         )
         eliminados["grupos_fiscales"] = cur.rowcount
+
 
         cur.execute(
             """
@@ -1993,8 +1996,6 @@ def _clave_operativa_banco_iva(datos):
     # el grupo fiscal bancario haya quedado duplicado.
     return (
         "REFERENCIA_BANCO",
-        _normalizar_entero_dict(datos, "anio"),
-        _normalizar_entero_dict(datos, "mes"),
         _texto(datos.get("fecha")),
         _texto(datos.get("banco")).upper(),
         _texto(datos.get("referencia")).upper(),
@@ -2034,6 +2035,11 @@ def _info_generado_desde_row(row):
         "incluido_en_portal_iva": int(row.get("incluido_en_portal_iva") or 0),
         "origen_id": _normalizar_entero_dict(row, "origen_id"),
         "tipo_concepto": _texto(row.get("tipo_concepto")).upper(),
+        "anio_iva": _normalizar_entero_dict(row, "anio"),
+        "mes_iva": _normalizar_entero_dict(row, "mes"),
+        "periodo_iva": _texto(row.get("periodo")),
+        "periodo_declaracion": _texto(row.get("periodo_declaracion")),
+        "motivo_no_inclusion": _texto(row.get("motivo_no_inclusion")),
     }
 
 
@@ -2078,7 +2084,9 @@ def _obtener_fiscales_iva_generados(conn, empresa_id):
                 total,
                 estado,
                 IFNULL(incluido_en_posicion, 1) AS incluido_en_posicion,
-                IFNULL(incluido_en_portal_iva, 0) AS incluido_en_portal_iva
+                IFNULL(incluido_en_portal_iva, 0) AS incluido_en_portal_iva,
+                IFNULL(periodo_declaracion, '') AS periodo_declaracion,
+                IFNULL(motivo_no_inclusion, '') AS motivo_no_inclusion
             FROM iva_movimientos_fiscales
             WHERE empresa_id = ?
               AND origen = ?
@@ -2333,8 +2341,16 @@ def obtener_vista_previa_movimientos_fiscales_banco_iva(
     """
     Devuelve los conceptos fiscales bancarios convertibles en movimientos IVA.
 
-    No graba datos.
-    Permite que la UI muestre una vista previa antes de generar.
+    No graba datos ni anula automáticamente registros. La pantalla de Control
+    fiscal bancario debe ser de consulta/decisión; las limpiezas destructivas
+    quedan reservadas para la eliminación de importaciones o acciones técnicas
+    explícitas.
+
+    Reglas operativas:
+    - No muestra grupos fiscales cuyo archivo/importación bancaria ya no existe.
+    - Deduplica grupos equivalentes de importaciones duplicadas.
+    - Si un concepto fue trasladado al mes siguiente, aparece en el período de
+      decisión, conservando el período bancario de origen.
     """
     asegurar_estructura_iva_movimientos_fiscales()
 
@@ -2344,13 +2360,27 @@ def obtener_vista_previa_movimientos_fiscales_banco_iva(
         if not _tabla_tiene_columna(conn, "bancos_grupos_fiscales", "id"):
             return pd.DataFrame()
 
-        df_grupos = pd.read_sql_query(
+        if _tabla_tiene_columna(conn, "bancos_importaciones", "id"):
+            sql_grupos = """
+                SELECT g.*
+                FROM bancos_grupos_fiscales g
+                LEFT JOIN bancos_importaciones i
+                       ON i.empresa_id = g.empresa_id
+                      AND i.id = g.importacion_id
+                WHERE g.empresa_id = ?
+                  AND (IFNULL(g.importacion_id, 0) = 0 OR i.id IS NOT NULL)
+                ORDER BY g.fecha DESC, g.id DESC
             """
-            SELECT *
-            FROM bancos_grupos_fiscales
-            WHERE empresa_id = ?
-            ORDER BY fecha DESC, id DESC
-            """,
+        else:
+            sql_grupos = """
+                SELECT *
+                FROM bancos_grupos_fiscales
+                WHERE empresa_id = ?
+                ORDER BY fecha DESC, id DESC
+            """
+
+        df_grupos = pd.read_sql_query(
+            sql_grupos,
             conn,
             params=(empresa_id,),
         )
@@ -2363,13 +2393,39 @@ def obtener_vista_previa_movimientos_fiscales_banco_iva(
 
         for _, row in df_grupos.iterrows():
             for candidato in _armar_candidatos_iva_desde_grupo(row.to_dict()):
+                periodo_origen = candidato.get("periodo")
+                anio_origen = candidato.get("anio")
+                mes_origen = candidato.get("mes")
+
                 generado = _buscar_generado_para_candidato(generados, candidato)
+
+                candidato["periodo_origen"] = periodo_origen
+                candidato["anio_origen"] = anio_origen
+                candidato["mes_origen"] = mes_origen
+                candidato["periodo_impacto"] = periodo_origen
+                candidato["trasladado_desde_periodo"] = ""
 
                 candidato["ya_generado_iva"] = generado is not None
                 candidato["iva_movimiento_id"] = generado.get("iva_movimiento_id") if generado else None
                 candidato["estado_iva"] = generado.get("estado_iva") if generado else "PENDIENTE"
                 candidato["incluido_en_posicion_actual"] = generado.get("incluido_en_posicion") if generado else 0
                 candidato["incluido_en_portal_iva_actual"] = generado.get("incluido_en_portal_iva") if generado else 0
+                candidato["periodo_declaracion_actual"] = generado.get("periodo_declaracion") if generado else ""
+                candidato["motivo_no_inclusion_actual"] = generado.get("motivo_no_inclusion") if generado else ""
+
+                if generado:
+                    anio_iva = _normalizar_entero_dict(generado, "anio_iva")
+                    mes_iva = _normalizar_entero_dict(generado, "mes_iva")
+                    periodo_iva = _texto(generado.get("periodo_iva"))
+
+                    if anio_iva > 0 and mes_iva > 0:
+                        candidato["anio"] = anio_iva
+                        candidato["mes"] = mes_iva
+                        candidato["periodo"] = periodo_iva or f"{anio_iva}-{mes_iva:02d}"
+                        candidato["periodo_impacto"] = candidato["periodo"]
+
+                        if candidato["periodo"] != periodo_origen:
+                            candidato["trasladado_desde_periodo"] = periodo_origen
 
                 if not incluir_generados and candidato["ya_generado_iva"]:
                     continue
@@ -2483,8 +2539,15 @@ def generar_movimientos_fiscales_banco_iva(
         }
 
     creados = []
+    actualizados = []
     omitidos = []
     errores = []
+
+    decision_solicitada = {
+        "estado": estado,
+        "incluido_en_posicion": 1 if bool(incluido_en_posicion) else 0,
+    }
+    prioridad_solicitada = _prioridad_generado_iva(decision_solicitada)
 
     for _, row in preview.iterrows():
         clave = (
@@ -2495,13 +2558,13 @@ def generar_movimientos_fiscales_banco_iva(
         if clave not in claves_seleccionadas:
             continue
 
-        if bool(row.get("ya_generado_iva")):
-            omitidos.append({
-                "grupo_fiscal_id": clave[0],
-                "tipo_concepto": clave[1],
-                "motivo": "Ya existe movimiento fiscal IVA activo para este origen/concepto.",
-            })
-            continue
+        ya_generado = bool(row.get("ya_generado_iva"))
+
+        # La decisión del usuario siempre puede actualizar una decisión activa
+        # anterior: tomar, trasladar, dejar pendiente o marcar Portal IVA.
+        # No se bloquea por "prioridad" porque eso dejaba conceptos tomados
+        # sin posibilidad de corrección operativa. La trazabilidad queda en
+        # eventos/auditoría de iva_movimientos_fiscales.
 
         try:
             anio_mov = int(row.get("anio"))
@@ -2510,6 +2573,27 @@ def generar_movimientos_fiscales_banco_iva(
 
             if trasladar_mes_siguiente:
                 anio_mov, mes_mov, periodo_mov = _periodo_siguiente(anio_mov, mes_mov)
+
+            if ya_generado and not trasladar_mes_siguiente:
+                estado_actual = _texto(row.get("estado_iva")).upper()
+                incluido_actual = 1 if int(row.get("incluido_en_posicion_actual") or 0) else 0
+                portal_actual = 1 if int(row.get("incluido_en_portal_iva_actual") or 0) else 0
+                incluido_solicitado = 1 if bool(incluido_en_posicion) else 0
+                portal_solicitado = 1 if bool(incluido_en_portal_iva) else 0
+
+                if (
+                    estado_actual == estado
+                    and incluido_actual == incluido_solicitado
+                    and portal_actual == portal_solicitado
+                ):
+                    omitidos.append({
+                        "grupo_fiscal_id": clave[0],
+                        "tipo_concepto": clave[1],
+                        "iva_movimiento_id": row.get("iva_movimiento_id"),
+                        "total": _numero(row.get("total")),
+                        "motivo": "El concepto seleccionado ya tenía la misma decisión fiscal activa.",
+                    })
+                    continue
 
             movimiento = registrar_movimiento_fiscal(
                 empresa_id=empresa_id,
@@ -2546,19 +2630,26 @@ def generar_movimientos_fiscales_banco_iva(
                 observacion=(
                     "Generado desde Banco/Caja > Control fiscal bancario. "
                     f"Grupo fiscal #{int(row.get('grupo_fiscal_id'))}. "
+                    f"Período bancario de origen: {row.get('periodo_origen', row.get('periodo'))}. "
+                    f"Período de decisión/impacto: {periodo_mov}. "
                     f"Movimiento bancario vinculado: {row.get('movimiento_banco_id') or 'sin vínculo directo'}."
                 ),
                 usuario=usuario,
             )
 
-            creados.append({
+            detalle_resultado = {
                 "grupo_fiscal_id": clave[0],
                 "tipo_concepto": clave[1],
                 "iva_movimiento_id": movimiento.get("id") if movimiento else None,
                 "total": _numero(row.get("total")),
                 "periodo_impacto": periodo_mov,
                 "trasladado_mes_siguiente": bool(trasladar_mes_siguiente),
-            })
+            }
+
+            if ya_generado:
+                actualizados.append(detalle_resultado)
+            else:
+                creados.append(detalle_resultado)
 
         except Exception as exc:
             errores.append({
@@ -2569,10 +2660,13 @@ def generar_movimientos_fiscales_banco_iva(
 
     ok = len(errores) == 0
 
-    if creados:
-        mensaje = f"Se generaron {len(creados)} movimientos fiscales IVA desde Banco/Caja."
+    if creados or actualizados:
+        mensaje = (
+            "Se procesaron movimientos fiscales IVA desde Banco/Caja. "
+            f"Nuevos: {len(creados)} | Actualizados: {len(actualizados)}."
+        )
     elif omitidos and not errores:
-        mensaje = "No se generaron movimientos nuevos: los conceptos seleccionados ya estaban enviados a IVA."
+        mensaje = "No se generaron movimientos nuevos: los conceptos seleccionados ya tenían una decisión equivalente o superior."
     else:
         mensaje = "No se pudieron generar movimientos fiscales IVA."
 
@@ -2584,7 +2678,7 @@ def generar_movimientos_fiscales_banco_iva(
         entidad="iva_movimientos_fiscales",
         entidad_id="BANCO_FISCAL_IVA",
         valor_anterior={"selecciones": list(claves_seleccionadas)},
-        valor_nuevo={"creados": creados, "omitidos": omitidos, "errores": errores},
+        valor_nuevo={"creados": creados, "actualizados": actualizados, "omitidos": omitidos, "errores": errores},
         motivo="Integración Banco Fiscal -> IVA PRO.",
     )
 
@@ -2592,12 +2686,71 @@ def generar_movimientos_fiscales_banco_iva(
         "ok": ok,
         "mensaje": mensaje,
         "creados": len(creados),
+        "actualizados": len(actualizados),
         "omitidos": len(omitidos),
         "errores": errores,
         "detalle_creados": creados,
+        "detalle_actualizados": actualizados,
         "detalle_omitidos": omitidos,
     }
 
+
+
+def revertir_decision_banco_iva(
+    movimiento_iva_id,
+    empresa_id=1,
+    usuario_id=None,
+    motivo="",
+    usuario="sistema",
+):
+    """
+    Revierte una decisión Banco -> IVA tomada por error.
+
+    No borra físicamente: anula lógicamente el movimiento fiscal activo.
+    Al quedar anulado y existir todavía el grupo fiscal bancario, el concepto
+    vuelve a aparecer como pendiente operativo en Control fiscal bancario.
+    """
+    movimiento_iva_id = int(movimiento_iva_id or 0)
+
+    if movimiento_iva_id <= 0:
+        return {
+            "ok": False,
+            "mensaje": "No se indicó un movimiento IVA válido para revertir.",
+        }
+
+    motivo_final = _texto(motivo) or "Reversión de decisión Banco -> IVA realizada por el usuario."
+
+    try:
+        movimiento = anular_movimiento_fiscal(
+            movimiento_id=movimiento_iva_id,
+            motivo=motivo_final,
+            usuario=str(usuario or usuario_id or "sistema"),
+        )
+
+        _registrar_auditoria_segura(
+            usuario_id=usuario_id,
+            empresa_id=empresa_id,
+            modulo="Banco / Caja",
+            accion="Revertir decisión Banco IVA",
+            entidad="iva_movimientos_fiscales",
+            entidad_id=movimiento_iva_id,
+            valor_anterior={},
+            valor_nuevo=movimiento or {},
+            motivo=motivo_final,
+        )
+
+        return {
+            "ok": True,
+            "mensaje": "Decisión Banco -> IVA revertida correctamente. El concepto vuelve a quedar disponible para decidir.",
+            "movimiento_iva_id": movimiento_iva_id,
+        }
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "mensaje": f"No se pudo revertir la decisión Banco -> IVA: {exc}",
+            "movimiento_iva_id": movimiento_iva_id,
+        }
 
 
 def normalizar_duplicados_banco_iva(empresa_id=1, usuario_id=None, usuario="sistema"):

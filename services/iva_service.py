@@ -1526,6 +1526,87 @@ def obtener_periodos_disponibles_iva(empresa_id=1):
     return resumen.reset_index(drop=True)
 
 
+def obtener_periodos_disponibles_movimientos_fiscales_iva(empresa_id=1):
+    """
+    Devuelve solo períodos con movimientos fiscales adicionales reales
+    vinculados a IVA.
+
+    No incluye meses que solo tienen Ventas o Compras.
+    No abre períodos que únicamente tengan conceptos informativos como
+    IIBB, Ley 25.413 u otros tributos bancarios de control.
+    """
+    if _listar_movimientos_fiscales is None:
+        return pd.DataFrame(columns=[
+            "anio",
+            "mes",
+            "periodo",
+            "cantidad_movimientos_fiscales",
+            "cantidad_total",
+        ])
+
+    try:
+        if _asegurar_movimientos_fiscales is not None:
+            _asegurar_movimientos_fiscales()
+
+        movimientos = _listar_movimientos_fiscales(
+            empresa_id=empresa_id,
+            incluir_anulados=False,
+        )
+        movimientos = _resultado_a_dataframe(movimientos)
+
+        if movimientos.empty:
+            return pd.DataFrame(columns=[
+                "anio",
+                "mes",
+                "periodo",
+                "cantidad_movimientos_fiscales",
+                "cantidad_total",
+            ])
+
+        movimientos = _asegurar_columnas_periodo(movimientos)
+        movimientos = _filtrar_movimientos_fiscales_operativos(movimientos)
+        movimientos = movimientos[
+            (movimientos["anio"] > 0)
+            & (movimientos["mes"] > 0)
+        ].copy()
+
+        if movimientos.empty:
+            return pd.DataFrame(columns=[
+                "anio",
+                "mes",
+                "periodo",
+                "cantidad_movimientos_fiscales",
+                "cantidad_total",
+            ])
+
+        filas = []
+        for (anio, mes), grupo in movimientos.groupby(["anio", "mes"]):
+            filas.append({
+                "anio": int(anio),
+                "mes": int(mes),
+                "periodo": _periodo_texto(anio, mes),
+                "cantidad_ventas": 0,
+                "cantidad_compras": 0,
+                "cantidad_movimientos_fiscales": int(len(grupo)),
+                "cantidad_total": int(len(grupo)),
+            })
+
+        return (
+            pd.DataFrame(filas)
+            .sort_values(["anio", "mes"], ascending=[False, False])
+            .reset_index(drop=True)
+        )
+
+    except Exception:
+        return pd.DataFrame(columns=[
+            "anio",
+            "mes",
+            "periodo",
+            "cantidad_movimientos_fiscales",
+            "cantidad_total",
+        ])
+
+
 def obtener_resumen_posiciones_iva(empresa_id=1):
     """
     Calcula resumen de posición para todos los períodos disponibles.
@@ -1758,6 +1839,7 @@ __all__ = [
     "obtener_impacto_movimientos_fiscales_periodo",
     "calcular_posicion_iva_periodo",
     "obtener_periodos_disponibles_iva",
+    "obtener_periodos_disponibles_movimientos_fiscales_iva",
     "obtener_resumen_posiciones_iva",
     "formato_moneda",
     "etiqueta_resultado_saldo",

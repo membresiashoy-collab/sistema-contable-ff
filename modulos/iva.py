@@ -8,6 +8,7 @@ from services.iva_service import (
     generar_papel_trabajo_excel_iva,
     nombre_archivo_papel_trabajo_iva,
     obtener_periodos_disponibles_iva,
+    obtener_periodos_disponibles_movimientos_fiscales_iva,
     obtener_resumen_posiciones_iva,
 )
 
@@ -1466,7 +1467,7 @@ def _mostrar_listado_movimientos_fiscales(empresa_id, anio, mes, key_prefix="mov
             empresa_id=empresa_id,
             anio=anio,
             mes=mes,
-            incluir_anulados=True,
+            incluir_anulados=False,
         )
     except Exception as e:
         st.error(f"No se pudieron listar movimientos fiscales: {e}")
@@ -1965,7 +1966,21 @@ def _pantalla_movimientos_fiscales(empresa_id, periodos):
         "La decisión principal de los importes bancarios se toma desde Banco/Caja > Control fiscal bancario."
     )
 
-    anio, mes = _selector_periodo(periodos, "iva_movimientos")
+    try:
+        periodos_movimientos = obtener_periodos_disponibles_movimientos_fiscales_iva(
+            empresa_id=empresa_id,
+        )
+    except Exception:
+        periodos_movimientos = pd.DataFrame()
+
+    if periodos_movimientos.empty:
+        st.info(
+            "No hay períodos con movimientos fiscales adicionales de IVA. "
+            "Los meses que solo tienen Ventas o Compras se revisan desde Posición IVA, Libro Ventas o Libro Compras."
+        )
+        anio, mes = _selector_periodo(periodos_movimientos, "iva_movimientos")
+    else:
+        anio, mes = _selector_periodo(periodos_movimientos, "iva_movimientos")
 
     st.markdown(f"### {_periodo_largo(anio, mes)}")
 

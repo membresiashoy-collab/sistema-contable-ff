@@ -83,6 +83,22 @@ TIPOS_CONCEPTO_VALIDOS = {
     "OTRO",
 }
 
+# Conceptos que integran la vista y el cálculo operativo de IVA.
+# IIBB, Ley 25.413 y otros tributos quedan como control informativo.
+TIPOS_CONCEPTO_IVA_OPERATIVOS = {
+    "IVA_DEBITO",
+    "IVA_CREDITO",
+    "IVA_NO_COMPUTABLE",
+    "PERCEPCION_IVA",
+    "RETENCION_IVA",
+    "SALDO_TECNICO_ANTERIOR",
+    "SALDO_LIBRE_DISPONIBILIDAD",
+    "PAGO_A_CUENTA",
+    "AJUSTE_SALDO",
+}
+
+TIPOS_CONCEPTO_SOLO_CONTROL = TIPOS_CONCEPTO_VALIDOS - TIPOS_CONCEPTO_IVA_OPERATIVOS
+
 COLUMNAS_MONETARIAS = [
     "neto_gravado",
     "iva_debito",
@@ -274,6 +290,11 @@ def _normalizar_tipo_concepto(tipo_concepto):
         )
 
     return tipo_concepto
+
+
+def es_tipo_concepto_iva_operativo(tipo_concepto):
+    """Indica si el concepto debe integrar la vista operativa de IVA."""
+    return _upper(tipo_concepto, "") in TIPOS_CONCEPTO_IVA_OPERATIVOS
 
 
 def _validar_periodo(anio, mes):
@@ -749,8 +770,6 @@ def _clave_operativa_banco_row(row):
         _int(row.get("empresa_id"), 1),
         _upper(row.get("origen")),
         _upper(row.get("tipo_concepto")),
-        _int(row.get("anio")),
-        _int(row.get("mes")),
         _texto(row.get("fecha")),
         _texto(row.get("contraparte")).upper(),
         _texto(row.get("numero")).upper(),
@@ -834,8 +853,6 @@ def _buscar_movimiento_activo_banco_equivalente_conn(
         WHERE empresa_id = ?
           AND origen = 'BANCO'
           AND tipo_concepto = ?
-          AND anio = ?
-          AND mes = ?
           AND fecha = ?
           AND IFNULL(contraparte, '') = ?
           AND IFNULL(numero, '') = ?
@@ -853,8 +870,6 @@ def _buscar_movimiento_activo_banco_equivalente_conn(
         params=(
             _int(movimiento_normalizado.get("empresa_id"), 1),
             _upper(movimiento_normalizado.get("tipo_concepto")),
-            _int(movimiento_normalizado.get("anio")),
-            _int(movimiento_normalizado.get("mes")),
             _texto(movimiento_normalizado.get("fecha")),
             _texto(movimiento_normalizado.get("contraparte")),
             _texto(movimiento_normalizado.get("numero")),
@@ -1004,6 +1019,140 @@ def _actualizar_movimiento_fiscal_existente_conn(
     )
 
     return True
+
+
+def anular_movimientos_banco_sin_grupo_fiscal_activo(
+    empresa_id=1,
+    usuario="sistema",
+    motivo="",
+):
+    """
+    Anula lógicamente movimientos Banco -> IVA cuyo grupo fiscal bancario
+    ya no existe o cuya importación bancaria origen fue eliminada.
+
+    Corrige residuos históricos: si antes se borró una importación bancaria
+    sin anular el movimiento fiscal asociado, IVA no debe seguir mostrándolo
+    como pendiente ni tomado.
+    """
+    asegurar_estructura_iva_movimientos_fiscales()
+
+    empresa_id = _int(empresa_id, 1)
+    motivo_final = _texto(motivo) or (
+        "Anulación automática: el grupo fiscal/importación bancaria de origen ya no existe."
+    )
+
+    conn = conectar()
+
+    try:
+        if not _tabla_existe_conn(conn, "bancos_grupos_fiscales"):
+            return {
+                "ok": True,
+                "mensaje": "No existe tabla de grupos fiscales bancarios para controlar huérfanos.",
+                "anulados": 0,
+                "ids_anulados": [],
+            }
+
+        tiene_importaciones = _tabla_existe_conn(conn, "bancos_importaciones")
+        join_importaciones = ""
+        condicion_importacion_inexistente = "0 = 1"
+
+        if tiene_importaciones:
+            join_importaciones = """
+            LEFT JOIN bancos_importaciones bi
+                   ON bi.empresa_id = g.empresa_id
+                  AND bi.id = g.importacion_id
+            """
+            condicion_importacion_inexistente = "(IFNULL(g.importacion_id, 0) > 0 AND bi.id IS NULL)"
+
+        sql = f"""
+            SELECT m.id
+            FROM iva_movimientos_fiscales m
+            LEFT JOIN bancos_grupos_fiscales g
+                   ON g.empresa_id = m.empresa_id
+                  AND g.id = m.origen_id
+            {join_importaciones}
+            WHERE m.empresa_id = ?
+              AND m.origen = 'BANCO'
+              AND IFNULL(m.origen_tabla, '') = 'bancos_grupos_fiscales'
+              AND IFNULL(m.origen_id, 0) > 0
+              AND m.estado <> ?
+              AND (
+                    g.id IS NULL
+                    OR {condicion_importacion_inexistente}
+                  )
+            ORDER BY m.id
+        """
+
+        df = pd.read_sql_query(
+            sql,
+            conn,
+            params=(empresa_id, ESTADO_ANULADO),
+        )
+
+        if df.empty:
+            return {
+                "ok": True,
+                "mensaje": "No hay movimientos Banco -> IVA huérfanos activos.",
+                "anulados": 0,
+                "ids_anulados": [],
+            }
+
+        ids = [_int(valor) for valor in df["id"].tolist() if _int(valor) > 0]
+
+        if not ids:
+            return {
+                "ok": True,
+                "mensaje": "No hay movimientos Banco -> IVA huérfanos válidos para anular.",
+                "anulados": 0,
+                "ids_anulados": [],
+            }
+
+        placeholders = ",".join(["?"] * len(ids))
+
+        conn.execute(
+            f"""
+            UPDATE iva_movimientos_fiscales
+            SET estado = ?,
+                incluido_en_posicion = 0,
+                incluido_en_portal_iva = 0,
+                fecha_anulacion = ?,
+                motivo_anulacion = ?
+            WHERE empresa_id = ?
+              AND id IN ({placeholders})
+            """,
+            tuple([ESTADO_ANULADO, _now(), motivo_final, empresa_id, *ids]),
+        )
+
+        for movimiento_id in ids:
+            _registrar_evento_conn(
+                conn=conn,
+                movimiento_id=movimiento_id,
+                empresa_id=empresa_id,
+                evento="ANULACION_ORIGEN_BANCO_ELIMINADO",
+                detalle=motivo_final,
+                usuario=usuario,
+            )
+
+        conn.commit()
+
+        return {
+            "ok": True,
+            "mensaje": "Movimientos Banco -> IVA huérfanos anulados lógicamente.",
+            "anulados": len(ids),
+            "ids_anulados": ids,
+        }
+
+    except Exception as exc:
+        conn.rollback()
+        return {
+            "ok": False,
+            "mensaje": f"No se pudieron anular movimientos Banco -> IVA huérfanos: {exc}",
+            "anulados": 0,
+            "ids_anulados": [],
+        }
+
+    finally:
+        conn.close()
 
 
 def normalizar_duplicados_activos_banco_iva(empresa_id=1, usuario="sistema"):
@@ -1534,6 +1683,54 @@ def listar_movimientos_fiscales(
         condiciones.append("IFNULL(incluido_en_portal_iva, 0) = ?")
         params.append(_bool_int(incluido_en_portal_iva, default=0))
 
+    # Vista operativa: no mostrar movimientos Banco -> IVA cuyo grupo fiscal
+    # o importación origen ya no existe. Esto no modifica la base; solo evita
+    # contaminar IVA con residuos técnicos de cargas bancarias eliminadas.
+    #
+    # Importante para tests y bases parciales: este filtro solo se agrega si
+    # existen las tablas bancarias. El servicio de IVA debe poder funcionar
+    # también en bases temporales/mínimas donde todavía no está creado Banco.
+    filtrar_huerfanos_banco = False
+
+    if not incluir_anulados:
+        conn_check = None
+
+        try:
+            conn_check = conectar()
+            filtrar_huerfanos_banco = (
+                _tabla_existe_conn(conn_check, "bancos_grupos_fiscales")
+                and _tabla_existe_conn(conn_check, "bancos_importaciones")
+            )
+        except Exception:
+            filtrar_huerfanos_banco = False
+        finally:
+            try:
+                if conn_check is not None:
+                    conn_check.close()
+            except Exception:
+                pass
+
+    if not incluir_anulados and filtrar_huerfanos_banco:
+        condiciones.append(
+            """
+            NOT (
+                origen = 'BANCO'
+                AND IFNULL(origen_tabla, '') = 'bancos_grupos_fiscales'
+                AND IFNULL(origen_id, 0) > 0
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM bancos_grupos_fiscales g
+                    LEFT JOIN bancos_importaciones bi
+                           ON bi.empresa_id = g.empresa_id
+                          AND bi.id = g.importacion_id
+                    WHERE g.empresa_id = iva_movimientos_fiscales.empresa_id
+                      AND g.id = iva_movimientos_fiscales.origen_id
+                      AND (IFNULL(g.importacion_id, 0) = 0 OR bi.id IS NOT NULL)
+                )
+            )
+            """
+        )
+
     sql = """
         SELECT *
         FROM iva_movimientos_fiscales
@@ -1854,12 +2051,15 @@ def obtener_totales_movimientos_fiscales_periodo(
         estados.append(ESTADO_BORRADOR)
 
     placeholders = ",".join(["?"] * len(estados))
+    tipos_operativos = sorted(TIPOS_CONCEPTO_IVA_OPERATIVOS)
+    placeholders_tipos = ",".join(["?"] * len(tipos_operativos))
 
     params = [
         _int(empresa_id, 1),
         anio,
         mes,
         *estados,
+        *tipos_operativos,
     ]
 
     filtro_inclusion = ""
@@ -1903,6 +2103,7 @@ def obtener_totales_movimientos_fiscales_periodo(
           AND anio = ?
           AND mes = ?
           AND estado IN ({placeholders})
+          AND tipo_concepto IN ({placeholders_tipos})
           {filtro_inclusion}
         """,
         tuple(params),
@@ -2027,12 +2228,15 @@ def obtener_resumen_movimientos_fiscales_por_origen(
         estados.append(ESTADO_BORRADOR)
 
     placeholders = ",".join(["?"] * len(estados))
+    tipos_operativos = sorted(TIPOS_CONCEPTO_IVA_OPERATIVOS)
+    placeholders_tipos = ",".join(["?"] * len(tipos_operativos))
 
     params = [
         _int(empresa_id, 1),
         anio,
         mes,
         *estados,
+        *tipos_operativos,
     ]
 
     filtro_inclusion = ""
@@ -2074,6 +2278,7 @@ def obtener_resumen_movimientos_fiscales_por_origen(
           AND anio = ?
           AND mes = ?
           AND estado IN ({placeholders})
+          AND tipo_concepto IN ({placeholders_tipos})
           {filtro_inclusion}
         GROUP BY origen, tipo_concepto
         ORDER BY origen, tipo_concepto
@@ -2236,6 +2441,8 @@ __all__ = [
     "ESTADOS_VALIDOS",
     "ORIGENES_VALIDOS",
     "TIPOS_CONCEPTO_VALIDOS",
+    "TIPOS_CONCEPTO_IVA_OPERATIVOS",
+    "TIPOS_CONCEPTO_SOLO_CONTROL",
 
     "asegurar_estructura_iva_movimientos_fiscales",
     "estructura_iva_movimientos_fiscales_existe",
@@ -2253,6 +2460,8 @@ __all__ = [
     "obtener_resumen_movimientos_fiscales_por_origen",
 
     "validar_movimiento_fiscal_dict",
+    "es_tipo_concepto_iva_operativo",
+    "anular_movimientos_banco_sin_grupo_fiscal_activo",
 
     "opciones_origenes",
     "opciones_tipos_concepto",
