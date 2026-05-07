@@ -12,6 +12,39 @@ from services.iva_service import (
     obtener_resumen_posiciones_iva,
 )
 
+
+from services.iva_cierre_service import (
+    ESTADO_CIERRE_ABIERTO,
+    ESTADO_CIERRE_CERRADO,
+    ESTADO_CIERRE_REABIERTO,
+    ESTADO_CIERRE_RECTIFICADO,
+    ESTADO_CIERRE_REQUIERE_REVISION,
+    ESTADO_PAGO_NO_APLICA,
+    ESTADO_PAGO_PAGADO,
+    ESTADO_PAGO_PARCIAL,
+    ESTADO_PAGO_PENDIENTE,
+    RESULTADO_A_FAVOR,
+    RESULTADO_A_PAGAR,
+    TIPO_ASIENTO_LIQUIDACION,
+    TIPO_ASIENTO_PAGO,
+    TIPO_ASIENTO_RECTIFICATIVA,
+    cerrar_periodo_iva,
+    listar_asientos_cierre,
+    listar_cierres_iva,
+    listar_eventos_cierre,
+    listar_pagos_cierre,
+    listar_versiones_periodo,
+    obtener_control_cierre_periodo,
+    obtener_resumen_deuda_fiscal_iva,
+    listar_obligaciones_iva_pendientes,
+    listar_periodos_iva_requieren_revision,
+    registrar_pago_iva,
+    actualizar_datos_administrativos_pago_iva,
+    rectificar_pago_iva,
+    anular_pago_iva,
+    reabrir_periodo_iva,
+)
+
 from services.iva_movimientos_fiscales_service import (
     ESTADO_ANULADO,
     ESTADO_BORRADOR,
@@ -2004,6 +2037,934 @@ def _pantalla_movimientos_fiscales(empresa_id, periodos):
             mes=mes,
         )
 
+
+
+# ======================================================
+# CIERRE IVA UI
+# ======================================================
+
+def _estado_cierre_visible(estado):
+    estado = str(estado or "ABIERTO").strip().upper()
+
+    if estado == ESTADO_CIERRE_CERRADO:
+        return "Cerrado internamente"
+
+    if estado == ESTADO_CIERRE_REABIERTO:
+        return "Reabierto para rectificar"
+
+    if estado == ESTADO_CIERRE_RECTIFICADO:
+        return "Rectificado / histórico"
+
+    if estado == ESTADO_CIERRE_REQUIERE_REVISION:
+        return "Requiere revisión"
+
+    return "Abierto"
+
+
+def _key_cierre(empresa_id, anio, mes, sufijo):
+    return f"iva_cierre_{int(empresa_id)}_{int(anio)}_{int(mes):02d}_{sufijo}"
+
+
+def _resultado_saldo_visible(resultado):
+    resultado = str(resultado or "CERO").strip().upper()
+
+    if resultado == RESULTADO_A_PAGAR:
+        return "Saldo a pagar"
+
+    if resultado == RESULTADO_A_FAVOR:
+        return "Saldo a favor"
+
+    return "Sin saldo a pagar"
+
+
+def _estado_pago_visible(estado):
+    estado = str(estado or ESTADO_PAGO_NO_APLICA).strip().upper()
+
+    etiquetas = {
+        ESTADO_PAGO_NO_APLICA: "No aplica",
+        ESTADO_PAGO_PENDIENTE: "Pendiente de pago",
+        ESTADO_PAGO_PARCIAL: "Pago parcial",
+        ESTADO_PAGO_PAGADO: "Pagado",
+    }
+    return etiquetas.get(estado, estado.replace("_", " ").title())
+
+
+def _mostrar_metricas_cierre_posicion(posicion, cierre=None, indicadores=None):
+    cierre = cierre or {}
+    indicadores = indicadores or {}
+    tiene_cierre = bool(cierre.get("id"))
+
+    resultado = cierre.get("resultado_saldo") or indicadores.get("resultado_saldo") or "CERO"
+    saldo_a_pagar = cierre.get("saldo_a_pagar", indicadores.get("saldo_a_pagar", 0))
+    saldo_a_favor = cierre.get("saldo_a_favor", indicadores.get("saldo_a_favor", 0))
+
+    if tiene_cierre:
+        importe_pagado = cierre.get("importe_pagado", 0)
+        saldo_pendiente = cierre.get("saldo_pendiente_pago", 0)
+        estado_pago = cierre.get("estado_pago", ESTADO_PAGO_NO_APLICA)
+    else:
+        importe_pagado = 0.0
+        saldo_pendiente = 0.0
+        estado_pago = ESTADO_PAGO_NO_APLICA
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric("IVA débito fiscal", formato_moneda(posicion.get("iva_debito_fiscal", 0)))
+
+    with col2:
+        st.metric("Crédito fiscal computable", formato_moneda(posicion.get("credito_fiscal_computable", 0)))
+
+    with col3:
+        st.metric("Percepciones IVA", formato_moneda(posicion.get("percepciones_iva_sufridas", 0)))
+
+    with col4:
+        st.metric("Retenciones IVA", formato_moneda(posicion.get("retenciones_iva_sufridas", 0)))
+
+    col5, col6, col7, col8 = st.columns(4)
+
+    with col5:
+        st.metric("Saldo técnico IVA", formato_moneda(posicion.get("saldo_tecnico_iva", 0)))
+
+    with col6:
+        st.metric("Saldo preliminar", formato_moneda(posicion.get("saldo_preliminar_periodo", 0)))
+
+    with col7:
+        st.metric("Resultado", _resultado_saldo_visible(resultado))
+
+    with col8:
+        cantidad = (
+            _int(posicion.get("cantidad_ventas", 0))
+            + _int(posicion.get("cantidad_compras", 0))
+            + _int(posicion.get("cantidad_movimientos_fiscales", 0))
+        )
+        st.metric("Movimientos base", cantidad)
+
+    st.markdown("##### Saldo y pago")
+
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("Saldo a pagar", formato_moneda(saldo_a_pagar))
+    p2.metric("Saldo a favor", formato_moneda(saldo_a_favor))
+    p3.metric("Pagado", formato_moneda(importe_pagado))
+
+    if tiene_cierre and _float(saldo_a_pagar) > 0.05:
+        p4.metric("Pendiente de pago", formato_moneda(saldo_pendiente), help=_estado_pago_visible(estado_pago))
+    elif tiene_cierre:
+        p4.metric("Estado de pago", _estado_pago_visible(estado_pago))
+    else:
+        p4.metric("Estado de pago", "No aplica hasta cerrar")
+
+def _mostrar_tabla_cierres_iva(empresa_id):
+    st.markdown("#### Historial de cierres y rectificativas")
+
+    try:
+        cierres = listar_cierres_iva(empresa_id=empresa_id, incluir_reabiertos=True)
+    except Exception as e:
+        st.error(f"No se pudieron listar cierres IVA: {e}")
+        return
+
+    if cierres.empty:
+        st.info("Todavía no hay períodos IVA cerrados internamente.")
+        return
+
+    columnas = [
+        "periodo",
+        "version_etiqueta",
+        "es_version_vigente",
+        "estado",
+        "resultado_saldo",
+        "saldo_a_pagar",
+        "saldo_a_favor",
+        "saldo_tecnico_a_favor_trasladable",
+        "saldo_trasladado_al_siguiente",
+        "saldo_trasladado_original",
+        "saldo_trasladado_rectificado",
+        "diferencia_saldo_trasladado",
+        "periodo_siguiente_afectado",
+        "importe_pagado",
+        "saldo_pendiente_pago",
+        "estado_pago",
+        "usuario_cierre",
+        "fecha_cierre",
+        "motivo_rectificativa",
+        "motivo_revision",
+    ]
+    columnas = [col for col in columnas if col in cierres.columns]
+
+    df_ui = _preparar_df_ui(cierres[columnas])
+    _mostrar_dataframe(df_ui, altura=420)
+
+
+def _mostrar_pagos_iva_cierre(cierre, empresa_id):
+    st.markdown("#### Pagos registrados del saldo IVA")
+
+    if not cierre:
+        st.info("Primero debe existir un cierre IVA para registrar pagos.")
+        return
+
+    try:
+        pagos_vigentes = listar_pagos_cierre(
+            cierre_id=int(cierre.get("id")),
+            empresa_id=empresa_id,
+            incluir_anulados=False,
+        )
+        pagos_historial = listar_pagos_cierre(
+            cierre_id=int(cierre.get("id")),
+            empresa_id=empresa_id,
+            incluir_anulados=True,
+        )
+    except Exception as e:
+        st.error(f"No se pudieron listar pagos IVA: {e}")
+        return
+
+    if pagos_vigentes.empty:
+        st.info("Todavía no hay pagos vigentes registrados para este cierre.")
+    else:
+        columnas = [
+            "id",
+            "fecha_pago",
+            "importe",
+            "medio_pago",
+            "cuenta_codigo",
+            "cuenta_nombre",
+            "referencia",
+            "observacion",
+            "estado",
+            "usuario",
+            "fecha_carga",
+        ]
+        columnas = [col for col in columnas if col in pagos_vigentes.columns]
+        _mostrar_dataframe(_preparar_df_ui(pagos_vigentes[columnas]), altura=260)
+
+    with st.expander("Corregir / rectificar pago registrado", expanded=False):
+        if pagos_vigentes.empty:
+            st.info("No hay pagos vigentes para corregir.")
+        else:
+            st.warning(
+                "Corrección administrativa: usala para VEP/referencia u observación. "
+                "Rectificación con impacto: usala cuando cambia importe, fecha, medio o cuenta. "
+                "No se borra historia: el pago anterior queda trazado."
+            )
+
+            ids = pagos_vigentes["id"].tolist() if "id" in pagos_vigentes.columns else []
+            pago_id = st.selectbox(
+                "Pago vigente a corregir",
+                ids,
+                format_func=lambda x: _label_pago_iva(pagos_vigentes, x),
+                key=f"iva_pago_corregir_{int(cierre.get('id'))}",
+            )
+            pago = pagos_vigentes[pagos_vigentes["id"] == pago_id].iloc[0].to_dict()
+
+            tab_admin, tab_rectificar, tab_anular = st.tabs([
+                "VEP / observación",
+                "Rectificar importe o medio",
+                "Anular pago",
+            ])
+
+            with tab_admin:
+                with st.form(f"iva_pago_admin_{int(cierre.get('id'))}_{int(pago_id)}"):
+                    referencia = st.text_input(
+                        "Referencia / VEP / comprobante",
+                        value=str(pago.get("referencia") or ""),
+                        key=f"iva_pago_admin_ref_{int(cierre.get('id'))}_{int(pago_id)}",
+                    )
+                    observacion = st.text_area(
+                        "Observación",
+                        value=str(pago.get("observacion") or ""),
+                        key=f"iva_pago_admin_obs_{int(cierre.get('id'))}_{int(pago_id)}",
+                    )
+                    motivo = st.text_input(
+                        "Motivo de la corrección administrativa",
+                        placeholder="Ej.: VEP mal tipeado / se completa comprobante.",
+                        key=f"iva_pago_admin_motivo_{int(cierre.get('id'))}_{int(pago_id)}",
+                    )
+                    guardar = st.form_submit_button("Actualizar datos administrativos")
+                    if guardar:
+                        resultado = actualizar_datos_administrativos_pago_iva(
+                            pago_id=pago_id,
+                            empresa_id=empresa_id,
+                            referencia=referencia,
+                            observacion=observacion,
+                            motivo=motivo,
+                            usuario=_obtener_usuario_actual(),
+                        )
+                        if resultado.get("ok"):
+                            st.success(resultado.get("mensaje", "Pago actualizado."))
+                            st.rerun()
+                        else:
+                            st.error(resultado.get("mensaje", "No se pudo actualizar el pago."))
+
+            with tab_rectificar:
+                with st.form(f"iva_pago_rect_{int(cierre.get('id'))}_{int(pago_id)}"):
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        fecha_pago = st.date_input(
+                            "Fecha de pago corregida",
+                            value=pd.to_datetime(pago.get("fecha_pago"), errors="coerce").date() if pd.notna(pd.to_datetime(pago.get("fecha_pago"), errors="coerce")) else None,
+                            key=f"iva_pago_rect_fecha_{int(cierre.get('id'))}_{int(pago_id)}",
+                        )
+                    with c2:
+                        importe = st.number_input(
+                            "Importe corregido",
+                            min_value=0.0,
+                            value=float(_float(pago.get("importe"))),
+                            step=0.01,
+                            format="%.2f",
+                            key=f"iva_pago_rect_importe_{int(cierre.get('id'))}_{int(pago_id)}",
+                        )
+                    with c3:
+                        medio_pago = st.selectbox(
+                            "Medio de pago corregido",
+                            ["BANCO", "TRANSFERENCIA", "DEBITO_AUTOMATICO", "EFECTIVO", "MANUAL", "OTRO"],
+                            index=["BANCO", "TRANSFERENCIA", "DEBITO_AUTOMATICO", "EFECTIVO", "MANUAL", "OTRO"].index(str(pago.get("medio_pago") or "MANUAL")) if str(pago.get("medio_pago") or "MANUAL") in ["BANCO", "TRANSFERENCIA", "DEBITO_AUTOMATICO", "EFECTIVO", "MANUAL", "OTRO"] else 4,
+                            key=f"iva_pago_rect_medio_{int(cierre.get('id'))}_{int(pago_id)}",
+                        )
+                    c4, c5 = st.columns(2)
+                    with c4:
+                        referencia = st.text_input(
+                            "Referencia / VEP / comprobante corregido",
+                            value=str(pago.get("referencia") or ""),
+                            key=f"iva_pago_rect_ref_{int(cierre.get('id'))}_{int(pago_id)}",
+                        )
+                    with c5:
+                        cuenta_visible = st.text_input(
+                            "Cuenta contable corregida",
+                            value=(f"{pago.get('cuenta_codigo')} - {pago.get('cuenta_nombre')}" if pago.get("cuenta_codigo") and pago.get("cuenta_nombre") else str(pago.get("cuenta_nombre") or "")),
+                            key=f"iva_pago_rect_cuenta_{int(cierre.get('id'))}_{int(pago_id)}",
+                        )
+
+                    cuenta_codigo = None
+                    cuenta_nombre = None
+                    if " - " in cuenta_visible:
+                        cuenta_codigo, cuenta_nombre = cuenta_visible.split(" - ", 1)
+                    elif cuenta_visible.strip():
+                        cuenta_nombre = cuenta_visible.strip()
+
+                    observacion = st.text_area(
+                        "Observación corregida",
+                        value=str(pago.get("observacion") or ""),
+                        key=f"iva_pago_rect_obs_{int(cierre.get('id'))}_{int(pago_id)}",
+                    )
+                    motivo = st.text_input(
+                        "Motivo de rectificación del pago",
+                        placeholder="Obligatorio. Ej.: importe cargado por error.",
+                        key=f"iva_pago_rect_motivo_{int(cierre.get('id'))}_{int(pago_id)}",
+                    )
+                    confirmar = st.checkbox(
+                        "Confirmo que este cambio rectifica el pago y recalcula saldo/asiento propuesto.",
+                        key=f"iva_pago_rect_confirmar_{int(cierre.get('id'))}_{int(pago_id)}",
+                    )
+                    guardar = st.form_submit_button("Rectificar pago con impacto")
+                    if guardar:
+                        if not confirmar:
+                            st.error("Para rectificar el pago con impacto, primero marcá la confirmación.")
+                        else:
+                            resultado = rectificar_pago_iva(
+                                pago_id=pago_id,
+                                empresa_id=empresa_id,
+                                fecha_pago=fecha_pago,
+                                importe=importe,
+                                medio_pago=medio_pago,
+                                cuenta_codigo=cuenta_codigo,
+                                cuenta_nombre=cuenta_nombre,
+                                referencia=referencia,
+                                observacion=observacion,
+                                motivo=motivo,
+                                usuario=_obtener_usuario_actual(),
+                            )
+                            if resultado.get("ok"):
+                                st.success(resultado.get("mensaje", "Pago rectificado."))
+                                st.rerun()
+                            else:
+                                st.error(resultado.get("mensaje", "No se pudo rectificar el pago."))
+
+            with tab_anular:
+                with st.form(f"iva_pago_anular_{int(cierre.get('id'))}_{int(pago_id)}"):
+                    motivo = st.text_input(
+                        "Motivo de anulación del pago",
+                        placeholder="Obligatorio. Ej.: pago cargado por error.",
+                        key=f"iva_pago_anular_motivo_{int(cierre.get('id'))}_{int(pago_id)}",
+                    )
+                    confirmar = st.checkbox(
+                        "Confirmo anular este pago y recalcular saldo/asiento.",
+                        key=f"iva_pago_anular_confirmar_{int(cierre.get('id'))}_{int(pago_id)}",
+                    )
+                    guardar = st.form_submit_button("Anular pago IVA")
+                    if guardar:
+                        if not confirmar:
+                            st.error("Para anular el pago, primero marcá la confirmación.")
+                        else:
+                            resultado = anular_pago_iva(
+                                pago_id=pago_id,
+                                empresa_id=empresa_id,
+                                motivo=motivo,
+                                usuario=_obtener_usuario_actual(),
+                            )
+                            if resultado.get("ok"):
+                                st.success(resultado.get("mensaje", "Pago anulado."))
+                                st.rerun()
+                            else:
+                                st.error(resultado.get("mensaje", "No se pudo anular el pago."))
+
+    with st.expander("Historial de pagos anulados / rectificados", expanded=False):
+        if pagos_historial.empty:
+            st.info("No hay historial de pagos para este cierre.")
+        else:
+            columnas_hist = [
+                "id",
+                "pago_original_id",
+                "fecha_pago",
+                "importe",
+                "medio_pago",
+                "referencia",
+                "observacion",
+                "estado",
+                "motivo_correccion",
+                "motivo_anulacion",
+                "usuario",
+                "usuario_correccion",
+                "fecha_correccion",
+                "fecha_anulacion",
+            ]
+            columnas_hist = [c for c in columnas_hist if c in pagos_historial.columns]
+            _mostrar_dataframe(_preparar_df_ui(pagos_historial[columnas_hist]), altura=300)
+
+
+def _label_pago_iva(df, pago_id):
+    try:
+        row = df[df["id"] == pago_id].iloc[0]
+        return (
+            f"#{row.get('id')} · {row.get('fecha_pago')} · "
+            f"{formato_moneda(row.get('importe', 0))} · {row.get('medio_pago')} · {row.get('referencia') or 'sin referencia'}"
+        )
+    except Exception:
+        return f"Pago {pago_id}"
+
+
+def _mostrar_asientos_propuestos_cierre(cierre, empresa_id):
+    st.markdown("#### Asientos contables propuestos")
+
+    if not cierre:
+        st.info("El asiento de liquidación se genera al cerrar internamente el período.")
+        return
+
+    try:
+        asientos = listar_asientos_cierre(
+            cierre_id=int(cierre.get("id")),
+            empresa_id=empresa_id,
+        )
+    except Exception as e:
+        st.error(f"No se pudieron listar asientos propuestos IVA: {e}")
+        return
+
+    if asientos.empty:
+        st.info("No hay asientos propuestos para este cierre.")
+        return
+
+    for tipo, titulo in [
+        (TIPO_ASIENTO_LIQUIDACION, "Liquidación mensual IVA"),
+        (TIPO_ASIENTO_PAGO, "Pago del saldo IVA"),
+    ]:
+        df_tipo = asientos[asientos["tipo_asiento"] == tipo].copy() if "tipo_asiento" in asientos.columns else pd.DataFrame()
+        if df_tipo.empty:
+            continue
+
+        st.markdown(f"##### {titulo}")
+        debe = float(pd.to_numeric(df_tipo.get("debe", 0), errors="coerce").fillna(0).sum())
+        haber = float(pd.to_numeric(df_tipo.get("haber", 0), errors="coerce").fillna(0).sum())
+        diferencia = round(debe - haber, 2)
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Debe", formato_moneda(debe))
+        c2.metric("Haber", formato_moneda(haber))
+        c3.metric("Diferencia", formato_moneda(diferencia))
+
+        columnas = [
+            "fecha",
+            "tipo_asiento",
+            "cuenta_codigo",
+            "cuenta_nombre",
+            "debe",
+            "haber",
+            "glosa",
+            "estado",
+        ]
+        columnas = [col for col in columnas if col in df_tipo.columns]
+        _mostrar_dataframe(_preparar_df_ui(df_tipo[columnas]), altura=260)
+
+    st.caption(
+        "Estos asientos son propuestas internas del módulo IVA. "
+        "Todavía no impactan automáticamente en Libro Diario."
+    )
+
+
+def _mostrar_registro_pago_iva(cierre, empresa_id, anio, mes, key_prefix):
+    if not cierre or cierre.get("estado") != ESTADO_CIERRE_CERRADO:
+        return
+
+    saldo_a_pagar = _float(cierre.get("saldo_a_pagar"))
+    pendiente = _float(cierre.get("saldo_pendiente_pago"))
+
+    if saldo_a_pagar <= 0.05:
+        st.info("El cierre no tiene saldo IVA a pagar. No corresponde registrar pago.")
+        return
+
+    st.markdown("#### Registrar pago del saldo IVA")
+
+    if pendiente <= 0.05:
+        st.success("El saldo IVA del período figura pagado internamente.")
+        return
+
+    st.caption(
+        "Este registro deja trazabilidad y asiento propuesto de pago. "
+        "Más adelante podrá vincularse directamente con Banco/Caja o conciliación bancaria."
+    )
+
+    with st.form(f"{key_prefix}_form_registrar_pago"):
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            fecha_pago = st.date_input("Fecha de pago", key=f"{key_prefix}_pago_fecha")
+
+        with col2:
+            importe = st.number_input(
+                "Importe pagado",
+                min_value=0.0,
+                max_value=float(pendiente),
+                value=float(pendiente),
+                step=0.01,
+                format="%.2f",
+                key=f"{key_prefix}_pago_importe",
+            )
+
+        with col3:
+            medio_pago = st.selectbox(
+                "Medio de pago",
+                ["BANCO", "TRANSFERENCIA", "DEBITO_AUTOMATICO", "EFECTIVO", "MANUAL", "OTRO"],
+                key=f"{key_prefix}_pago_medio",
+            )
+
+        c4, c5 = st.columns(2)
+        with c4:
+            referencia = st.text_input(
+                "Referencia / VEP / comprobante",
+                placeholder="Ej.: VEP ARCA, débito bancario, comprobante interno...",
+                key=f"{key_prefix}_pago_referencia",
+            )
+
+        with c5:
+            cuenta_visible = st.text_input(
+                "Cuenta contable de pago",
+                value="",
+                placeholder="Opcional. Ej.: 1.1.02 - Banco Macro",
+                key=f"{key_prefix}_pago_cuenta",
+            )
+
+        cuenta_codigo = None
+        cuenta_nombre = None
+        if " - " in cuenta_visible:
+            cuenta_codigo, cuenta_nombre = cuenta_visible.split(" - ", 1)
+        elif cuenta_visible.strip():
+            cuenta_nombre = cuenta_visible.strip()
+
+        observacion = st.text_area(
+            "Observación del pago",
+            placeholder="Detalle interno para auditoría del pago del saldo IVA.",
+            key=f"{key_prefix}_pago_observacion",
+        )
+
+        confirmar = st.form_submit_button("Registrar pago IVA")
+
+        if confirmar:
+            resultado = registrar_pago_iva(
+                empresa_id=empresa_id,
+                anio=anio,
+                mes=mes,
+                fecha_pago=fecha_pago,
+                importe=importe,
+                medio_pago=medio_pago,
+                cuenta_codigo=cuenta_codigo,
+                cuenta_nombre=cuenta_nombre,
+                referencia=referencia,
+                observacion=observacion,
+                usuario=_obtener_usuario_actual(),
+            )
+
+            if resultado.get("ok"):
+                st.success(resultado.get("mensaje", "Pago registrado."))
+                st.rerun()
+            else:
+                st.error(resultado.get("mensaje", "No se pudo registrar el pago."))
+
+
+def _mostrar_impacto_rectificativa(impacto):
+    if not impacto:
+        return
+
+    tipo = str(impacto.get("tipo_impacto", "")).upper()
+    if not tipo or tipo == "SIN_IMPACTO_RELEVANTE":
+        st.info(impacto.get("mensaje", "La rectificativa no modifica saldos trasladados de forma relevante."))
+        return
+
+    st.warning("Impacto de la rectificativa sobre saldos trasladados")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Saldo trasladado original", formato_moneda(impacto.get("saldo_trasladado_original", 0)))
+    c2.metric("Saldo rectificado", formato_moneda(impacto.get("saldo_trasladado_rectificado", 0)))
+    c3.metric("Diferencia", formato_moneda(impacto.get("diferencia_saldo_trasladado", 0)))
+    c4.metric("Período afectado", impacto.get("periodo_siguiente_afectado") or "—")
+    st.caption(impacto.get("mensaje", ""))
+
+
+def _mostrar_versiones_periodo(empresa_id, anio, mes):
+    try:
+        versiones = listar_versiones_periodo(empresa_id=empresa_id, anio=anio, mes=mes)
+    except Exception as e:
+        st.error(f"No se pudieron listar versiones del período: {e}")
+        return
+
+    if versiones.empty:
+        st.info("El período todavía no tiene cierres ni rectificativas.")
+        return
+
+    columnas = [
+        "version_etiqueta",
+        "es_version_vigente",
+        "estado",
+        "resultado_saldo",
+        "saldo_a_pagar",
+        "saldo_a_favor",
+        "saldo_tecnico_a_favor_trasladable",
+        "saldo_trasladado_original",
+        "saldo_trasladado_rectificado",
+        "diferencia_saldo_trasladado",
+        "motivo_rectificativa",
+        "usuario_cierre",
+        "fecha_cierre",
+    ]
+    columnas = [c for c in columnas if c in versiones.columns]
+    _mostrar_dataframe(_preparar_df_ui(versiones[columnas]), altura=260)
+
+
+def _pantalla_cierre_iva(empresa_id, periodos):
+    st.subheader("Cierre IVA")
+
+    st.info(
+        "Cierre interno operativo: guarda una foto versionada de la posición mensual, controla cronología, "
+        "maneja Original/Rectificativas, saldos trasladados, pagos y asientos contables propuestos. "
+        "No presenta IVA en ARCA, no genera TXT Portal IVA y no reemplaza Libro IVA Digital."
+    )
+
+    anio, mes = _selector_periodo(periodos, "iva_cierre")
+    key_prefix = _key_cierre(empresa_id, anio, mes, "principal")
+
+    st.markdown(f"### {_periodo_largo(anio, mes)}")
+    st.caption(f"Período operativo seleccionado para cierre: **{anio}-{mes:02d}**")
+
+    try:
+        control = obtener_control_cierre_periodo(empresa_id=empresa_id, anio=anio, mes=mes)
+    except Exception as e:
+        st.error(f"No se pudo obtener el control de cierre IVA: {e}")
+        return
+
+    posicion = control.get("posicion", {})
+    indicadores = control.get("indicadores", {})
+    cierre = control.get("cierre", {}) or {}
+    estado = cierre.get("estado") or indicadores.get("estado_cierre") or ESTADO_CIERRE_ABIERTO
+    bloqueos = control.get("bloqueos", []) or []
+    advertencias = control.get("advertencias", []) or []
+    alertas = control.get("alertas", []) or []
+
+    col_estado, col_periodo, col_version, col_pago = st.columns(4)
+    col_estado.metric("Estado", _estado_cierre_visible(estado))
+    col_periodo.metric("Período", f"{anio}-{mes:02d}")
+    col_version.metric("Versión vigente", cierre.get("version_etiqueta") or "Sin cierre")
+    col_pago.metric("Estado de pago", _estado_pago_visible(cierre.get("estado_pago")) if cierre else "No aplica hasta cerrar")
+
+    if _int(cierre.get("requiere_revision_por_rectificativa")) == 1:
+        st.warning(cierre.get("motivo_revision") or "Este período requiere revisión por una rectificativa anterior.")
+
+    for advertencia in advertencias:
+        st.warning(advertencia)
+
+    st.markdown("#### Foto calculada actual")
+    _mostrar_metricas_cierre_posicion(posicion, cierre=cierre, indicadores=indicadores)
+
+    st.divider()
+    st.markdown("#### Control cronológico y pendientes")
+    if bloqueos:
+        for bloqueo in bloqueos:
+            st.warning(bloqueo)
+    else:
+        st.success("No hay bloqueos de control para operar este período.")
+
+    with st.expander("Ver alertas y controles del período", expanded=False):
+        _mostrar_alertas(alertas)
+
+    resumen_origenes = control.get("resumen_origenes", pd.DataFrame())
+    with st.expander("Ver resumen por origen fiscal", expanded=False):
+        if resumen_origenes is None or resumen_origenes.empty:
+            st.info("No hay resumen por origen para mostrar.")
+        else:
+            _mostrar_dataframe(_preparar_df_ui(resumen_origenes), altura=260)
+
+    impacto_estimado = indicadores.get("impacto_rectificativa_estimado") or {}
+    if cierre:
+        st.divider()
+        st.markdown("#### Impacto estimado si se rectifica")
+        _mostrar_impacto_rectificativa(impacto_estimado)
+
+    st.divider()
+
+    if estado == ESTADO_CIERRE_CERRADO:
+        st.success("Este período está cerrado internamente. Las correcciones deben registrarse como rectificativa para conservar historia.")
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Usuario cierre", cierre.get("usuario_cierre") or "—")
+        col2.metric("Fecha cierre", cierre.get("fecha_cierre") or "—")
+        col3.metric("Saldo cerrado", formato_moneda(cierre.get("saldo_preliminar_periodo", 0)))
+
+        _mostrar_registro_pago_iva(cierre, empresa_id, anio, mes, key_prefix)
+        _mostrar_pagos_iva_cierre(cierre, empresa_id)
+
+        with st.expander("Generar rectificativa del período", expanded=False):
+            st.warning(
+                "La rectificativa no borra el Original. Genera una nueva versión vigente y compara el saldo trasladado. "
+                "Si el saldo trasladado al período siguiente cambia, el sistema marca el impacto para revisión."
+            )
+            motivo_rectificativa = st.text_area(
+                "Motivo de la rectificativa",
+                placeholder="Ej.: comprobante cargado que no correspondía / crédito fiscal omitido / ajuste posterior.",
+                key=_key_cierre(empresa_id, anio, mes, "motivo_rectificativa"),
+            )
+            observacion_rectificativa = st.text_area(
+                "Observación del nuevo cierre rectificativo",
+                placeholder="Detalle interno adicional para auditoría.",
+                key=_key_cierre(empresa_id, anio, mes, "observacion_rectificativa"),
+            )
+            confirmar_rect = st.checkbox(
+                f"Confirmo generar {indicadores.get('version_etiqueta_proxima', 'Rectificativa')} para {anio}-{mes:02d}.",
+                key=_key_cierre(empresa_id, anio, mes, "confirmar_rectificativa"),
+            )
+            if st.button(
+                f"Generar {indicadores.get('version_etiqueta_proxima', 'Rectificativa')}",
+                type="primary",
+                disabled=not confirmar_rect,
+                use_container_width=True,
+                key=_key_cierre(empresa_id, anio, mes, "boton_rectificativa"),
+            ):
+                resultado = cerrar_periodo_iva(
+                    empresa_id=empresa_id,
+                    anio=anio,
+                    mes=mes,
+                    usuario=_obtener_usuario_actual(),
+                    observacion=observacion_rectificativa,
+                    generar_rectificativa=True,
+                    motivo_rectificativa=motivo_rectificativa,
+                    permitir_con_pendientes=True,
+                    permitir_con_periodos_posteriores=True,
+                )
+                if resultado.get("ok"):
+                    st.success(resultado.get("mensaje", "Rectificativa generada."))
+                    st.rerun()
+                else:
+                    st.error(resultado.get("mensaje", "No se pudo generar la rectificativa."))
+
+        with st.expander("Reabrir período por corrección administrativa", expanded=False):
+            st.caption("Uso excepcional. Para cambios normales conviene generar rectificativa y conservar historia.")
+            motivo = st.text_area(
+                "Motivo de reapertura",
+                placeholder="Ej.: revisión administrativa previa a rectificativa.",
+                key=_key_cierre(empresa_id, anio, mes, "motivo_reapertura"),
+            )
+            permitir_con_pagos = False
+            if _float(cierre.get("importe_pagado")) > 0.05:
+                permitir_con_pagos = st.checkbox(
+                    "Confirmo reapertura administrativa aun con pagos IVA registrados",
+                    key=_key_cierre(empresa_id, anio, mes, "reabrir_con_pagos"),
+                )
+            permitir_posteriores = st.checkbox(
+                "Confirmo que revisé el impacto en períodos posteriores cerrados",
+                key=_key_cierre(empresa_id, anio, mes, "reabrir_posteriores"),
+            )
+            confirmar = st.checkbox(
+                "Confirmo que quiero reabrir este período IVA para corrección.",
+                key=_key_cierre(empresa_id, anio, mes, "confirmar_reapertura"),
+            )
+            if st.button(
+                "Reabrir período IVA",
+                type="secondary",
+                disabled=not confirmar,
+                use_container_width=True,
+                key=_key_cierre(empresa_id, anio, mes, "boton_reabrir"),
+            ):
+                resultado = reabrir_periodo_iva(
+                    empresa_id=empresa_id,
+                    anio=anio,
+                    mes=mes,
+                    usuario=_obtener_usuario_actual(),
+                    motivo=motivo,
+                    permitir_con_pagos=permitir_con_pagos,
+                    permitir_con_periodos_posteriores=permitir_posteriores,
+                )
+                if resultado.get("ok"):
+                    st.success(resultado.get("mensaje", "Período reabierto."))
+                    st.rerun()
+                else:
+                    st.error(resultado.get("mensaje", "No se pudo reabrir el período."))
+
+    else:
+        st.markdown("#### Cerrar período internamente")
+        proxima = indicadores.get("version_etiqueta_proxima") or ("Original" if not cierre else "Rectificativa")
+        if indicadores.get("resultado_saldo") == RESULTADO_A_PAGAR:
+            st.warning(f"El cierre generará una obligación de IVA a pagar por {formato_moneda(indicadores.get('saldo_a_pagar', 0))}. El pago quedará pendiente y podrá registrarse posteriormente desde este mismo cierre.")
+        elif indicadores.get("resultado_saldo") == RESULTADO_A_FAVOR:
+            st.success(f"El cierre dejará un saldo a favor IVA por {formato_moneda(indicadores.get('saldo_a_favor', 0))}. Saldo técnico trasladable: {formato_moneda(indicadores.get('saldo_tecnico_a_favor_trasladable', 0))}.")
+        else:
+            st.info("El cierre no genera saldo a pagar ni saldo a favor relevante.")
+
+        permitir_con_pendientes = False
+        if bloqueos:
+            permitir_con_pendientes = st.checkbox(
+                "Cerrar igualmente dejando pendientes informados en la auditoría interna",
+                value=False,
+                key=_key_cierre(empresa_id, anio, mes, "permitir_pendientes"),
+            )
+
+        st.caption(
+            "Cerrar el período liquida internamente el IVA y, si hay saldo a pagar, deja la obligación pendiente. "
+            "No es necesario registrar el pago en este momento; se carga después cuando efectivamente se pague."
+        )
+
+        observacion = st.text_area(
+            "Observación del cierre",
+            placeholder="Ej.: cierre mensual interno validado contra Portal IVA / control preliminar del estudio.",
+            key=_key_cierre(empresa_id, anio, mes, "observacion"),
+        )
+
+        motivo_rectificativa = ""
+        generar_rectificativa = bool(cierre)
+        if generar_rectificativa:
+            motivo_rectificativa = st.text_area(
+                "Motivo de la rectificativa",
+                placeholder="Obligatorio para cerrar una nueva versión rectificativa.",
+                key=_key_cierre(empresa_id, anio, mes, "motivo_rectificativa_abierto"),
+            )
+
+        confirmar = st.checkbox(
+            f"Confirmo cierre interno del período {anio}-{mes:02d} como {proxima}.",
+            key=_key_cierre(empresa_id, anio, mes, "confirmar"),
+        )
+
+        if st.button(
+            f"Cerrar {anio}-{mes:02d} como {proxima}",
+            type="primary",
+            disabled=not confirmar,
+            use_container_width=True,
+            key=_key_cierre(empresa_id, anio, mes, "boton_cerrar"),
+        ):
+            resultado = cerrar_periodo_iva(
+                empresa_id=empresa_id,
+                anio=anio,
+                mes=mes,
+                usuario=_obtener_usuario_actual(),
+                observacion=observacion,
+                permitir_con_pendientes=permitir_con_pendientes,
+                generar_rectificativa=generar_rectificativa,
+                motivo_rectificativa=motivo_rectificativa,
+            )
+            if resultado.get("ok"):
+                st.success(resultado.get("mensaje", "Período cerrado internamente."))
+                st.rerun()
+            else:
+                st.error(resultado.get("mensaje", "No se pudo cerrar el período IVA."))
+                bloqueos_resultado = resultado.get("bloqueos", [])
+                if bloqueos_resultado:
+                    with st.expander("Ver bloqueos", expanded=True):
+                        for bloqueo in bloqueos_resultado:
+                            st.warning(bloqueo)
+
+    _mostrar_asientos_propuestos_cierre(cierre, empresa_id)
+
+    with st.expander("Versiones del período seleccionado", expanded=False):
+        _mostrar_versiones_periodo(empresa_id, anio, mes)
+
+    with st.expander("Eventos del cierre seleccionado", expanded=False):
+        if cierre:
+            try:
+                eventos = listar_eventos_cierre(cierre_id=int(cierre.get("id")), empresa_id=empresa_id)
+                if eventos.empty:
+                    st.info("No hay eventos registrados para este cierre.")
+                else:
+                    _mostrar_dataframe(_preparar_df_ui(eventos), altura=260)
+            except Exception as e:
+                st.error(f"No se pudieron listar eventos del cierre: {e}")
+        else:
+            st.info("El período todavía no tiene eventos de cierre.")
+
+    st.divider()
+    _mostrar_obligaciones_iva_pendientes_panel(empresa_id)
+
+    st.divider()
+    _mostrar_tabla_cierres_iva(empresa_id)
+
+
+
+def _mostrar_obligaciones_iva_pendientes_panel(empresa_id):
+    st.markdown("#### Obligaciones IVA pendientes")
+    st.caption(
+        "Esta vista queda preparada para reportes y para el futuro asistente IA. "
+        "Permite responder qué IVA está pendiente, cuánto se debe y de qué período viene."
+    )
+
+    try:
+        resumen = obtener_resumen_deuda_fiscal_iva(empresa_id=empresa_id)
+        obligaciones = listar_obligaciones_iva_pendientes(empresa_id=empresa_id)
+        revisiones = listar_periodos_iva_requieren_revision(empresa_id=empresa_id)
+    except Exception as e:
+        st.error(f"No se pudieron obtener obligaciones IVA pendientes: {e}")
+        return
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Obligaciones pendientes", resumen.get("cantidad_obligaciones", 0))
+    col2.metric("Total pendiente IVA", formato_moneda(resumen.get("total_pendiente", 0)))
+    col3.metric("Períodos en revisión", len(revisiones) if revisiones is not None else 0)
+
+    if obligaciones is None or obligaciones.empty:
+        st.success("No hay IVA pendiente de pago registrado en cierres vigentes.")
+    else:
+        columnas = [
+            "periodo",
+            "concepto",
+            "version_etiqueta",
+            "estado_pago",
+            "saldo_a_pagar",
+            "importe_pagado",
+            "saldo_pendiente_pago",
+            "fecha_cierre",
+            "fecha_ultimo_pago",
+            "requiere_revision_por_rectificativa",
+            "motivo_revision",
+        ]
+        columnas = [c for c in columnas if c in obligaciones.columns]
+        _mostrar_dataframe(_preparar_df_ui(obligaciones[columnas]), altura=280)
+
+    with st.expander("Períodos que requieren revisión por rectificativas", expanded=False):
+        if revisiones is None or revisiones.empty:
+            st.info("No hay períodos marcados para revisión por rectificativas anteriores.")
+        else:
+            columnas_rev = [
+                "periodo",
+                "version_etiqueta",
+                "estado",
+                "motivo_revision",
+                "saldo_trasladado_original",
+                "saldo_trasladado_rectificado",
+                "diferencia_saldo_trasladado",
+                "periodo_siguiente_afectado",
+            ]
+            columnas_rev = [c for c in columnas_rev if c in revisiones.columns]
+            _mostrar_dataframe(_preparar_df_ui(revisiones[columnas_rev]), altura=260)
+
 def _pantalla_papel_trabajo(empresa_id, periodos):
     st.subheader("Papel de trabajo / Exportación")
 
@@ -2068,11 +3029,12 @@ def mostrar_iva():
         st.error(f"No se pudieron obtener los períodos disponibles de IVA: {e}")
         periodos = pd.DataFrame()
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "Posición IVA",
         "Libro IVA Ventas",
         "Libro IVA Compras",
         "Movimientos fiscales",
+        "Cierre IVA",
         "Resumen mensual",
         "Papel de trabajo",
     ])
@@ -2102,11 +3064,17 @@ def mostrar_iva():
         )
 
     with tab5:
+        _pantalla_cierre_iva(
+            empresa_id=empresa_id,
+            periodos=periodos,
+        )
+
+    with tab6:
         _pantalla_resumen_periodos(
             empresa_id=empresa_id,
         )
 
-    with tab6:
+    with tab7:
         _pantalla_papel_trabajo(
             empresa_id=empresa_id,
             periodos=periodos,
