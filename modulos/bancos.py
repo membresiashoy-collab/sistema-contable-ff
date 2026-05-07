@@ -1612,11 +1612,127 @@ def mostrar_movimientos_bancarios():
 # CONTROL FISCAL
 # ======================================================
 
+def _serie_numerica(df, columna):
+    if df is None or df.empty or columna not in df.columns:
+        return pd.Series([0.0] * (0 if df is None else len(df)))
+
+    return pd.to_numeric(df[columna], errors="coerce").fillna(0.0)
+
+
+def _asegurar_periodo_fiscal_df(df):
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    preparado = df.copy()
+
+    if "fecha" in preparado.columns and ("anio" not in preparado.columns or "mes" not in preparado.columns):
+        fechas = pd.to_datetime(preparado["fecha"], errors="coerce", dayfirst=True)
+
+        if "anio" not in preparado.columns:
+            preparado["anio"] = fechas.dt.year
+
+        if "mes" not in preparado.columns:
+            preparado["mes"] = fechas.dt.month
+
+    if "periodo" not in preparado.columns and "anio" in preparado.columns and "mes" in preparado.columns:
+        preparado["periodo"] = (
+            preparado["anio"].fillna(0).astype(int).astype(str)
+            + "-"
+            + preparado["mes"].fillna(0).astype(int).astype(str).str.zfill(2)
+        )
+
+    return preparado
+
+
+def _opciones_unicas(df, columna, todos="Todos"):
+    if df is None or df.empty or columna not in df.columns:
+        return [todos]
+
+    valores = []
+
+    for valor in df[columna].dropna().tolist():
+        texto = str(valor).strip()
+        if texto and texto not in valores:
+            valores.append(texto)
+
+    return [todos] + sorted(valores)
+
+
+def _opciones_enteras(df, columna, todos="Todos"):
+    if df is None or df.empty or columna not in df.columns:
+        return [todos]
+
+    valores = []
+
+    for valor in df[columna].dropna().tolist():
+        try:
+            entero = int(valor)
+        except Exception:
+            continue
+
+        if entero not in valores:
+            valores.append(entero)
+
+    return [todos] + sorted(valores)
+
+
+def _valor_bool_banco(valor, default=False):
+    if valor is None:
+        return default
+
+    try:
+        if pd.isna(valor):
+            return default
+    except Exception:
+        pass
+
+    if isinstance(valor, bool):
+        return valor
+
+    texto = str(valor).strip().upper()
+
+    if texto in {"1", "TRUE", "T", "SI", "SÍ", "YES", "Y"}:
+        return True
+
+    if texto in {"0", "FALSE", "F", "NO", "N"}:
+        return False
+
+    return default
+
+
+def _estado_envio_iva_banco(row):
+    generado = _valor_bool_banco(row.get("ya_generado_iva"), default=False)
+
+    if not generado:
+        return "Pendiente de enviar"
+
+    estado = str(row.get("estado_iva", "")).strip().upper()
+
+    if estado == "BORRADOR":
+        return "Pendiente de revisión"
+
+    if estado == "ANULADO":
+        return "Anulado por error"
+
+    incluido = _valor_bool_banco(row.get("incluido_en_posicion_actual"), default=False)
+
+    if estado == "CONFIRMADO" and incluido:
+        return "Tomado en IVA del período"
+
+    if estado == "CONFIRMADO" and not incluido:
+        return "No tomado este mes"
+
+    return "Enviado a IVA"
+
+
 def _preparar_preview_banco_iva_para_vista(df):
     if df is None or df.empty:
         return pd.DataFrame()
 
     vista = df.copy()
+
+    if "decision_periodo" not in vista.columns:
+        vista["decision_periodo"] = vista.apply(_estado_envio_iva_banco, axis=1)
 
     columnas = [
         "grupo_fiscal_id",
@@ -1628,6 +1744,7 @@ def _preparar_preview_banco_iva_para_vista(df):
         "causal",
         "tipo_concepto_visible",
         "descripcion",
+        "decision_periodo",
         "neto_gravado",
         "credito_fiscal_computable",
         "iva_no_computable",
@@ -1656,6 +1773,7 @@ def _preparar_preview_banco_iva_para_vista(df):
         "causal": "Causal",
         "tipo_concepto_visible": "Concepto IVA",
         "descripcion": "Descripción",
+        "decision_periodo": "Decisión del período",
         "neto_gravado": "Neto gravado",
         "credito_fiscal_computable": "Crédito fiscal computable",
         "iva_no_computable": "IVA no computable",
@@ -1672,233 +1790,40 @@ def _preparar_preview_banco_iva_para_vista(df):
     })
 
 
-def _etiqueta_candidato_banco_iva(row):
-    return (
-        f"Grupo #{int(row.get('grupo_fiscal_id'))} | "
-        f"{row.get('periodo', '')} | "
-        f"{row.get('tipo_concepto_visible', row.get('tipo_concepto', ''))} | "
-        f"{moneda(_numero(row.get('total')))} | "
-        f"{str(row.get('descripcion', ''))[:120]}"
-    )
+def _preparar_grupos_fiscales_para_vista(df):
+    if df is None or df.empty:
+        return pd.DataFrame()
 
+    vista = df.copy()
 
-def mostrar_generacion_movimientos_fiscales_iva_banco():
-    empresa_id = empresa_actual_id()
+    columnas = [
+        "id",
+        "fecha",
+        "periodo",
+        "referencia",
+        "causal",
+        "banco",
+        "nombre_cuenta",
+        "base_gasto_bancario",
+        "iva_credito_21",
+        "iva_credito_105",
+        "iva_sin_base",
+        "percepcion_iva",
+        "percepcion_iibb",
+        "impuesto_debitos_creditos",
+        "total_banco",
+        "alicuota_detectada",
+        "confianza",
+        "estado_revision",
+        "motivo",
+        "importacion_id",
+    ]
+    columnas = [col for col in columnas if col in vista.columns]
 
-    st.divider()
-    st.markdown("#### Generar movimientos fiscales IVA")
-
-    st.info(
-        "Este flujo envía a IVA PRO los créditos, percepciones y tributos detectados en el extracto bancario. "
-        "No crea compras manuales ni modifica Ventas/Compras. Los registros quedan vinculados al grupo fiscal bancario "
-        "para evitar duplicados y mantener trazabilidad."
-    )
-
-    preview = obtener_vista_previa_movimientos_fiscales_banco_iva(
-        empresa_id=empresa_id,
-        incluir_generados=True,
-    )
-
-    if preview.empty:
-        st.info("No hay conceptos fiscales bancarios convertibles en movimientos IVA.")
-        return
-
-    preview = preview.copy()
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        anios = ["Todos"] + sorted(preview["anio"].dropna().astype(int).unique().tolist())
-        anio = st.selectbox("Año fiscal", anios, key="banco_iva_anio")
-
-    df_filtrado = preview.copy()
-
-    if anio != "Todos":
-        df_filtrado = df_filtrado[df_filtrado["anio"].astype(int) == int(anio)]
-
-    with col2:
-        meses = ["Todos"] + sorted(df_filtrado["mes"].dropna().astype(int).unique().tolist())
-        mes = st.selectbox("Mes fiscal", meses, key="banco_iva_mes")
-
-    if mes != "Todos":
-        df_filtrado = df_filtrado[df_filtrado["mes"].astype(int) == int(mes)]
-
-    with col3:
-        modo = st.selectbox(
-            "Mostrar",
-            ["Pendientes", "Todos"],
-            key="banco_iva_modo_preview",
-        )
-
-    if modo == "Pendientes":
-        df_filtrado = df_filtrado[~df_filtrado["ya_generado_iva"].astype(bool)].copy()
-
-    if df_filtrado.empty:
-        st.success("No hay conceptos pendientes con los filtros seleccionados.")
-        return
-
-    pendientes = df_filtrado[~df_filtrado["ya_generado_iva"].astype(bool)].copy()
-    generados = df_filtrado[df_filtrado["ya_generado_iva"].astype(bool)].copy()
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Conceptos visibles", len(df_filtrado))
-    col2.metric("Pendientes", len(pendientes))
-    col3.metric("Ya enviados a IVA", len(generados))
-    col4.metric("Total pendiente", moneda(float(pendientes["total"].sum()) if not pendientes.empty else 0))
-
-    st.dataframe(
-        preparar_vista(_preparar_preview_banco_iva_para_vista(df_filtrado)),
-        use_container_width=True,
-    )
-
-    if pendientes.empty:
-        st.success("Todos los conceptos fiscales visibles ya tienen movimiento IVA generado o no hay pendientes.")
-        return
-
-    st.markdown("##### Selección y criterio de impacto")
-
-    st.caption(
-        "Por defecto conviene generar en BORRADOR o CONFIRMADO no incluido si todavía no fue declarado/tomado en Portal IVA. "
-        "El crédito queda trazado, pero solo impacta la posición IVA cuando está CONFIRMADO e incluido."
-    )
-
-    estado = st.selectbox(
-        "Estado inicial en IVA",
-        ["BORRADOR", "CONFIRMADO"],
-        index=0,
-        help="BORRADOR no impacta. CONFIRMADO puede impactar o quedar como crédito pendiente, según la inclusión.",
-        key="banco_iva_estado_inicial",
-    )
-
-    if estado == "CONFIRMADO":
-        incluido_en_posicion = st.checkbox(
-            "Incluir en posición IVA del período",
-            value=False,
-            help="Si no se marca, el crédito/percepción queda registrado pero no reduce la posición declarable.",
-            key="banco_iva_incluir_posicion",
-        )
-    else:
-        incluido_en_posicion = False
-        st.info("Los movimientos en BORRADOR se guardan para revisión y no impactan la posición IVA.")
-
-    if estado == "CONFIRMADO" and incluido_en_posicion:
-        incluido_en_portal_iva = st.checkbox(
-            "Marcar como declarado/tomado en Portal IVA",
-            value=False,
-            help="Usalo solo si este concepto efectivamente fue incluido en la DDJJ/Portal IVA de ARCA.",
-            key="banco_iva_declarado_portal",
-        )
-    else:
-        incluido_en_portal_iva = False
-
-    motivo_default = (
-        "Crédito fiscal/percepción detectado en banco pendiente de revisar o de tomar en Portal IVA."
-        if not incluido_en_posicion
-        else "Generado desde Control fiscal bancario e incluido en posición IVA."
-    )
-
-    motivo_no_inclusion = st.text_area(
-        "Motivo / observación de inclusión",
-        value=motivo_default,
-        key="banco_iva_motivo_no_inclusion",
-    )
-
-    opciones = list(range(len(pendientes)))
-
-    seleccionadas_idx = st.multiselect(
-        "Conceptos fiscales bancarios a generar en IVA",
-        opciones,
-        default=opciones,
-        format_func=lambda i: _etiqueta_candidato_banco_iva(pendientes.iloc[int(i)]),
-        key="banco_iva_conceptos_seleccionados",
-    )
-
-    if not seleccionadas_idx:
-        st.warning("Seleccioná al menos un concepto fiscal bancario.")
-        return
-
-    seleccionadas = []
-
-    for i in seleccionadas_idx:
-        fila = pendientes.iloc[int(i)]
-        seleccionadas.append({
-            "grupo_fiscal_id": int(fila.get("grupo_fiscal_id")),
-            "tipo_concepto": str(fila.get("tipo_concepto")),
-        })
-
-    total_seleccionado = float(pendientes.iloc[seleccionadas_idx]["total"].sum())
-
-    st.metric("Total seleccionado", moneda(total_seleccionado))
-
-    confirmar = st.checkbox(
-        "Confirmo que quiero generar estos movimientos fiscales en IVA PRO.",
-        key="banco_iva_confirmar_generacion",
-    )
-
-    if st.button(
-        "Generar movimientos fiscales IVA",
-        type="primary",
-        disabled=not confirmar,
-        use_container_width=True,
-    ):
-        resultado = generar_movimientos_fiscales_banco_iva(
-            empresa_id=empresa_id,
-            selecciones=seleccionadas,
-            anio=None if anio == "Todos" else int(anio),
-            mes=None if mes == "Todos" else int(mes),
-            estado=estado,
-            incluido_en_posicion=incluido_en_posicion,
-            incluido_en_portal_iva=incluido_en_portal_iva,
-            motivo_no_inclusion=motivo_no_inclusion,
-            usuario=str(usuario_actual_id() or ""),
-            usuario_id=usuario_actual_id(),
-        )
-
-        if resultado.get("ok"):
-            st.success(
-                f"{resultado.get('mensaje')} "
-                f"Creados: {resultado.get('creados', 0)} | Omitidos: {resultado.get('omitidos', 0)}"
-            )
-            st.rerun()
-        else:
-            st.error(resultado.get("mensaje", "No se pudieron generar movimientos fiscales IVA."))
-
-            errores = resultado.get("errores", [])
-            if errores:
-                st.json(errores)
-
-
-def mostrar_control_fiscal_bancario():
-    st.subheader("Control fiscal bancario")
-
-    st.info(
-        "Agrupa gastos bancarios, IVA crédito fiscal bancario, percepciones e impuestos. "
-        "El objetivo es detectar base gravada, IVA 21%, posible IVA 10,5% y conceptos que requieren revisión."
-    )
-
-    empresa_id = empresa_actual_id()
-    df = obtener_grupos_fiscales_bancarios(empresa_id)
-
-    if df.empty:
-        st.info("Todavía no hay grupos fiscales bancarios generados. Importá un extracto primero.")
-        return
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric("Base gastos bancarios", moneda(float(df["base_gasto_bancario"].sum())))
-    col2.metric("IVA crédito 21%", moneda(float(df["iva_credito_21"].sum())))
-    col3.metric("IVA posible 10,5%", moneda(float(df["iva_credito_105"].sum())))
-    col4.metric("IVA sin base", moneda(float(df["iva_sin_base"].sum())))
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric("Percepción IVA", moneda(float(df["percepcion_iva"].sum())))
-    col2.metric("Percepción IIBB", moneda(float(df["percepcion_iibb"].sum())))
-    col3.metric("Ley 25.413", moneda(float(df["impuesto_debitos_creditos"].sum())))
-    col4.metric("Total debitado banco", moneda(float(df["total_banco"].sum())))
-
-    vista = df.rename(columns={
+    vista = vista[columnas].rename(columns={
+        "id": "Grupo fiscal",
         "fecha": "Fecha",
+        "periodo": "Período",
         "referencia": "Referencia",
         "causal": "Causal",
         "banco": "Banco",
@@ -1918,25 +1843,434 @@ def mostrar_control_fiscal_bancario():
         "importacion_id": "Importación",
     })
 
-    st.dataframe(preparar_vista(vista), use_container_width=True)
+    return vista
+
+
+def _resumen_grupos_fiscales_por_concepto(df):
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    conceptos = [
+        ("Base gastos bancarios", "base_gasto_bancario"),
+        ("IVA crédito 21%", "iva_credito_21"),
+        ("IVA crédito posible 10,5%", "iva_credito_105"),
+        ("IVA sin base / revisar", "iva_sin_base"),
+        ("Percepción IVA", "percepcion_iva"),
+        ("Percepción IIBB informativa", "percepcion_iibb"),
+        ("Ley 25.413", "impuesto_debitos_creditos"),
+        ("Total debitado banco", "total_banco"),
+    ]
+
+    filas = []
+
+    for nombre, columna in conceptos:
+        if columna not in df.columns:
+            continue
+
+        total = float(pd.to_numeric(df[columna], errors="coerce").fillna(0.0).sum())
+        movimientos = int((pd.to_numeric(df[columna], errors="coerce").fillna(0.0).abs() > 0.01).sum())
+
+        filas.append({
+            "Concepto": nombre,
+            "Movimientos con importe": movimientos,
+            "Importe": round(total, 2),
+        })
+
+    return pd.DataFrame(filas)
+
+
+def _resumen_preview_iva_por_decision(df):
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    resumen = df.copy()
+
+    if "decision_periodo" not in resumen.columns:
+        resumen["decision_periodo"] = resumen.apply(_estado_envio_iva_banco, axis=1)
+
+    for columna in [
+        "credito_fiscal_computable",
+        "iva_no_computable",
+        "percepcion_iva",
+        "retencion_iva",
+        "percepcion_iibb_informativa",
+        "otros_tributos",
+        "total",
+    ]:
+        if columna in resumen.columns:
+            resumen[columna] = pd.to_numeric(resumen[columna], errors="coerce").fillna(0.0)
+
+    concepto = "tipo_concepto_visible" if "tipo_concepto_visible" in resumen.columns else "tipo_concepto"
+
+    columnas_sumables = [
+        "credito_fiscal_computable",
+        "iva_no_computable",
+        "percepcion_iva",
+        "retencion_iva",
+        "percepcion_iibb_informativa",
+        "otros_tributos",
+        "total",
+    ]
+    columnas_sumables = [col for col in columnas_sumables if col in resumen.columns]
+
+    agrupado = (
+        resumen.groupby([concepto, "decision_periodo"], as_index=False, dropna=False)
+        .agg(
+            movimientos=(concepto, "count"),
+            **{col: (col, "sum") for col in columnas_sumables},
+        )
+        .rename(columns={
+            concepto: "Concepto IVA",
+            "decision_periodo": "Decisión del período",
+            "movimientos": "Movimientos",
+            "credito_fiscal_computable": "Crédito fiscal computable",
+            "iva_no_computable": "IVA no computable",
+            "percepcion_iva": "Percepción IVA",
+            "retencion_iva": "Retención IVA",
+            "percepcion_iibb_informativa": "Percepción IIBB informativa",
+            "otros_tributos": "Otros tributos",
+            "total": "Total",
+        })
+    )
+
+    return agrupado.sort_values(["Decisión del período", "Concepto IVA"])
+
+
+def _etiqueta_candidato_banco_iva(row):
+    return (
+        f"Grupo #{int(row.get('grupo_fiscal_id'))} | "
+        f"{row.get('periodo', '')} | "
+        f"{row.get('tipo_concepto_visible', row.get('tipo_concepto', ''))} | "
+        f"{moneda(_numero(row.get('total')))} | "
+        f"{str(row.get('descripcion', ''))[:120]}"
+    )
+
+
+def _filtrar_df_control_bancario(df, anio, mes, banco, cuenta):
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    filtrado = df.copy()
+
+    if anio != "Todos" and "anio" in filtrado.columns:
+        filtrado = filtrado[pd.to_numeric(filtrado["anio"], errors="coerce").astype("Int64") == int(anio)]
+
+    if mes != "Todos" and "mes" in filtrado.columns:
+        filtrado = filtrado[pd.to_numeric(filtrado["mes"], errors="coerce").astype("Int64") == int(mes)]
+
+    if banco != "Todos" and "banco" in filtrado.columns:
+        filtrado = filtrado[filtrado["banco"].astype(str) == str(banco)]
+
+    if cuenta != "Todos" and "nombre_cuenta" in filtrado.columns:
+        filtrado = filtrado[filtrado["nombre_cuenta"].astype(str) == str(cuenta)]
+
+    return filtrado.copy()
+
+
+def mostrar_generacion_movimientos_fiscales_iva_banco(preview_filtrado=None):
+    empresa_id = empresa_actual_id()
+
+    st.divider()
+    st.markdown("#### Enviar a IVA PRO")
+
+    st.caption(
+        "Este flujo convierte los conceptos fiscales bancarios pendientes en movimientos fiscales de IVA. "
+        "No crea compras manuales ni modifica Ventas/Compras."
+    )
+
+    if preview_filtrado is None:
+        preview = obtener_vista_previa_movimientos_fiscales_banco_iva(
+            empresa_id=empresa_id,
+            incluir_generados=True,
+        )
+    else:
+        preview = preview_filtrado.copy()
+
+    if preview is None or preview.empty:
+        st.info("No hay conceptos fiscales bancarios convertibles en movimientos IVA con los filtros actuales.")
+        return
+
+    preview = _asegurar_periodo_fiscal_df(preview)
+    preview["decision_periodo"] = preview.apply(_estado_envio_iva_banco, axis=1)
+
+    pendientes = preview[~preview["ya_generado_iva"].apply(lambda x: _valor_bool_banco(x, default=False))].copy()
+    generados = preview[preview["ya_generado_iva"].apply(lambda x: _valor_bool_banco(x, default=False))].copy()
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Conceptos visibles", len(preview))
+    c2.metric("Pendientes de enviar", len(pendientes))
+    c3.metric("Ya enviados a IVA", len(generados))
+    c4.metric("Total pendiente", moneda(float(_serie_numerica(pendientes, "total").sum()) if not pendientes.empty else 0))
+
+    resumen_decisiones = _resumen_preview_iva_por_decision(preview)
+
+    if not resumen_decisiones.empty:
+        st.markdown("##### Resumen por concepto y decisión")
+        st.dataframe(preparar_vista(resumen_decisiones), use_container_width=True)
+
+    if pendientes.empty:
+        st.success("Todos los conceptos fiscales visibles ya fueron enviados a IVA o no hay pendientes.")
+        with st.expander("Ver detalle técnico de movimientos ya enviados", expanded=False):
+            st.dataframe(
+                preparar_vista(_preparar_preview_banco_iva_para_vista(preview)),
+                use_container_width=True,
+            )
+        return
+
+    st.markdown("##### Decisión para los pendientes")
+
+    decision = st.radio(
+        "Qué querés hacer con los conceptos seleccionados",
+        [
+            "Tomar en IVA del período",
+            "No tomar este mes",
+            "Dejar pendiente de revisión",
+        ],
+        index=2,
+        key="banco_iva_decision_simple",
+        help="La decisión define el estado y si impacta o no en la posición IVA.",
+    )
+
+    if decision == "Tomar en IVA del período":
+        estado = "CONFIRMADO"
+        incluido_en_posicion = True
+        ayuda_decision = "Se crea CONFIRMADO e incluido en posición. Impacta IVA del período."
+    elif decision == "No tomar este mes":
+        estado = "CONFIRMADO"
+        incluido_en_posicion = False
+        ayuda_decision = "Se crea CONFIRMADO pero no incluido. Queda como crédito/control pendiente."
+    else:
+        estado = "BORRADOR"
+        incluido_en_posicion = False
+        ayuda_decision = "Se crea en BORRADOR. No impacta IVA hasta revisión posterior."
+
+    st.info(ayuda_decision)
+
+    if decision == "Tomar en IVA del período":
+        incluido_en_portal_iva = st.checkbox(
+            "Marcar como declarado/tomado en Portal IVA",
+            value=False,
+            help="Usalo solo si este concepto efectivamente fue incluido en la DDJJ/Portal IVA de ARCA.",
+            key="banco_iva_declarado_portal",
+        )
+    else:
+        incluido_en_portal_iva = False
+
+    motivo_default = {
+        "Tomar en IVA del período": "Generado desde Control fiscal bancario e incluido en posición IVA.",
+        "No tomar este mes": "Crédito/percepción detectado en banco, confirmado como no tomado en este período.",
+        "Dejar pendiente de revisión": "Crédito/percepción detectado en banco pendiente de revisar antes de tomar en IVA.",
+    }.get(decision, "Generado desde Control fiscal bancario.")
+
+    motivo_no_inclusion = st.text_area(
+        "Observación fiscal",
+        value=motivo_default,
+        key="banco_iva_motivo_no_inclusion",
+    )
+
+    opciones = list(range(len(pendientes)))
+
+    with st.expander("Seleccionar conceptos y ver detalle técnico", expanded=False):
+        seleccionadas_idx = st.multiselect(
+            "Conceptos fiscales bancarios a enviar a IVA",
+            opciones,
+            default=opciones,
+            format_func=lambda i: _etiqueta_candidato_banco_iva(pendientes.iloc[int(i)]),
+            key="banco_iva_conceptos_seleccionados",
+        )
+
+        st.dataframe(
+            preparar_vista(_preparar_preview_banco_iva_para_vista(pendientes)),
+            use_container_width=True,
+        )
+
+    if not seleccionadas_idx:
+        st.warning("Seleccioná al menos un concepto fiscal bancario.")
+        return
+
+    seleccionadas = []
+
+    for i in seleccionadas_idx:
+        fila = pendientes.iloc[int(i)]
+        seleccionadas.append({
+            "grupo_fiscal_id": int(fila.get("grupo_fiscal_id")),
+            "tipo_concepto": str(fila.get("tipo_concepto")),
+        })
+
+    total_seleccionado = float(_serie_numerica(pendientes.iloc[seleccionadas_idx], "total").sum())
+
+    st.metric("Total seleccionado", moneda(total_seleccionado))
+
+    confirmar = st.checkbox(
+        "Confirmo que quiero enviar estos conceptos fiscales a IVA PRO.",
+        key="banco_iva_confirmar_generacion",
+    )
+
+    if st.button(
+        "Enviar a IVA PRO",
+        type="primary",
+        disabled=not confirmar,
+        use_container_width=True,
+    ):
+        resultado = generar_movimientos_fiscales_banco_iva(
+            empresa_id=empresa_id,
+            selecciones=seleccionadas,
+            anio=None,
+            mes=None,
+            estado=estado,
+            incluido_en_posicion=incluido_en_posicion,
+            incluido_en_portal_iva=incluido_en_portal_iva,
+            motivo_no_inclusion=motivo_no_inclusion,
+            usuario=str(usuario_actual_id() or ""),
+            usuario_id=usuario_actual_id(),
+        )
+
+        if resultado.get("ok"):
+            st.success(
+                f"{resultado.get('mensaje')} "
+                f"Creados: {resultado.get('creados', 0)} | Omitidos: {resultado.get('omitidos', 0)}"
+            )
+            st.rerun()
+        else:
+            st.error(resultado.get("mensaje", "No se pudieron generar movimientos fiscales IVA."))
+
+            errores = resultado.get("errores", [])
+            if errores:
+                with st.expander("Ver errores técnicos", expanded=False):
+                    st.json(errores)
+
+
+def mostrar_control_fiscal_bancario():
+    st.subheader("Control fiscal bancario")
+
+    st.info(
+        "Controlá créditos fiscales, percepciones e impuestos detectados en extractos bancarios. "
+        "Primero ves totales por período; el detalle técnico queda desplegable."
+    )
+
+    empresa_id = empresa_actual_id()
+    df = _asegurar_periodo_fiscal_df(obtener_grupos_fiscales_bancarios(empresa_id))
+
+    if df.empty:
+        st.info("Todavía no hay grupos fiscales bancarios generados. Importá un extracto primero.")
+        return
+
+    try:
+        preview = obtener_vista_previa_movimientos_fiscales_banco_iva(
+            empresa_id=empresa_id,
+            incluir_generados=True,
+        )
+        preview = _asegurar_periodo_fiscal_df(preview)
+        if not preview.empty:
+            preview["decision_periodo"] = preview.apply(_estado_envio_iva_banco, axis=1)
+    except Exception:
+        preview = pd.DataFrame()
+
+    st.markdown("#### Filtros")
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    with col1:
+        anio = st.selectbox("Año", _opciones_enteras(df, "anio"), key="banco_cf_anio")
+
+    df_base_anio = _filtrar_df_control_bancario(df, anio, "Todos", "Todos", "Todos")
+
+    with col2:
+        mes = st.selectbox("Mes", _opciones_enteras(df_base_anio, "mes"), key="banco_cf_mes")
+
+    df_base_periodo = _filtrar_df_control_bancario(df, anio, mes, "Todos", "Todos")
+
+    with col3:
+        banco = st.selectbox("Banco", _opciones_unicas(df_base_periodo, "banco"), key="banco_cf_banco")
+
+    df_base_banco = _filtrar_df_control_bancario(df, anio, mes, banco, "Todos")
+
+    with col4:
+        cuenta = st.selectbox("Cuenta", _opciones_unicas(df_base_banco, "nombre_cuenta"), key="banco_cf_cuenta")
+
+    preview_filtrado = _filtrar_df_control_bancario(preview, anio, mes, banco, cuenta)
+
+    estados_envio = ["Todos"]
+    if not preview_filtrado.empty and "decision_periodo" in preview_filtrado.columns:
+        estados_envio += sorted(preview_filtrado["decision_periodo"].dropna().unique().tolist())
+
+    with col5:
+        estado_envio = st.selectbox("Estado IVA", estados_envio, key="banco_cf_estado_iva")
+
+    df_filtrado = _filtrar_df_control_bancario(df, anio, mes, banco, cuenta)
+    preview_filtrado = _filtrar_df_control_bancario(preview, anio, mes, banco, cuenta)
+
+    if estado_envio != "Todos" and not preview_filtrado.empty and "decision_periodo" in preview_filtrado.columns:
+        preview_filtrado = preview_filtrado[preview_filtrado["decision_periodo"] == estado_envio].copy()
+
+        ids = set(preview_filtrado.get("grupo_fiscal_id", pd.Series(dtype=int)).dropna().astype(int).tolist())
+        if ids:
+            if "grupo_fiscal_id" in df_filtrado.columns:
+                df_filtrado = df_filtrado[df_filtrado["grupo_fiscal_id"].astype(int).isin(ids)].copy()
+            elif "id" in df_filtrado.columns:
+                df_filtrado = df_filtrado[df_filtrado["id"].astype(int).isin(ids)].copy()
+
+    if df_filtrado.empty:
+        st.info("No hay grupos fiscales bancarios con los filtros seleccionados.")
+        return
+
+    iva_computable = float(_serie_numerica(df_filtrado, "iva_credito_21").sum() + _serie_numerica(df_filtrado, "iva_credito_105").sum())
+    percepciones_iva = float(_serie_numerica(df_filtrado, "percepcion_iva").sum())
+    total_banco = float(_serie_numerica(df_filtrado, "total_banco").sum())
+    pendientes_iva = 0
+
+    if not preview_filtrado.empty and "decision_periodo" in preview_filtrado.columns:
+        pendientes_iva = int((preview_filtrado["decision_periodo"] == "Pendiente de enviar").sum())
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Grupos fiscales", len(df_filtrado))
+    c2.metric("IVA computable detectado", moneda(iva_computable))
+    c3.metric("Percepciones IVA", moneda(percepciones_iva))
+    c4.metric("Pendientes de enviar a IVA", pendientes_iva)
+
+    resumen_conceptos = _resumen_grupos_fiscales_por_concepto(df_filtrado)
+
+    st.markdown("#### Resumen mensual por concepto")
+    st.caption("Este es el tablero principal. El listado completo queda abajo para auditoría.")
+
+    if resumen_conceptos.empty:
+        st.info("No hay importes fiscales para resumir con los filtros seleccionados.")
+    else:
+        st.dataframe(preparar_vista(resumen_conceptos), use_container_width=True)
+
+    if not preview_filtrado.empty:
+        resumen_iva = _resumen_preview_iva_por_decision(preview_filtrado)
+        if not resumen_iva.empty:
+            st.markdown("#### Estado de envío a IVA PRO")
+            st.dataframe(preparar_vista(resumen_iva), use_container_width=True)
 
     st.warning(
-        "Los grupos fiscales son propuestas de control. Antes de computar IVA o generar asiento, "
-        "conviene confirmar si la empresa es Responsable Inscripto, si corresponde prorrateo y si el concepto tiene respaldo suficiente."
+        "Antes de tomar el crédito fiscal, verificá condición fiscal de la empresa, respaldo documental, "
+        "prorrateo y criterio de cómputo. La decisión queda trazada en IVA PRO."
     )
 
-    mostrar_generacion_movimientos_fiscales_iva_banco()
+    mostrar_generacion_movimientos_fiscales_iva_banco(preview_filtrado=preview_filtrado)
 
-    excel = exportar_excel({
-        "Control fiscal bancario": vista
-    })
+    with st.expander("Ver detalle técnico de grupos fiscales bancarios", expanded=False):
+        vista = _preparar_grupos_fiscales_para_vista(df_filtrado)
+        st.dataframe(preparar_vista(vista), use_container_width=True)
 
-    st.download_button(
-        "Descargar control fiscal bancario Excel",
-        data=excel,
-        file_name="control_fiscal_bancario.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    with st.expander("Excel, eventos y auditoría", expanded=False):
+        vista = _preparar_grupos_fiscales_para_vista(df_filtrado)
+        hojas = {"Control fiscal bancario": vista}
+
+        if not preview_filtrado.empty:
+            hojas["Envio IVA PRO"] = _preparar_preview_banco_iva_para_vista(preview_filtrado)
+
+        excel = exportar_excel(hojas)
+
+        st.download_button(
+            "Descargar control fiscal bancario Excel",
+            data=excel,
+            file_name="control_fiscal_bancario.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
 
 
 # ======================================================
