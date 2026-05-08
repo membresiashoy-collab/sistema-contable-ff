@@ -50,6 +50,7 @@ TABLA_CENTRAL_EVENTOS = "asientos_propuestos_eventos"
 TABLA_IVA = "iva_cierres_asientos_propuestos"
 TABLA_LIBRO = "libro_diario"
 TABLA_EVENTOS = "asientos_bandeja_eventos"
+TABLA_LOTES = "asientos_bandeja_lotes"
 
 FUENTE_CENTRAL = "CENTRAL"
 FUENTE_IVA = "IVA"
@@ -254,6 +255,36 @@ def _asegurar_tabla_eventos_bandeja_conn(conn) -> None:
     conn.executescript(_sql_tabla_eventos_bandeja())
 
 
+def _sql_tabla_lotes_bandeja() -> str:
+    """
+    Tabla de lotes de contabilización masiva.
+
+    No reemplaza los eventos por asiento. Agrega trazabilidad de la operación
+    grupal para que el usuario pueda auditar qué se contabilizó junto.
+    """
+    return f"""
+    CREATE TABLE IF NOT EXISTS {TABLA_LOTES} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        empresa_id INTEGER NOT NULL DEFAULT 1,
+        accion TEXT NOT NULL,
+        estado TEXT NOT NULL,
+        cantidad_solicitada INTEGER NOT NULL DEFAULT 0,
+        cantidad_procesada INTEGER NOT NULL DEFAULT 0,
+        cantidad_error INTEGER NOT NULL DEFAULT 0,
+        total_debe REAL NOT NULL DEFAULT 0,
+        total_haber REAL NOT NULL DEFAULT 0,
+        diferencia REAL NOT NULL DEFAULT 0,
+        detalle TEXT,
+        usuario TEXT,
+        fecha_lote TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """
+
+
+def _asegurar_tabla_lotes_bandeja_conn(conn) -> None:
+    conn.executescript(_sql_tabla_lotes_bandeja())
+
+
 # ======================================================
 # MIGRACIÓN / ESTRUCTURA
 # ======================================================
@@ -279,12 +310,15 @@ def asegurar_estructura_bandeja_asientos() -> None:
     try:
         conn.executescript(_sql_migracion_bandeja())
         _asegurar_tabla_eventos_bandeja_conn(conn)
+        _asegurar_tabla_lotes_bandeja_conn(conn)
 
         # Trazabilidad adicional en asientos_propuestos.
         _agregar_columna_si_no_existe(conn, TABLA_CENTRAL, "id_asiento_reversion_libro_diario", "INTEGER")
         _agregar_columna_si_no_existe(conn, TABLA_CENTRAL, "fecha_reversion", "TIMESTAMP")
         _agregar_columna_si_no_existe(conn, TABLA_CENTRAL, "usuario_reversion", "TEXT")
         _agregar_columna_si_no_existe(conn, TABLA_CENTRAL, "motivo_reversion", "TEXT")
+        _agregar_columna_si_no_existe(conn, TABLA_CENTRAL, "lote_contabilizacion_id", "INTEGER")
+        _agregar_columna_si_no_existe(conn, TABLA_CENTRAL, "lote_reversion_id", "INTEGER")
 
         # Trazabilidad adicional en IVA, que hoy guarda líneas sueltas.
         _agregar_columna_si_no_existe(conn, TABLA_IVA, "id_asiento_libro_diario", "INTEGER")
@@ -298,6 +332,8 @@ def asegurar_estructura_bandeja_asientos() -> None:
         _agregar_columna_si_no_existe(conn, TABLA_IVA, "usuario_reversion", "TEXT")
         _agregar_columna_si_no_existe(conn, TABLA_IVA, "motivo_reversion", "TEXT")
         _agregar_columna_si_no_existe(conn, TABLA_IVA, "fecha_actualizacion", "TIMESTAMP")
+        _agregar_columna_si_no_existe(conn, TABLA_IVA, "lote_contabilizacion_id", "INTEGER")
+        _agregar_columna_si_no_existe(conn, TABLA_IVA, "lote_reversion_id", "INTEGER")
 
         conn.execute(
             f"""
@@ -324,6 +360,20 @@ def asegurar_estructura_bandeja_asientos() -> None:
             f"""
             CREATE INDEX IF NOT EXISTS idx_bandeja_eventos_empresa
             ON {TABLA_EVENTOS} (empresa_id, fecha_evento)
+            """
+        )
+
+        conn.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS idx_bandeja_lotes_empresa
+            ON {TABLA_LOTES} (empresa_id, fecha_lote)
+            """
+        )
+
+        conn.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS idx_bandeja_lotes_estado
+            ON {TABLA_LOTES} (empresa_id, estado, accion)
             """
         )
 
@@ -995,7 +1045,7 @@ def _insertar_asiento_en_libro(conn, asiento: Dict[str, Any], usuario: Optional[
 # ACTUALIZACIÓN DE FUENTES
 # ======================================================
 
-def _actualizar_central_contabilizado(conn, asiento: Dict[str, Any], id_asiento: int, usuario: Optional[str]) -> None:
+def _actualizar_central_contabilizado(conn, asiento: Dict[str, Any], id_asiento: int, usuario: Optional[str], lote_id: Optional[int] = None) -> None:
     asiento_id = _int(asiento.get("id") or asiento.get("fuente_id"))
     empresa_id = _int(asiento.get("empresa_id"), 1)
 
@@ -1006,6 +1056,7 @@ def _actualizar_central_contabilizado(conn, asiento: Dict[str, Any], id_asiento:
             id_asiento_libro_diario = ?,
             fecha_contabilizacion = CURRENT_TIMESTAMP,
             usuario_contabilizacion = ?,
+            lote_contabilizacion_id = ?,
             fecha_actualizacion = CURRENT_TIMESTAMP
         WHERE id = ?
           AND empresa_id = ?
@@ -1015,6 +1066,7 @@ def _actualizar_central_contabilizado(conn, asiento: Dict[str, Any], id_asiento:
             ESTADO_CONTABILIZADO,
             int(id_asiento),
             _texto(usuario),
+            lote_id,
             asiento_id,
             empresa_id,
             ESTADO_PROPUESTO,
@@ -1052,7 +1104,7 @@ def _actualizar_central_contabilizado(conn, asiento: Dict[str, Any], id_asiento:
     )
 
 
-def _actualizar_iva_contabilizado(conn, asiento: Dict[str, Any], id_asiento: int, usuario: Optional[str]) -> None:
+def _actualizar_iva_contabilizado(conn, asiento: Dict[str, Any], id_asiento: int, usuario: Optional[str], lote_id: Optional[int] = None) -> None:
     cierre_id = _int(asiento.get("cierre_id") or asiento.get("origen_id"))
     pago_id = _int(asiento.get("pago_id"))
     tipo_asiento = _texto(asiento.get("tipo_asiento")).upper()
@@ -1065,6 +1117,7 @@ def _actualizar_iva_contabilizado(conn, asiento: Dict[str, Any], id_asiento: int
             id_asiento_libro_diario = ?,
             fecha_contabilizacion = CURRENT_TIMESTAMP,
             usuario_contabilizacion = ?,
+            lote_contabilizacion_id = ?,
             fecha_actualizacion = CURRENT_TIMESTAMP
         WHERE empresa_id = ?
           AND cierre_id = ?
@@ -1076,6 +1129,7 @@ def _actualizar_iva_contabilizado(conn, asiento: Dict[str, Any], id_asiento: int
             ESTADO_CONTABILIZADO,
             int(id_asiento),
             _texto(usuario),
+            lote_id,
             empresa_id,
             cierre_id,
             pago_id,
@@ -1453,6 +1507,416 @@ def reversar_asiento_bandeja(
         conn.close()
 
 
+# ======================================================
+# CONTABILIZACIÓN MASIVA CONTROLADA
+# ======================================================
+
+def obtener_fuente_claves_por_filtros(
+    empresa_id: int = 1,
+    estado: str = ESTADO_PROPUESTO,
+    origen: Optional[str] = None,
+    fuente: Optional[str] = None,
+) -> List[str]:
+    """
+    Devuelve claves de asientos de la bandeja según filtros operativos.
+
+    Se usa para acciones masivas seguras: el usuario primero filtra y luego
+    decide contabilizar ese universo filtrado.
+    """
+    df = listar_bandeja_asientos_propuestos(
+        empresa_id=empresa_id,
+        estado=estado,
+        origen=origen,
+        fuente=fuente,
+        incluir_anulados=True,
+    )
+
+    if df.empty or "fuente_clave" not in df.columns:
+        return []
+
+    return list(dict.fromkeys(df["fuente_clave"].dropna().astype(str).tolist()))
+
+
+def _normalizar_fuente_claves(fuente_claves: Optional[List[str]]) -> List[str]:
+    if not fuente_claves:
+        return []
+
+    claves = []
+    for clave in fuente_claves:
+        texto = _texto(clave)
+        if texto:
+            claves.append(texto)
+
+    return list(dict.fromkeys(claves))
+
+
+def prevalidar_asientos_bandeja(
+    fuente_claves: Optional[List[str]] = None,
+    empresa_id: int = 1,
+    estado: str = ESTADO_PROPUESTO,
+    origen: Optional[str] = None,
+    fuente: Optional[str] = None,
+    todos_los_filtrados: bool = False,
+    limite_maximo: int = 5000,
+) -> Dict[str, Any]:
+    """
+    Prevalidación contable previa a una acción masiva.
+
+    Reglas:
+    - Solo se consideran asientos PROPUESTOS.
+    - Cada asiento debe cuadrar individualmente.
+    - No alcanza con que el total global cierre.
+    - Se devuelve detalle de válidos y errores para no ejecutar a ciegas.
+    """
+    asegurar_estructura_bandeja_asientos()
+
+    if todos_los_filtrados:
+        claves = obtener_fuente_claves_por_filtros(
+            empresa_id=empresa_id,
+            estado=estado,
+            origen=origen,
+            fuente=fuente,
+        )
+    else:
+        claves = _normalizar_fuente_claves(fuente_claves)
+
+    if not claves:
+        return _resultado(
+            False,
+            "No hay asientos seleccionados para prevalidar.",
+            cantidad_solicitada=0,
+            cantidad_valida=0,
+            cantidad_error=0,
+            asientos_validos=[],
+            errores=[],
+            fuente_claves_validas=[],
+        )
+
+    if len(claves) > int(limite_maximo):
+        return _resultado(
+            False,
+            f"La selección supera el máximo permitido ({limite_maximo}). Filtrá mejor antes de ejecutar.",
+            cantidad_solicitada=len(claves),
+            cantidad_valida=0,
+            cantidad_error=len(claves),
+            asientos_validos=[],
+            errores=[{"mensaje": "Selección demasiado grande.", "cantidad": len(claves)}],
+            fuente_claves_validas=[],
+        )
+
+    validos = []
+    errores = []
+
+    for clave in claves:
+        asiento = obtener_asiento_bandeja(clave)
+
+        if not asiento:
+            errores.append({
+                "fuente_clave": clave,
+                "mensaje": "No se encontró el asiento.",
+            })
+            continue
+
+        if _int(asiento.get("empresa_id"), 1) != int(empresa_id):
+            errores.append({
+                "fuente_clave": clave,
+                "mensaje": "El asiento pertenece a otra empresa.",
+            })
+            continue
+
+        validacion = _validar_asiento_para_contabilizar(asiento)
+
+        if not validacion.get("ok"):
+            errores.append({
+                "fuente_clave": clave,
+                "origen": asiento.get("origen"),
+                "estado": asiento.get("estado"),
+                "descripcion": asiento.get("descripcion"),
+                "mensaje": validacion.get("mensaje"),
+            })
+            continue
+
+        validos.append({
+            "fuente_clave": clave,
+            "asiento": asiento,
+            "origen": asiento.get("origen"),
+            "fuente": asiento.get("fuente"),
+            "periodo": asiento.get("periodo"),
+            "descripcion": asiento.get("descripcion"),
+            "total_debe": _float(validacion.get("total_debe")),
+            "total_haber": _float(validacion.get("total_haber")),
+            "diferencia": _float(validacion.get("diferencia")),
+        })
+
+    total_debe = round(sum(_float(item.get("total_debe")) for item in validos), 2)
+    total_haber = round(sum(_float(item.get("total_haber")) for item in validos), 2)
+    diferencia = round(total_debe - total_haber, 2)
+
+    origenes = sorted({_texto(item.get("origen")) for item in validos if _texto(item.get("origen"))})
+    fuentes = sorted({_texto(item.get("fuente")) for item in validos if _texto(item.get("fuente"))})
+    periodos = sorted({_texto(item.get("periodo")) for item in validos if _texto(item.get("periodo"))})
+
+    ok = len(validos) > 0 and len(errores) == 0
+
+    return _resultado(
+        ok,
+        "Prevalidación correcta." if ok else "La prevalidación detectó asientos que no se pueden contabilizar.",
+        cantidad_solicitada=len(claves),
+        cantidad_valida=len(validos),
+        cantidad_error=len(errores),
+        total_debe=total_debe,
+        total_haber=total_haber,
+        diferencia=diferencia,
+        origenes=origenes,
+        fuentes=fuentes,
+        periodos=periodos,
+        asientos_validos=validos,
+        errores=errores,
+        fuente_claves_validas=[item["fuente_clave"] for item in validos],
+    )
+
+
+def _crear_lote_bandeja_conn(
+    conn,
+    *,
+    empresa_id: int,
+    accion: str,
+    cantidad_solicitada: int,
+    total_debe: float,
+    total_haber: float,
+    diferencia: float,
+    detalle: str,
+    usuario: Optional[str],
+) -> int:
+    cur = conn.execute(
+        f"""
+        INSERT INTO {TABLA_LOTES}
+        (
+            empresa_id,
+            accion,
+            estado,
+            cantidad_solicitada,
+            cantidad_procesada,
+            cantidad_error,
+            total_debe,
+            total_haber,
+            diferencia,
+            detalle,
+            usuario,
+            fecha_lote
+        )
+        VALUES (?, ?, 'EN_PROCESO', ?, 0, 0, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """,
+        (
+            int(empresa_id),
+            _texto(accion),
+            int(cantidad_solicitada),
+            _float(total_debe),
+            _float(total_haber),
+            _float(diferencia),
+            _texto(detalle),
+            _texto(usuario),
+        ),
+    )
+    return int(cur.lastrowid)
+
+
+def _actualizar_lote_bandeja_conn(
+    conn,
+    *,
+    lote_id: int,
+    estado: str,
+    cantidad_procesada: int,
+    cantidad_error: int = 0,
+    detalle: Optional[str] = None,
+) -> None:
+    conn.execute(
+        f"""
+        UPDATE {TABLA_LOTES}
+        SET estado = ?,
+            cantidad_procesada = ?,
+            cantidad_error = ?,
+            detalle = COALESCE(?, detalle)
+        WHERE id = ?
+        """,
+        (
+            _texto(estado),
+            int(cantidad_procesada),
+            int(cantidad_error),
+            detalle,
+            int(lote_id),
+        ),
+    )
+
+
+def contabilizar_asientos_bandeja_masivo(
+    fuente_claves: Optional[List[str]] = None,
+    empresa_id: int = 1,
+    usuario: Optional[str] = "sistema",
+    estado: str = ESTADO_PROPUESTO,
+    origen: Optional[str] = None,
+    fuente: Optional[str] = None,
+    todos_los_filtrados: bool = False,
+    confirmar_texto: Optional[str] = None,
+    umbral_confirmacion_fuerte: int = 50,
+    limite_maximo: int = 5000,
+) -> Dict[str, Any]:
+    """
+    Contabiliza masivamente asientos propuestos con control de lote.
+
+    La operación es atómica: si un asiento falla durante el pase al Libro
+    Diario, se revierte todo el lote para evitar contabilizaciones parciales.
+    """
+    validacion = prevalidar_asientos_bandeja(
+        fuente_claves=fuente_claves,
+        empresa_id=empresa_id,
+        estado=estado,
+        origen=origen,
+        fuente=fuente,
+        todos_los_filtrados=todos_los_filtrados,
+        limite_maximo=limite_maximo,
+    )
+
+    if not validacion.get("ok"):
+        return validacion
+
+    cantidad = int(validacion.get("cantidad_valida") or 0)
+
+    if cantidad <= 0:
+        return _resultado(False, "No hay asientos válidos para contabilizar.")
+
+    if cantidad >= int(umbral_confirmacion_fuerte) and _texto(confirmar_texto).upper() != "CONTABILIZAR":
+        return _resultado(
+            False,
+            f"Para contabilizar {cantidad} asientos se requiere escribir CONTABILIZAR.",
+            requiere_confirmacion_fuerte=True,
+            cantidad_valida=cantidad,
+        )
+
+    conn = conectar()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        detalle_lote = (
+            f"Contabilización masiva. Orígenes: {', '.join(validacion.get('origenes') or [])}. "
+            f"Fuentes: {', '.join(validacion.get('fuentes') or [])}. "
+            f"Períodos: {', '.join(validacion.get('periodos') or [])}."
+        )
+
+        lote_id = _crear_lote_bandeja_conn(
+            conn,
+            empresa_id=empresa_id,
+            accion="CONTABILIZACION_MASIVA",
+            cantidad_solicitada=int(validacion.get("cantidad_solicitada") or cantidad),
+            total_debe=_float(validacion.get("total_debe")),
+            total_haber=_float(validacion.get("total_haber")),
+            diferencia=_float(validacion.get("diferencia")),
+            detalle=detalle_lote,
+            usuario=usuario,
+        )
+
+        ids_asientos = []
+
+        for item in validacion.get("asientos_validos") or []:
+            asiento = item.get("asiento") or {}
+            fuente_asiento = _texto(asiento.get("fuente")).upper()
+            fuente_clave = _texto(asiento.get("fuente_clave"))
+
+            id_asiento = _insertar_asiento_en_libro(
+                conn,
+                asiento,
+                usuario,
+                reverso=False,
+            )
+
+            if fuente_asiento == FUENTE_CENTRAL:
+                _actualizar_central_contabilizado(
+                    conn,
+                    asiento,
+                    id_asiento,
+                    usuario,
+                    lote_id=lote_id,
+                )
+            elif fuente_asiento == FUENTE_IVA:
+                _actualizar_iva_contabilizado(
+                    conn,
+                    asiento,
+                    id_asiento,
+                    usuario,
+                    lote_id=lote_id,
+                )
+            else:
+                raise ValueError(f"Fuente de asiento no soportada: {fuente_asiento}")
+
+            _registrar_evento_bandeja(
+                conn,
+                empresa_id=_int(asiento.get("empresa_id"), 1),
+                fuente=fuente_asiento,
+                fuente_id=_int(asiento.get("fuente_id")),
+                fuente_clave=fuente_clave,
+                evento="CONTABILIZACION_MASIVA",
+                detalle=f"Asiento pasado a Libro Diario con id_asiento {id_asiento}. Lote {lote_id}.",
+                usuario=usuario,
+            )
+
+            ids_asientos.append(id_asiento)
+
+        _actualizar_lote_bandeja_conn(
+            conn,
+            lote_id=lote_id,
+            estado="FINALIZADO",
+            cantidad_procesada=len(ids_asientos),
+            cantidad_error=0,
+            detalle=f"Lote finalizado correctamente. Asientos Libro Diario: {ids_asientos}",
+        )
+
+        conn.commit()
+
+        return _resultado(
+            True,
+            f"Se contabilizaron {len(ids_asientos)} asientos correctamente.",
+            lote_id=lote_id,
+            cantidad_procesada=len(ids_asientos),
+            ids_asientos_libro_diario=ids_asientos,
+            total_debe=_float(validacion.get("total_debe")),
+            total_haber=_float(validacion.get("total_haber")),
+            diferencia=_float(validacion.get("diferencia")),
+        )
+
+    except Exception as exc:
+        conn.rollback()
+        return _resultado(
+            False,
+            f"No se pudo contabilizar el lote: {exc}",
+            cantidad_procesada=0,
+        )
+
+    finally:
+        conn.close()
+
+
+def listar_lotes_bandeja(
+    empresa_id: int = 1,
+    limite: int = 50,
+) -> pd.DataFrame:
+    asegurar_estructura_bandeja_asientos()
+
+    df = ejecutar_query(
+        f"""
+        SELECT *
+        FROM {TABLA_LOTES}
+        WHERE empresa_id = ?
+        ORDER BY fecha_lote DESC, id DESC
+        LIMIT ?
+        """,
+        (int(empresa_id), int(limite)),
+        fetch=True,
+    )
+
+    return _df(df)
+
+
 __all__ = [
     "FUENTE_CENTRAL",
     "FUENTE_IVA",
@@ -1469,5 +1933,9 @@ __all__ = [
     "contabilizar_asiento_bandeja",
     "rechazar_asiento_bandeja",
     "reversar_asiento_bandeja",
+    "obtener_fuente_claves_por_filtros",
+    "prevalidar_asientos_bandeja",
+    "contabilizar_asientos_bandeja_masivo",
+    "listar_lotes_bandeja",
     "parsear_fuente_clave",
 ]

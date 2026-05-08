@@ -55,6 +55,8 @@ from services.capital_social_service import (
 )
 
 
+from modulos.bandeja_asientos_componentes import mostrar_bandeja_asientos_propuestos_ui
+
 # ======================================================
 # UTILIDADES
 # ======================================================
@@ -550,9 +552,10 @@ def mostrar_diario():
     migrar_asientos_origen()
     migrar_capital_social()
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "🗓️ Ejercicios contables",
         "🚦 Inicio contable",
+        "🧾 Bandeja de asientos",
         "📓 Libro Diario",
         "📒 Libro Mayor",
         "📊 Balance de Sumas y Saldos",
@@ -567,18 +570,25 @@ def mostrar_diario():
         mostrar_inicio_contable()
 
     with tab3:
-        mostrar_libro_diario()
+        mostrar_bandeja_asientos_propuestos_ui(
+            empresa_id=empresa_actual_id(),
+            usuario=usuario_actual_nombre(),
+            key_prefix="contabilidad_bandeja_asientos",
+        )
 
     with tab4:
-        mostrar_libro_mayor()
+        mostrar_libro_diario()
 
     with tab5:
-        mostrar_balance_sumas_saldos()
+        mostrar_libro_mayor()
 
     with tab6:
-        mostrar_control_origen_archivo()
+        mostrar_balance_sumas_saldos()
 
     with tab7:
+        mostrar_control_origen_archivo()
+
+    with tab8:
         mostrar_limpieza_admin_demo()
 
 
@@ -1645,94 +1655,15 @@ def mostrar_listado_asientos_propuestos(empresa_id):
     st.markdown("### Asientos propuestos")
 
     st.info(
-        "Esta es la base de la futura Bandeja de Asientos Propuestos. En esta etapa se visualizan, "
-        "pero todavía no se pasan automáticamente al Libro Diario desde esta pantalla."
+        "Esta sección usa la Bandeja central de asientos propuestos. "
+        "Desde acá se puede revisar el detalle, contabilizar en Libro Diario, "
+        "rechazar propuestas pendientes o generar reversos controlados de asientos ya contabilizados."
     )
 
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        estado = st.selectbox(
-            "Estado",
-            ["PROPUESTO", "Todos", "CONTABILIZADO", "ANULADO", "RECHAZADO"],
-            key="listado_asientos_propuestos_estado",
-        )
-
-    with col2:
-        origen = st.selectbox(
-            "Origen",
-            [
-                "Todos",
-                "APERTURA",
-                "CAPITAL_SOCIAL",
-                "APORTE_SOCIO",
-                "APORTE_IRREVOCABLE",
-                "PRESTAMO_SOCIO",
-                "AJUSTE_INICIAL",
-                "IVA_CIERRE",
-                "IVA_PAGO",
-            ],
-            key="listado_asientos_propuestos_origen",
-        )
-
-    with col3:
-        ejercicio_id = _select_ejercicio(
-            empresa_id,
-            key="listado_asientos_propuestos_ejercicio",
-            incluir_anulados=False,
-            label="Ejercicio",
-        )
-
-    df = listar_asientos_propuestos(
+    mostrar_bandeja_asientos_propuestos_ui(
         empresa_id=empresa_id,
-        estado=None if estado == "Todos" else estado,
-        origen=None if origen == "Todos" else origen,
-        ejercicio_id=ejercicio_id,
-        incluir_anulados=True,
-    )
-
-    if df.empty:
-        st.info("No hay asientos propuestos con esos filtros.")
-        return
-
-    vista = df[[
-        "id",
-        "fecha",
-        "origen",
-        "tipo_asiento",
-        "descripcion",
-        "estado",
-        "total_debe",
-        "total_haber",
-        "diferencia",
-        "origen_tabla",
-        "origen_id",
-        "usuario_creacion",
-        "fecha_creacion",
-    ]].rename(columns={
-        "id": "ID",
-        "fecha": "Fecha",
-        "origen": "Origen",
-        "tipo_asiento": "Tipo",
-        "descripcion": "Descripción",
-        "estado": "Estado",
-        "total_debe": "Debe",
-        "total_haber": "Haber",
-        "diferencia": "Diferencia",
-        "origen_tabla": "Tabla origen",
-        "origen_id": "ID origen",
-        "usuario_creacion": "Usuario",
-        "fecha_creacion": "Fecha carga",
-    })
-
-    st.dataframe(preparar_vista(vista), use_container_width=True)
-
-    excel = exportar_excel({"Asientos propuestos": vista})
-    st.download_button(
-        "Descargar asientos propuestos Excel",
-        data=excel,
-        file_name="asientos_propuestos.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        usuario=usuario_actual_nombre(),
+        key_prefix="inicio_contable_bandeja_asientos",
     )
 
 

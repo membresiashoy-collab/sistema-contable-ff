@@ -28,7 +28,15 @@ def _preparar_db(monkeypatch, tmp_path):
     return database, bandeja_svc
 
 
-def _crear_asiento_central(database):
+def _crear_asiento_central(
+    database,
+    importe=1000.0,
+    fecha="2025-01-01",
+    origen="APERTURA",
+    origen_id=10,
+    referencia="TEST-APERTURA",
+    descripcion="Asiento apertura test",
+):
     conn = database.conectar()
 
     try:
@@ -58,15 +66,15 @@ def _crear_asiento_central(database):
             (
                 1,
                 None,
-                "2025-01-01",
-                "APERTURA",
+                fecha,
+                origen,
                 "asientos_origen",
-                10,
-                "APERTURA",
-                "TEST-APERTURA",
-                "Asiento apertura test",
-                1000.0,
-                1000.0,
+                origen_id,
+                origen,
+                referencia,
+                descripcion,
+                float(importe),
+                float(importe),
                 0.0,
                 "pytest",
             ),
@@ -93,7 +101,7 @@ def _crear_asiento_central(database):
                 1,
                 "1.1.01",
                 "Caja",
-                1000.0,
+                float(importe),
                 0.0,
                 "Apertura caja",
             ),
@@ -119,7 +127,7 @@ def _crear_asiento_central(database):
                 "3.1.01",
                 "Capital social",
                 0.0,
-                1000.0,
+                float(importe),
                 "Apertura capital",
             ),
         )
@@ -406,3 +414,78 @@ def test_reversa_asiento_contabilizado(monkeypatch, tmp_path):
     )
 
     assert doble["ok"] is False
+
+
+def test_prevalida_asientos_masivos_y_detecta_no_pendientes(monkeypatch, tmp_path):
+    database, svc = _preparar_db(monkeypatch, tmp_path)
+
+    asiento_1 = _crear_asiento_central(database, importe=100.0, referencia="A1", origen_id=101)
+    asiento_2 = _crear_asiento_central(database, importe=200.0, referencia="A2", origen_id=102)
+
+    prevalidacion = svc.prevalidar_asientos_bandeja(
+        fuente_claves=[f"CENTRAL:{asiento_1}", f"CENTRAL:{asiento_2}"],
+        empresa_id=1,
+    )
+
+    assert prevalidacion["ok"] is True
+    assert prevalidacion["cantidad_valida"] == 2
+    assert prevalidacion["cantidad_error"] == 0
+    assert round(prevalidacion["total_debe"], 2) == 300.0
+    assert round(prevalidacion["total_haber"], 2) == 300.0
+
+    resultado = svc.contabilizar_asiento_bandeja(f"CENTRAL:{asiento_1}", usuario="pytest")
+    assert resultado["ok"] is True
+
+    prevalidacion_error = svc.prevalidar_asientos_bandeja(
+        fuente_claves=[f"CENTRAL:{asiento_1}", f"CENTRAL:{asiento_2}"],
+        empresa_id=1,
+    )
+
+    assert prevalidacion_error["ok"] is False
+    assert prevalidacion_error["cantidad_valida"] == 1
+    assert prevalidacion_error["cantidad_error"] == 1
+
+
+def test_contabiliza_asientos_masivos_y_registra_lote(monkeypatch, tmp_path):
+    database, svc = _preparar_db(monkeypatch, tmp_path)
+
+    asiento_1 = _crear_asiento_central(database, importe=100.0, referencia="LOTE-1", origen_id=201)
+    asiento_2 = _crear_asiento_central(database, importe=250.0, referencia="LOTE-2", origen_id=202)
+
+    resultado = svc.contabilizar_asientos_bandeja_masivo(
+        fuente_claves=[f"CENTRAL:{asiento_1}", f"CENTRAL:{asiento_2}"],
+        empresa_id=1,
+        usuario="pytest",
+    )
+
+    assert resultado["ok"] is True
+    assert resultado["cantidad_procesada"] == 2
+    assert resultado["lote_id"] == 1
+    assert resultado["ids_asientos_libro_diario"] == [1, 2]
+
+    libro = database.ejecutar_query(
+        "SELECT id_asiento, debe, haber, origen FROM libro_diario ORDER BY id",
+        fetch=True,
+    )
+
+    assert len(libro) == 4
+    assert set(libro["id_asiento"].astype(int)) == {1, 2}
+    assert round(libro["debe"].sum(), 2) == 350.0
+    assert round(libro["haber"].sum(), 2) == 350.0
+
+    propuestas = database.ejecutar_query(
+        """
+        SELECT estado, lote_contabilizacion_id
+        FROM asientos_propuestos
+        ORDER BY id
+        """,
+        fetch=True,
+    )
+
+    assert set(propuestas["estado"].astype(str)) == {"CONTABILIZADO"}
+    assert set(propuestas["lote_contabilizacion_id"].astype(int)) == {1}
+
+    lotes = svc.listar_lotes_bandeja(empresa_id=1)
+    assert len(lotes) == 1
+    assert lotes.iloc[0]["estado"] == "FINALIZADO"
+    assert int(lotes.iloc[0]["cantidad_procesada"]) == 2
