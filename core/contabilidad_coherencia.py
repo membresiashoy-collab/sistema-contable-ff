@@ -42,6 +42,16 @@ COMPORTAMIENTOS_CONTABLES: dict[str, dict[str, str]] = {
         "naturaleza": "PASIVO",
         "descripcion": "Débito fiscal generado por ventas o ajustes de IVA.",
     },
+    "CLIENTES": {
+        "nombre": "Clientes / deudores por ventas",
+        "naturaleza": "ACTIVO",
+        "descripcion": "Cuentas a cobrar originadas en ventas o servicios a clientes.",
+    },
+    "PROVEEDORES": {
+        "nombre": "Proveedores / acreedores comerciales",
+        "naturaleza": "PASIVO",
+        "descripcion": "Cuentas a pagar originadas en compras o servicios recibidos de proveedores.",
+    },
     "CAPITAL_SOCIAL": {
         "nombre": "Capital social",
         "naturaleza": "PATRIMONIO_NETO",
@@ -104,7 +114,11 @@ COMPORTAMIENTOS_CONTABLES: dict[str, dict[str, str]] = {
     },
 }
 
-COMPORTAMIENTOS_CRITICOS = tuple(COMPORTAMIENTOS_CONTABLES.keys())
+COMPORTAMIENTOS_CRITICOS = tuple(
+    codigo
+    for codigo in COMPORTAMIENTOS_CONTABLES.keys()
+    if codigo not in {"CLIENTES", "PROVEEDORES"}
+)
 
 ORIGENES_ECONOMICOS_OPERATIVOS: dict[str, dict[str, str]] = {
     "COBRANZA_CLIENTE": {

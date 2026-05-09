@@ -7,6 +7,7 @@ import streamlit as st
 
 from core.exportadores import exportar_excel
 from core.ui import preparar_vista
+from modulos.normalizacion_contable_componentes import mostrar_asistente_normalizacion_contable_ui
 from services.comportamientos_contables_service import (
     aplicar_sugerencias_comportamientos,
     desactivar_comportamiento_cuenta,
@@ -403,10 +404,11 @@ def mostrar_configuracion_comportamientos_contables_ui(
     _render_resumen(resumen)
 
     st.divider()
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Mapa actual",
         "Asignar manualmente",
         "Sugerencias",
+        "Asistente de normalización",
         "Catálogo y auditoría",
     ])
 
@@ -420,6 +422,13 @@ def mostrar_configuracion_comportamientos_contables_ui(
         _render_sugerencias(empresa_id, usuario, key_prefix)
 
     with tab4:
+        mostrar_asistente_normalizacion_contable_ui(
+            empresa_id=empresa_id,
+            usuario=usuario,
+            key_prefix=f"{key_prefix}_asistente_normalizacion",
+        )
+
+    with tab5:
         _render_catalogo_y_eventos(empresa_id, key_prefix)
 
     st.divider()
