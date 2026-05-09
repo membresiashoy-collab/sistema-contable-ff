@@ -58,6 +58,7 @@ from services.capital_social_service import (
 from modulos.bandeja_asientos_componentes import mostrar_bandeja_asientos_propuestos_ui
 from modulos.libro_diario_componentes import mostrar_trazabilidad_libro_diario_ui
 from modulos.coherencia_contable_componentes import mostrar_diagnostico_coherencia_contable_ui
+from modulos.comportamientos_contables_componentes import mostrar_configuracion_comportamientos_contables_ui
 
 # ======================================================
 # UTILIDADES
@@ -554,12 +555,13 @@ def mostrar_diario():
     migrar_asientos_origen()
     migrar_capital_social()
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
         "🗓️ Ejercicios contables",
         "🚦 Inicio contable",
         "🧾 Bandeja de asientos",
         "📓 Libro Diario",
         "🔎 Trazabilidad Diario",
+        "⚙️ Comportamientos",
         "🧩 Coherencia contable",
         "📒 Libro Mayor",
         "📊 Balance de Sumas y Saldos",
@@ -591,22 +593,29 @@ def mostrar_diario():
         )
 
     with tab6:
+        mostrar_configuracion_comportamientos_contables_ui(
+            empresa_id=empresa_actual_id(),
+            usuario=usuario_actual_nombre(),
+            key_prefix="contabilidad_comportamientos_contables",
+        )
+
+    with tab7:
         mostrar_diagnostico_coherencia_contable_ui(
             empresa_id=empresa_actual_id(),
             usuario=usuario_actual_nombre(),
             key_prefix="contabilidad_coherencia_contable",
         )
 
-    with tab7:
+    with tab8:
         mostrar_libro_mayor()
 
-    with tab8:
+    with tab9:
         mostrar_balance_sumas_saldos()
 
-    with tab9:
+    with tab10:
         mostrar_control_origen_archivo()
 
-    with tab10:
+    with tab11:
         mostrar_limpieza_admin_demo()
 
 
