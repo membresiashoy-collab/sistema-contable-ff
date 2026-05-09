@@ -136,3 +136,12 @@ def test_opciones_asignaciones_extraen_id():
     opciones = modulo._opciones_asignaciones(df)
     assert opciones[0].startswith("10")
     assert modulo._id_desde_opcion(opciones[0]) == 10
+
+
+def test_exportacion_auditoria_usa_exportador_estandar_sin_nombre_base():
+    modulo = _importar_modulo()
+    ruta = modulo.__file__
+    texto = open(ruta, "r", encoding="utf-8").read()
+
+    assert "nombre_base" not in texto
+    assert "file_name=\"auditoria_normalizacion_contable.xlsx\"" in texto

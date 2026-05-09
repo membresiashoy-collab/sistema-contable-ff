@@ -335,7 +335,7 @@ def _render_auditoria(empresa_id: int | None, key_prefix: str) -> None:
         return
     st.dataframe(_vista_historial(df), use_container_width=True, hide_index=True)
     with st.expander("Descargar auditoría", expanded=False):
-        salida = exportar_excel({"Auditoria normalizacion": _vista_historial(df)}, nombre_base="auditoria_normalizacion_contable")
+        salida = exportar_excel({"Auditoria normalizacion": _vista_historial(df)})
         st.download_button(
             "Descargar Excel",
             data=salida,
