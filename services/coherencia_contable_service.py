@@ -755,6 +755,417 @@ def diagnosticar_inicio_contable_capital(
             conn.close()
 
 
+
+
+def _valor_activo(valor: Any, default: bool = True) -> bool:
+    if valor is None:
+        return default
+    if isinstance(valor, bool):
+        return valor
+    if isinstance(valor, (int, float)):
+        return bool(valor)
+    texto = str(valor).strip().upper()
+    if texto in {"0", "NO", "N", "FALSE", "FALSO", "INACTIVO", "BAJA"}:
+        return False
+    if texto in {"1", "SI", "SÍ", "S", "TRUE", "VERDADERO", "ACTIVO", "ALTA"}:
+        return True
+    return default
+
+
+def _clave_cuenta(valor: Any) -> str:
+    if valor is None:
+        return ""
+    texto = str(valor).strip()
+    return texto
+
+
+def _claves_busqueda_cuenta(valor: Any) -> set[str]:
+    clave = _clave_cuenta(valor)
+    if not clave:
+        return set()
+    claves = {clave, normalizar_codigo(clave)}
+    solo_alnum = "".join(caracter for caracter in clave.upper() if caracter.isalnum())
+    if solo_alnum:
+        claves.add(solo_alnum)
+    return {item for item in claves if item}
+
+
+def _mapa_comportamientos_configurados(
+    conn: sqlite3.Connection,
+    empresa_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    Devuelve el mapa consolidado de comportamientos contables.
+
+    La fuente principal es `contabilidad_cuentas_comportamiento`, pero también
+    se respetan los comportamientos que ya estén sincronizados en
+    `plan_cuentas.comportamiento_contable`. Esto permite que el diagnóstico use
+    tanto la configuración nueva como bases anteriores o migradas.
+    """
+    aplicar_migracion_nucleo(conn)
+
+    por_cuenta: dict[str, set[str]] = defaultdict(set)
+    por_comportamiento: dict[str, set[str]] = defaultdict(set)
+    cuentas_plan: dict[str, dict[str, Any]] = {}
+    cuentas_plan_por_nombre: dict[str, dict[str, Any]] = {}
+
+    if _table_exists(conn, "plan_cuentas"):
+        columnas_plan = _columns(conn, "plan_cuentas")
+        col_empresa = _first_existing(columnas_plan, ("empresa_id", "id_empresa"))
+        col_codigo = _first_existing(columnas_plan, ("codigo", "codigo_cuenta", "cuenta_codigo", "cuenta"))
+        col_nombre = _first_existing(columnas_plan, ("nombre", "nombre_cuenta", "descripcion", "detalle"))
+        col_comportamiento = _first_existing(columnas_plan, ("comportamiento_contable", "comportamiento", "tipo_operativo"))
+        col_activo = _first_existing(columnas_plan, ("activo", "vigente"))
+
+        where = []
+        params: list[Any] = []
+        if empresa_id is not None and col_empresa:
+            where.append(f"{col_empresa} = ?")
+            params.append(empresa_id)
+        if col_activo:
+            where.append(f"COALESCE({col_activo}, 1) <> 0")
+        sql = "SELECT rowid AS __rowid__, * FROM plan_cuentas"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+
+        for row in _fetch_dicts(conn, sql, tuple(params)):
+            codigo = _clave_cuenta(row.get(col_codigo)) if col_codigo else str(row.get("__rowid__"))
+            nombre = str(row.get(col_nombre, "") or "").strip() if col_nombre else ""
+            cuenta = {
+                "codigo": codigo,
+                "nombre": nombre,
+                "rowid": row.get("__rowid__"),
+                "empresa_id": row.get(col_empresa) if col_empresa else empresa_id,
+            }
+            for clave in _claves_busqueda_cuenta(codigo):
+                cuentas_plan[clave] = cuenta
+            if nombre:
+                cuentas_plan_por_nombre[normalizar_codigo(nombre)] = cuenta
+
+            for comportamiento in _comportamientos_desde_plan(row, col_comportamiento):
+                if comportamiento in COMPORTAMIENTOS_CONTABLES:
+                    for clave in _claves_busqueda_cuenta(codigo):
+                        por_cuenta[clave].add(comportamiento)
+                    por_comportamiento[comportamiento].add(codigo)
+
+    if _table_exists(conn, "contabilidad_cuentas_comportamiento"):
+        columnas_map = _columns(conn, "contabilidad_cuentas_comportamiento")
+        where_map = ["COALESCE(activo, 1) = 1"]
+        params_map: list[Any] = []
+        if empresa_id is not None and "empresa_id" in columnas_map:
+            where_map.append("(empresa_id = ? OR empresa_id IS NULL)")
+            params_map.append(empresa_id)
+        sql_map = "SELECT * FROM contabilidad_cuentas_comportamiento WHERE " + " AND ".join(where_map)
+        for row in _fetch_dicts(conn, sql_map, tuple(params_map)):
+            comportamiento = normalizar_codigo(row.get("comportamiento"))
+            codigo = _clave_cuenta(row.get("codigo_cuenta"))
+            if not codigo or comportamiento not in COMPORTAMIENTOS_CONTABLES:
+                continue
+            for clave in _claves_busqueda_cuenta(codigo):
+                por_cuenta[clave].add(comportamiento)
+            por_comportamiento[comportamiento].add(codigo)
+
+    return {
+        "por_cuenta": por_cuenta,
+        "por_comportamiento": por_comportamiento,
+        "cuentas_plan": cuentas_plan,
+        "cuentas_plan_por_nombre": cuentas_plan_por_nombre,
+    }
+
+
+def _comportamientos_de_cuenta(mapa: dict[str, Any], codigo_cuenta: Any, nombre_cuenta: Any = None) -> set[str]:
+    comportamientos: set[str] = set()
+    por_cuenta: dict[str, set[str]] = mapa.get("por_cuenta", {})
+    for clave in _claves_busqueda_cuenta(codigo_cuenta):
+        comportamientos.update(por_cuenta.get(clave, set()))
+
+    if not comportamientos and nombre_cuenta:
+        cuenta = mapa.get("cuentas_plan_por_nombre", {}).get(normalizar_codigo(nombre_cuenta))
+        if cuenta:
+            for clave in _claves_busqueda_cuenta(cuenta.get("codigo")):
+                comportamientos.update(por_cuenta.get(clave, set()))
+    return comportamientos
+
+
+def _cuenta_tiene_comportamiento(
+    mapa: dict[str, Any],
+    codigo_cuenta: Any,
+    comportamiento: str,
+    nombre_cuenta: Any = None,
+) -> bool:
+    comportamiento_normalizado = normalizar_codigo(comportamiento)
+    return comportamiento_normalizado in _comportamientos_de_cuenta(mapa, codigo_cuenta, nombre_cuenta)
+
+
+def _cuenta_existe_en_plan(mapa: dict[str, Any], codigo_cuenta: Any) -> bool:
+    if not _clave_cuenta(codigo_cuenta):
+        return False
+    cuentas_plan: dict[str, dict[str, Any]] = mapa.get("cuentas_plan", {})
+    return any(clave in cuentas_plan for clave in _claves_busqueda_cuenta(codigo_cuenta))
+
+
+def _descripcion_cuenta(codigo: Any, nombre: Any = None) -> str:
+    codigo_txt = str(codigo or "").strip()
+    nombre_txt = str(nombre or "").strip()
+    if codigo_txt and nombre_txt:
+        return f"{codigo_txt} - {nombre_txt}"
+    return codigo_txt or nombre_txt or "Sin cuenta informada"
+
+
+def diagnosticar_comportamientos_configurados(
+    empresa_id: int | None = None,
+    conn: sqlite3.Connection | None = None,
+    limite_revision: int = 5000,
+) -> list[dict[str, Any]]:
+    """
+    Diagnóstico inteligente basado en la configuración de comportamientos.
+
+    No modifica flujos operativos: solamente cruza el mapa contable configurado
+    contra Tesorería, IVA, Capital e imputaciones recientes para detectar cuentas
+    críticas mal clasificadas o sin clasificación.
+    """
+    propia = conn is None
+    conn = conn or _conectar_default()
+    _asegurar_row_factory(conn)
+    resultados: list[DiagnosticoCoherencia] = []
+    try:
+        aplicar_migracion_nucleo(conn)
+        mapa = _mapa_comportamientos_configurados(conn, empresa_id=empresa_id)
+
+        if not mapa.get("por_cuenta"):
+            resultados.append(
+                diagnostico(
+                    "Comportamientos contables",
+                    SEVERIDAD_ADVERTENCIA,
+                    "COMPORTAMIENTOS_SIN_CONFIGURACION",
+                    "No hay comportamientos contables configurados",
+                    "Configure al menos Caja, Banco, IVA crédito, IVA débito, Capital y cuentas vinculadas para que el diagnóstico pueda validar operaciones reales.",
+                )
+            )
+            return [item.as_dict() for item in resultados]
+
+        if _table_exists(conn, "contabilidad_cuentas_comportamiento"):
+            columnas_map = _columns(conn, "contabilidad_cuentas_comportamiento")
+            where_map = ["COALESCE(activo, 1) = 1"]
+            params_map: list[Any] = []
+            if empresa_id is not None and "empresa_id" in columnas_map:
+                where_map.append("(empresa_id = ? OR empresa_id IS NULL)")
+                params_map.append(empresa_id)
+            mapeos_sin_cuenta = []
+            cuenta_nombre_expr = "cuenta_nombre" if "cuenta_nombre" in columnas_map else "NULL AS cuenta_nombre"
+            sql_map = f"SELECT id, codigo_cuenta, {cuenta_nombre_expr}, comportamiento FROM contabilidad_cuentas_comportamiento WHERE " + " AND ".join(where_map)
+            for row in _fetch_dicts(conn, sql_map, tuple(params_map)):
+                codigo = row.get("codigo_cuenta")
+                comportamiento = normalizar_codigo(row.get("comportamiento"))
+                if comportamiento not in COMPORTAMIENTOS_CONTABLES:
+                    resultados.append(
+                        diagnostico(
+                            "Comportamientos contables",
+                            SEVERIDAD_ERROR,
+                            "COMPORTAMIENTO_CONFIGURADO_INVALIDO",
+                            "Hay un comportamiento configurado no reconocido",
+                            f"La cuenta {_descripcion_cuenta(codigo, row.get('cuenta_nombre'))} tiene el comportamiento {row.get('comportamiento')} que no pertenece al catálogo vigente.",
+                            "contabilidad_cuentas_comportamiento",
+                            row.get("id"),
+                        )
+                    )
+                if codigo and not _cuenta_existe_en_plan(mapa, codigo):
+                    mapeos_sin_cuenta.append(_descripcion_cuenta(codigo, row.get("cuenta_nombre")))
+            if mapeos_sin_cuenta:
+                resultados.append(
+                    diagnostico(
+                        "Comportamientos contables",
+                        SEVERIDAD_ADVERTENCIA,
+                        "COMPORTAMIENTO_CUENTA_NO_EXISTE_EN_PLAN",
+                        "Hay comportamientos asignados a cuentas que no existen en el plan",
+                        "Revise estos mapeos: " + "; ".join(mapeos_sin_cuenta[:15]) + ".",
+                    )
+                )
+
+        if _table_exists(conn, "tesoreria_cuentas"):
+            columnas_tes = _columns(conn, "tesoreria_cuentas")
+            col_empresa = _first_existing(columnas_tes, ("empresa_id", "id_empresa"))
+            col_tipo = _first_existing(columnas_tes, ("tipo_cuenta", "tipo"))
+            col_nombre = _first_existing(columnas_tes, ("nombre", "nombre_cuenta", "descripcion"))
+            col_codigo = _first_existing(columnas_tes, ("cuenta_contable_codigo", "codigo_cuenta", "cuenta_codigo"))
+            col_cuenta_nombre = _first_existing(columnas_tes, ("cuenta_contable_nombre", "cuenta_nombre"))
+            col_activo = _first_existing(columnas_tes, ("activo", "vigente"))
+            if col_tipo and col_codigo:
+                where = []
+                params: list[Any] = []
+                if empresa_id is not None and col_empresa:
+                    where.append(f"{col_empresa} = ?")
+                    params.append(empresa_id)
+                if col_activo:
+                    where.append(f"COALESCE({col_activo}, 1) <> 0")
+                sql = "SELECT rowid AS __rowid__, * FROM tesoreria_cuentas"
+                if where:
+                    sql += " WHERE " + " AND ".join(where)
+                cajas_sin_mapeo = []
+                bancos_sin_mapeo = []
+                cuentas_sin_codigo = []
+                for row in _fetch_dicts(conn, sql, tuple(params)):
+                    tipo = normalizar_codigo(row.get(col_tipo))
+                    codigo = row.get(col_codigo)
+                    nombre_operativo = row.get(col_nombre) if col_nombre else ""
+                    nombre_contable = row.get(col_cuenta_nombre) if col_cuenta_nombre else ""
+                    if tipo in {"CAJA", "EFECTIVO"}:
+                        if not codigo:
+                            cuentas_sin_codigo.append(f"Caja {nombre_operativo or row.get('__rowid__')}")
+                        elif not _cuenta_tiene_comportamiento(mapa, codigo, "CAJA", nombre_contable):
+                            cajas_sin_mapeo.append(_descripcion_cuenta(codigo, nombre_contable or nombre_operativo))
+                    if tipo in {"BANCO", "CUENTA_BANCARIA", "CTA_CTE", "CUENTA_CORRIENTE"}:
+                        if not codigo:
+                            cuentas_sin_codigo.append(f"Banco {nombre_operativo or row.get('__rowid__')}")
+                        elif not _cuenta_tiene_comportamiento(mapa, codigo, "BANCO", nombre_contable):
+                            bancos_sin_mapeo.append(_descripcion_cuenta(codigo, nombre_contable or nombre_operativo))
+                if cuentas_sin_codigo:
+                    resultados.append(
+                        diagnostico(
+                            "Tesorería",
+                            SEVERIDAD_ADVERTENCIA,
+                            "TESORERIA_CUENTAS_SIN_CUENTA_CONTABLE",
+                            "Hay cuentas de tesorería sin cuenta contable vinculada",
+                            "Revise: " + "; ".join(cuentas_sin_codigo[:15]) + ".",
+                        )
+                    )
+                if cajas_sin_mapeo:
+                    resultados.append(
+                        diagnostico(
+                            "Tesorería",
+                            SEVERIDAD_ADVERTENCIA,
+                            "TESORERIA_CAJAS_SIN_COMPORTAMIENTO_CAJA",
+                            "Hay cajas operativas sin comportamiento Caja",
+                            "Cuentas afectadas: " + "; ".join(cajas_sin_mapeo[:15]) + ".",
+                        )
+                    )
+                if bancos_sin_mapeo:
+                    resultados.append(
+                        diagnostico(
+                            "Tesorería",
+                            SEVERIDAD_ADVERTENCIA,
+                            "TESORERIA_BANCOS_SIN_COMPORTAMIENTO_BANCO",
+                            "Hay bancos operativos sin comportamiento Banco",
+                            "Cuentas afectadas: " + "; ".join(bancos_sin_mapeo[:15]) + ".",
+                        )
+                    )
+
+        if _table_exists(conn, "capital_social_empresa"):
+            columnas_cap = _columns(conn, "capital_social_empresa")
+            col_empresa = _first_existing(columnas_cap, ("empresa_id", "id_empresa"))
+            col_estado = _first_existing(columnas_cap, ("estado", "estado_capital"))
+            col_capital_codigo = _first_existing(columnas_cap, ("cuenta_capital_codigo", "cuenta_capital_social_codigo"))
+            col_capital_nombre = _first_existing(columnas_cap, ("cuenta_capital_nombre", "cuenta_capital_social_nombre"))
+            col_socios_codigo = _first_existing(columnas_cap, ("cuenta_socios_integracion_codigo", "cuenta_socios_codigo"))
+            col_socios_nombre = _first_existing(columnas_cap, ("cuenta_socios_integracion_nombre", "cuenta_socios_nombre"))
+            where = []
+            params: list[Any] = []
+            if empresa_id is not None and col_empresa:
+                where.append(f"{col_empresa} = ?")
+                params.append(empresa_id)
+            if col_estado:
+                where.append(f"COALESCE({col_estado}, '') NOT IN ('ANULADO', 'ELIMINADO', 'INACTIVO')")
+            sql = "SELECT rowid AS __rowid__, * FROM capital_social_empresa"
+            if where:
+                sql += " WHERE " + " AND ".join(where)
+            capital_sin_mapeo = []
+            socios_sin_mapeo = []
+            for row in _fetch_dicts(conn, sql, tuple(params)):
+                if col_capital_codigo and row.get(col_capital_codigo):
+                    if not _cuenta_tiene_comportamiento(mapa, row.get(col_capital_codigo), "CAPITAL_SOCIAL", row.get(col_capital_nombre) if col_capital_nombre else None):
+                        capital_sin_mapeo.append(_descripcion_cuenta(row.get(col_capital_codigo), row.get(col_capital_nombre) if col_capital_nombre else None))
+                if col_socios_codigo and row.get(col_socios_codigo):
+                    if not _cuenta_tiene_comportamiento(mapa, row.get(col_socios_codigo), "SOCIOS_INTEGRACION", row.get(col_socios_nombre) if col_socios_nombre else None):
+                        socios_sin_mapeo.append(_descripcion_cuenta(row.get(col_socios_codigo), row.get(col_socios_nombre) if col_socios_nombre else None))
+            if capital_sin_mapeo:
+                resultados.append(
+                    diagnostico(
+                        "Inicio contable / Capital",
+                        SEVERIDAD_ADVERTENCIA,
+                        "CAPITAL_CUENTA_CAPITAL_SIN_COMPORTAMIENTO",
+                        "La cuenta de capital social no está marcada como Capital social",
+                        "Cuentas afectadas: " + "; ".join(sorted(set(capital_sin_mapeo))[:15]) + ".",
+                    )
+                )
+            if socios_sin_mapeo:
+                resultados.append(
+                    diagnostico(
+                        "Inicio contable / Capital",
+                        SEVERIDAD_ADVERTENCIA,
+                        "CAPITAL_CUENTA_SOCIOS_SIN_COMPORTAMIENTO",
+                        "La cuenta de socios por integración no está marcada como Socios / accionistas por integración",
+                        "Cuentas afectadas: " + "; ".join(sorted(set(socios_sin_mapeo))[:15]) + ".",
+                    )
+                )
+
+        if _table_exists(conn, "iva_cierres_asientos_propuestos"):
+            columnas_iva = _columns(conn, "iva_cierres_asientos_propuestos")
+            col_empresa = _first_existing(columnas_iva, ("empresa_id", "id_empresa"))
+            col_estado = _first_existing(columnas_iva, ("estado", "estado_asiento"))
+            col_codigo = _first_existing(columnas_iva, ("cuenta_codigo", "codigo_cuenta"))
+            col_nombre = _first_existing(columnas_iva, ("cuenta_nombre", "nombre_cuenta"))
+            if col_codigo:
+                where = []
+                params: list[Any] = []
+                if empresa_id is not None and col_empresa:
+                    where.append(f"{col_empresa} = ?")
+                    params.append(empresa_id)
+                if col_estado:
+                    where.append(f"COALESCE({col_estado}, '') NOT IN ('ANULADO', 'RECHAZADO')")
+                sql = "SELECT rowid AS __rowid__, * FROM iva_cierres_asientos_propuestos"
+                if where:
+                    sql += " WHERE " + " AND ".join(where)
+                sql += " ORDER BY __rowid__ DESC LIMIT ?"
+                params.append(limite_revision)
+                iva_credito_sin_mapeo = []
+                iva_debito_sin_mapeo = []
+                for row in _fetch_dicts(conn, sql, tuple(params)):
+                    codigo = row.get(col_codigo)
+                    nombre = row.get(col_nombre) if col_nombre else ""
+                    nombre_norm = normalizar_codigo(nombre)
+                    if "IVA" not in nombre_norm:
+                        continue
+                    if "CREDITO" in nombre_norm and not _cuenta_tiene_comportamiento(mapa, codigo, "IVA_CREDITO", nombre):
+                        iva_credito_sin_mapeo.append(_descripcion_cuenta(codigo, nombre))
+                    if ("DEBITO" in nombre_norm or "PAGAR" in nombre_norm) and not _cuenta_tiene_comportamiento(mapa, codigo, "IVA_DEBITO", nombre):
+                        iva_debito_sin_mapeo.append(_descripcion_cuenta(codigo, nombre))
+                if iva_credito_sin_mapeo:
+                    resultados.append(
+                        diagnostico(
+                            "IVA",
+                            SEVERIDAD_ADVERTENCIA,
+                            "IVA_CUENTA_CREDITO_SIN_COMPORTAMIENTO",
+                            "Hay cuentas de IVA crédito usadas sin comportamiento IVA crédito",
+                            "Cuentas afectadas: " + "; ".join(sorted(set(iva_credito_sin_mapeo))[:15]) + ".",
+                        )
+                    )
+                if iva_debito_sin_mapeo:
+                    resultados.append(
+                        diagnostico(
+                            "IVA",
+                            SEVERIDAD_ADVERTENCIA,
+                            "IVA_CUENTA_DEBITO_SIN_COMPORTAMIENTO",
+                            "Hay cuentas de IVA débito o IVA a pagar usadas sin comportamiento IVA débito",
+                            "Cuentas afectadas: " + "; ".join(sorted(set(iva_debito_sin_mapeo))[:15]) + ".",
+                        )
+                    )
+
+        if not resultados:
+            resultados.append(
+                diagnostico(
+                    "Comportamientos contables",
+                    SEVERIDAD_OK,
+                    "COMPORTAMIENTOS_OPERATIVOS_OK",
+                    "Comportamientos contables coherentes con las áreas operativas revisadas",
+                    "Tesorería, IVA y Capital no presentan desvíos de comportamiento contable en la muestra analizada.",
+                )
+            )
+
+        return [item.as_dict() for item in resultados]
+    finally:
+        if propia:
+            conn.close()
+
 def diagnosticar_nucleo_coherencia(
     empresa_id: int | None = None,
     conn: sqlite3.Connection | None = None,
@@ -768,6 +1179,7 @@ def diagnosticar_nucleo_coherencia(
         diagnosticos: list[dict[str, Any]] = []
         diagnosticos.extend(diagnosticar_ejercicios_contables(empresa_id=empresa_id, conn=conn))
         diagnosticos.extend(diagnosticar_plan_cuentas(empresa_id=empresa_id, conn=conn))
+        diagnosticos.extend(diagnosticar_comportamientos_configurados(empresa_id=empresa_id, conn=conn))
         diagnosticos.extend(diagnosticar_inicio_contable_capital(empresa_id=empresa_id, conn=conn))
         diagnosticos.extend(diagnosticar_libro_diario(empresa_id=empresa_id, conn=conn))
         diagnosticos.sort(key=lambda item: (severidad_orden(item.get("severidad", "")), item.get("area", ""), item.get("codigo", "")))
