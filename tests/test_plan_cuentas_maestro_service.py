@@ -77,6 +77,7 @@ def _crear_plan_actual_minimo(conn):
         ("1.2.01", "DEUDORES POR VENTAS", 1, "CLIENTES", 0, 1, "VENTAS", "S", "N", "A", "1.2", 3, 70),
         ("1.3.01", "IVA CREDITO FISCAL", 1, "IVA_CREDITO", 0, 1, "IVA", "S", "N", "A", "1.3", 3, 90),
         ("2.1.01", "PROVEEDORES", 1, "PROVEEDORES", 0, 1, "COMPRAS", "S", "N", "P", "2.1", 3, 320),
+        ("3.1.01", "CAPITAL SOCIAL", 1, "CAPITAL_SOCIAL", 0, 1, "CONTABILIDAD", "S", "N", "PN", "3.1", 3, 500),
         ("6.1.01", "COMPRAS / MERCADERIAS", 1, None, 0, 1, "COMPRAS", "S", "N", "R", "6.1", 3, 900),
     ]
 
@@ -145,6 +146,7 @@ def test_mapear_comportamiento_viejo_a_uso_operativo_nuevo():
     assert uso_operativo_desde_comportamiento("BANCO", conn=conn) == "BANCO_CUENTA_CORRIENTE"
     assert uso_operativo_desde_comportamiento("IVA_CREDITO", conn=conn) == "IVA_CREDITO_FISCAL"
     assert uso_operativo_desde_comportamiento("PROVEEDORES", conn=conn) == "PROVEEDORES_CC"
+    assert uso_operativo_desde_comportamiento("CAPITAL_SOCIAL", conn=conn) == "CAPITAL_SOCIAL"
 
 
 def test_migrar_plan_actual_a_plan_empresa_sin_borrar_plan_viejo():
@@ -211,6 +213,46 @@ def test_migrar_configuracion_contable_actual_copia_categorias_y_conceptos():
     assert "IVA_CREDITO_FISCAL" in usos_mapeados
 
 
+def test_migracion_logica_es_idempotente_y_no_duplica_configuraciones():
+    conn = _conn()
+    _crear_plan_actual_minimo(conn)
+    aplicar_migracion_021(conn=conn)
+
+    primera = migrar_configuracion_contable_actual(
+        empresa_id=1,
+        usuario="pytest",
+        conn=conn,
+    )
+    segunda = migrar_configuracion_contable_actual(
+        empresa_id=1,
+        usuario="pytest",
+        conn=conn,
+    )
+
+    assert primera["ok"] is True
+    assert segunda["ok"] is True
+
+    categorias = conn.execute("SELECT COUNT(*) FROM categorias_compra_config").fetchone()[0]
+    conceptos = conn.execute("SELECT COUNT(*) FROM conceptos_fiscales_compra_config").fetchone()[0]
+
+    assert categorias == 2
+    assert conceptos == 3
+    assert segunda["categorias"]["migradas"] == 0
+    assert segunda["categorias"]["actualizadas"] == 2
+    assert segunda["conceptos_fiscales"]["migrados"] == 0
+    assert segunda["conceptos_fiscales"]["actualizados"] == 3
+
+    plan_empresa = conn.execute(
+        "SELECT COUNT(*) FROM plan_cuentas_empresa WHERE empresa_id = 1"
+    ).fetchone()[0]
+    assert plan_empresa >= 9
+
+    mapeos = listar_mapeos_empresa(empresa_id=1, conn=conn)
+    usos_mapeados = {item["uso_operativo_codigo"] for item in mapeos}
+    assert "CAPITAL_SOCIAL" in usos_mapeados
+
+
+
 def test_listados_base_tienen_usos_y_eventos():
     conn = _conn()
     aplicar_migracion_021(conn=conn)
@@ -223,5 +265,6 @@ def test_listados_base_tienen_usos_y_eventos():
 
     assert "CAJA_GENERAL" in codigos_usos
     assert "PROVEEDORES_CC" in codigos_usos
+    assert "CAPITAL_SOCIAL" in codigos_usos
     assert "COMPRA_FACTURA_GRAVADA" in codigos_eventos
     assert "IVA_CIERRE_MENSUAL" in codigos_eventos

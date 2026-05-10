@@ -48,6 +48,52 @@ MAPEO_COMPORTAMIENTOS_DEFAULT = {
 }
 
 
+USOS_OPERATIVOS_COMPLEMENTARIOS = [
+    {
+        "codigo": "CAPITAL_SOCIAL",
+        "nombre": "Capital social",
+        "descripcion": "Cuenta patrimonial para capital suscripto/integrado según corresponda.",
+        "tipo_uso": "PATRIMONIO_NETO",
+        "modulo_sugerido": "Contabilidad",
+        "requiere_cuenta_imputable": 1,
+        "permite_multiples_cuentas_por_empresa": 0,
+        "visible_en_ui": 0,
+    },
+    {
+        "codigo": "RESULTADOS_NO_ASIGNADOS",
+        "nombre": "Resultados no asignados",
+        "descripcion": "Cuenta patrimonial para resultados acumulados pendientes de asignación.",
+        "tipo_uso": "PATRIMONIO_NETO",
+        "modulo_sugerido": "Contabilidad",
+        "requiere_cuenta_imputable": 1,
+        "permite_multiples_cuentas_por_empresa": 0,
+        "visible_en_ui": 0,
+    },
+    {
+        "codigo": "RESERVA_LEGAL",
+        "nombre": "Reserva legal",
+        "descripcion": "Reserva legal dentro del patrimonio neto.",
+        "tipo_uso": "PATRIMONIO_NETO",
+        "modulo_sugerido": "Contabilidad",
+        "requiere_cuenta_imputable": 1,
+        "permite_multiples_cuentas_por_empresa": 0,
+        "visible_en_ui": 0,
+    },
+    {
+        "codigo": "AJUSTES_CAPITAL",
+        "nombre": "Ajustes de capital",
+        "descripcion": "Ajustes de capital dentro del patrimonio neto.",
+        "tipo_uso": "PATRIMONIO_NETO",
+        "modulo_sugerido": "Contabilidad",
+        "requiere_cuenta_imputable": 1,
+        "permite_multiples_cuentas_por_empresa": 0,
+        "visible_en_ui": 0,
+    },
+]
+
+
+
+
 def _conectar_default() -> sqlite3.Connection:
     from database import conectar
 
@@ -191,9 +237,64 @@ def aplicar_migracion_021(
 
 
 def asegurar_estructura_maestro(conn: sqlite3.Connection | None = None) -> None:
+    """
+    Asegura que la estructura nueva exista y completa usos críticos
+    que pueden haber quedado fuera de la migración inicial.
+
+    Es idempotente: puede llamarse muchas veces sin duplicar datos.
+    """
     resultado = aplicar_migracion_021(conn=conn)
     if not resultado.get("ok"):
         raise RuntimeError(resultado.get("error", "No se pudo asegurar estructura del Plan Maestro FF."))
+
+    propia = conn is None
+    conn = conn or _conectar_default()
+    _asegurar_row_factory(conn)
+
+    try:
+        _asegurar_usos_operativos_complementarios(conn)
+        if propia:
+            conn.commit()
+    finally:
+        if propia:
+            conn.close()
+
+
+def _asegurar_usos_operativos_complementarios(conn: sqlite3.Connection) -> None:
+    if not _tabla_existe(conn, "usos_operativos_contables"):
+        return
+
+    for uso in USOS_OPERATIVOS_COMPLEMENTARIOS:
+        conn.execute(
+            """
+            INSERT INTO usos_operativos_contables
+            (codigo, nombre, descripcion, tipo_uso, modulo_sugerido,
+             requiere_cuenta_imputable, permite_multiples_cuentas_por_empresa,
+             visible_en_ui, activo)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+            ON CONFLICT(codigo) DO UPDATE SET
+                nombre = excluded.nombre,
+                descripcion = excluded.descripcion,
+                tipo_uso = excluded.tipo_uso,
+                modulo_sugerido = excluded.modulo_sugerido,
+                requiere_cuenta_imputable = excluded.requiere_cuenta_imputable,
+                permite_multiples_cuentas_por_empresa = excluded.permite_multiples_cuentas_por_empresa,
+                visible_en_ui = excluded.visible_en_ui,
+                activo = 1,
+                actualizado_en = CURRENT_TIMESTAMP
+            """,
+            (
+                uso["codigo"],
+                uso["nombre"],
+                uso["descripcion"],
+                uso["tipo_uso"],
+                uso["modulo_sugerido"],
+                int(uso["requiere_cuenta_imputable"]),
+                int(uso["permite_multiples_cuentas_por_empresa"]),
+                int(uso["visible_en_ui"]),
+            ),
+        )
+
 
 
 def validar_estructura_maestro(conn: sqlite3.Connection | None = None) -> dict[str, Any]:
@@ -1092,6 +1193,12 @@ def migrar_categorias_compra_actuales(
     motivo: str = "Migración desde categorias_compra hacia categorias_compra_config",
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
+    """
+    Migra categorías actuales hacia la configuración nueva.
+
+    Es idempotente: si se ejecuta más de una vez, actualiza la categoría
+    activa existente para la misma empresa/categoría en lugar de duplicarla.
+    """
     propia = conn is None
     conn = conn or _conectar_default()
     _asegurar_row_factory(conn)
@@ -1100,7 +1207,7 @@ def migrar_categorias_compra_actuales(
         asegurar_estructura_maestro(conn)
 
         if not _tabla_existe(conn, "categorias_compra"):
-            return {"ok": True, "migradas": 0, "mensaje": "No existe categorias_compra."}
+            return {"ok": True, "migradas": 0, "actualizadas": 0, "mensaje": "No existe categorias_compra."}
 
         columnas = _columnas(conn, "categorias_compra")
         where = "WHERE COALESCE(empresa_id, 1) = ?" if "empresa_id" in columnas else ""
@@ -1118,6 +1225,7 @@ def migrar_categorias_compra_actuales(
         )
 
         migradas = 0
+        actualizadas = 0
 
         for fila in filas:
             categoria = _limpiar(fila.get("categoria"))
@@ -1139,46 +1247,123 @@ def migrar_categorias_compra_actuales(
 
             tratamiento = _tratamiento_categoria(tipo_categoria, categoria)
 
-            conn.execute(
+            payload = {
+                "empresa_id": empresa_id,
+                "categoria": categoria,
+                "descripcion": categoria,
+                "tipo_categoria": tipo_categoria,
+                "tratamiento_contable": tratamiento,
+                "uso_operativo_principal_id": uso_principal_id,
+                "uso_operativo_contrapartida_id": uso_contrapartida_id,
+                "cuenta_sugerida_id": cuenta_sugerida_id,
+                "cuenta_contrapartida_sugerida_id": cuenta_contrapartida_id,
+                "requiere_revision": 1 if tipo_categoria in {"REVISION", "ESPECIAL"} else 0,
+                "afecta_inventario": 1 if tipo_categoria in {"BIENES_CAMBIO", "IMPORTACION"} else 0,
+                "afecta_bienes_uso": 1 if tipo_categoria == "BIENES_USO" else 0,
+                "afecta_resultado": 1 if tipo_categoria not in {"BIENES_USO", "BIENES_CAMBIO"} else 0,
+            }
+
+            existente = conn.execute(
                 """
-                INSERT INTO categorias_compra_config
-                (empresa_id, categoria, descripcion, tipo_categoria, tratamiento_contable,
-                 uso_operativo_principal_id, uso_operativo_contrapartida_id,
-                 cuenta_sugerida_id, cuenta_contrapartida_sugerida_id,
-                 requiere_auxiliar, requiere_revision, afecta_inventario,
-                 afecta_bienes_uso, afecta_resultado, afecta_iva,
-                 estado, vigencia_desde, motivo_estado, usuario_ultima_modificacion,
-                 fecha_ultima_modificacion)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 1,
-                        'ACTIVA', NULL, ?, ?, CURRENT_TIMESTAMP)
+                SELECT *
+                FROM categorias_compra_config
+                WHERE empresa_id = ?
+                  AND categoria = ?
+                  AND estado <> 'ANULADA'
+                ORDER BY id
+                LIMIT 1
                 """,
-                (
-                    empresa_id,
-                    categoria,
-                    categoria,
-                    tipo_categoria,
-                    tratamiento,
-                    uso_principal_id,
-                    uso_contrapartida_id,
-                    cuenta_sugerida_id,
-                    cuenta_contrapartida_id,
-                    1 if tipo_categoria in {"REVISION", "ESPECIAL"} else 0,
-                    1 if tipo_categoria in {"BIENES_CAMBIO", "IMPORTACION"} else 0,
-                    1 if tipo_categoria == "BIENES_USO" else 0,
-                    1 if tipo_categoria not in {"BIENES_USO", "BIENES_CAMBIO"} else 0,
-                    motivo,
-                    usuario,
-                ),
-            )
-            entidad_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
-            migradas += 1
+                (empresa_id, categoria),
+            ).fetchone()
+
+            if existente:
+                entidad_id = int(existente["id"])
+                conn.execute(
+                    """
+                    UPDATE categorias_compra_config
+                       SET descripcion = ?,
+                           tipo_categoria = ?,
+                           tratamiento_contable = ?,
+                           uso_operativo_principal_id = ?,
+                           uso_operativo_contrapartida_id = ?,
+                           cuenta_sugerida_id = ?,
+                           cuenta_contrapartida_sugerida_id = ?,
+                           requiere_auxiliar = 0,
+                           requiere_revision = ?,
+                           afecta_inventario = ?,
+                           afecta_bienes_uso = ?,
+                           afecta_resultado = ?,
+                           afecta_iva = 1,
+                           estado = 'ACTIVA',
+                           motivo_estado = ?,
+                           usuario_ultima_modificacion = ?,
+                           fecha_ultima_modificacion = CURRENT_TIMESTAMP,
+                           actualizado_en = CURRENT_TIMESTAMP
+                     WHERE id = ?
+                    """,
+                    (
+                        payload["descripcion"],
+                        payload["tipo_categoria"],
+                        payload["tratamiento_contable"],
+                        payload["uso_operativo_principal_id"],
+                        payload["uso_operativo_contrapartida_id"],
+                        payload["cuenta_sugerida_id"],
+                        payload["cuenta_contrapartida_sugerida_id"],
+                        payload["requiere_revision"],
+                        payload["afecta_inventario"],
+                        payload["afecta_bienes_uso"],
+                        payload["afecta_resultado"],
+                        motivo,
+                        usuario,
+                        entidad_id,
+                    ),
+                )
+                actualizadas += 1
+                evento = "CATEGORIA_COMPRA_ACTUALIZADA_MIGRACION"
+                valor_anterior = dict(existente)
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO categorias_compra_config
+                    (empresa_id, categoria, descripcion, tipo_categoria, tratamiento_contable,
+                     uso_operativo_principal_id, uso_operativo_contrapartida_id,
+                     cuenta_sugerida_id, cuenta_contrapartida_sugerida_id,
+                     requiere_auxiliar, requiere_revision, afecta_inventario,
+                     afecta_bienes_uso, afecta_resultado, afecta_iva,
+                     estado, vigencia_desde, motivo_estado, usuario_ultima_modificacion,
+                     fecha_ultima_modificacion)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 1,
+                            'ACTIVA', NULL, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (
+                        empresa_id,
+                        categoria,
+                        payload["descripcion"],
+                        payload["tipo_categoria"],
+                        payload["tratamiento_contable"],
+                        payload["uso_operativo_principal_id"],
+                        payload["uso_operativo_contrapartida_id"],
+                        payload["cuenta_sugerida_id"],
+                        payload["cuenta_contrapartida_sugerida_id"],
+                        payload["requiere_revision"],
+                        payload["afecta_inventario"],
+                        payload["afecta_bienes_uso"],
+                        payload["afecta_resultado"],
+                        motivo,
+                        usuario,
+                    ),
+                )
+                entidad_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+                migradas += 1
+                evento = "CATEGORIA_COMPRA_MIGRADA"
+                valor_anterior = dict(fila)
 
             registrar_auditoria_configuracion(
                 empresa_id=empresa_id,
                 entidad="categorias_compra_config",
                 entidad_id=entidad_id,
-                evento="CATEGORIA_COMPRA_MIGRADA",
-                valor_anterior=dict(fila),
+                evento=evento,
+                valor_anterior=valor_anterior,
                 valor_nuevo={
                     "categoria": categoria,
                     "uso_operativo_principal": uso_principal,
@@ -1196,6 +1381,7 @@ def migrar_categorias_compra_actuales(
             "ok": True,
             "detectadas": len(filas),
             "migradas": migradas,
+            "actualizadas": actualizadas,
         }
     except Exception as exc:
         if propia:
@@ -1306,6 +1492,12 @@ def migrar_conceptos_fiscales_compra_actuales(
     motivo: str = "Migración desde conceptos_fiscales_compra hacia conceptos_fiscales_compra_config",
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
+    """
+    Migra conceptos fiscales actuales hacia la configuración nueva.
+
+    Es idempotente: si se ejecuta más de una vez, actualiza el concepto
+    activo existente para la misma empresa/concepto en lugar de duplicarlo.
+    """
     propia = conn is None
     conn = conn or _conectar_default()
     _asegurar_row_factory(conn)
@@ -1314,7 +1506,7 @@ def migrar_conceptos_fiscales_compra_actuales(
         asegurar_estructura_maestro(conn)
 
         if not _tabla_existe(conn, "conceptos_fiscales_compra"):
-            return {"ok": True, "migrados": 0, "mensaje": "No existe conceptos_fiscales_compra."}
+            return {"ok": True, "migrados": 0, "actualizados": 0, "mensaje": "No existe conceptos_fiscales_compra."}
 
         columnas = _columnas(conn, "conceptos_fiscales_compra")
         where = "WHERE COALESCE(empresa_id, 1) = ?" if "empresa_id" in columnas else ""
@@ -1332,6 +1524,7 @@ def migrar_conceptos_fiscales_compra_actuales(
         )
 
         migrados = 0
+        actualizados = 0
 
         for fila in filas:
             concepto = _limpiar(fila.get("concepto"))
@@ -1346,44 +1539,105 @@ def migrar_conceptos_fiscales_compra_actuales(
 
             flags = _flags_fiscales(concepto, tratamiento)
 
-            conn.execute(
+            existente = conn.execute(
                 """
-                INSERT INTO conceptos_fiscales_compra_config
-                (empresa_id, concepto, descripcion, tratamiento_fiscal, uso_operativo_id,
-                 cuenta_sugerida_id, afecta_iva, afecta_iibb, afecta_ganancias,
-                 computable, mayor_costo, informativo, requiere_periodo_fiscal,
-                 permite_diferir_periodo, estado, vigencia_desde, motivo_estado,
-                 usuario_ultima_modificacion, fecha_ultima_modificacion)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVO', NULL, ?, ?, CURRENT_TIMESTAMP)
+                SELECT *
+                FROM conceptos_fiscales_compra_config
+                WHERE empresa_id = ?
+                  AND concepto = ?
+                  AND estado <> 'ANULADO'
+                ORDER BY id
+                LIMIT 1
                 """,
-                (
-                    empresa_id,
-                    concepto,
-                    concepto,
-                    tratamiento,
-                    uso_id,
-                    cuenta_sugerida_id,
-                    flags["afecta_iva"],
-                    flags["afecta_iibb"],
-                    flags["afecta_ganancias"],
-                    flags["computable"],
-                    flags["mayor_costo"],
-                    flags["informativo"],
-                    flags["requiere_periodo_fiscal"],
-                    flags["permite_diferir_periodo"],
-                    motivo,
-                    usuario,
-                ),
-            )
-            entidad_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
-            migrados += 1
+                (empresa_id, concepto),
+            ).fetchone()
+
+            if existente:
+                entidad_id = int(existente["id"])
+                conn.execute(
+                    """
+                    UPDATE conceptos_fiscales_compra_config
+                       SET descripcion = ?,
+                           tratamiento_fiscal = ?,
+                           uso_operativo_id = ?,
+                           cuenta_sugerida_id = ?,
+                           afecta_iva = ?,
+                           afecta_iibb = ?,
+                           afecta_ganancias = ?,
+                           computable = ?,
+                           mayor_costo = ?,
+                           informativo = ?,
+                           requiere_periodo_fiscal = ?,
+                           permite_diferir_periodo = ?,
+                           estado = 'ACTIVO',
+                           motivo_estado = ?,
+                           usuario_ultima_modificacion = ?,
+                           fecha_ultima_modificacion = CURRENT_TIMESTAMP,
+                           actualizado_en = CURRENT_TIMESTAMP
+                     WHERE id = ?
+                    """,
+                    (
+                        concepto,
+                        tratamiento,
+                        uso_id,
+                        cuenta_sugerida_id,
+                        flags["afecta_iva"],
+                        flags["afecta_iibb"],
+                        flags["afecta_ganancias"],
+                        flags["computable"],
+                        flags["mayor_costo"],
+                        flags["informativo"],
+                        flags["requiere_periodo_fiscal"],
+                        flags["permite_diferir_periodo"],
+                        motivo,
+                        usuario,
+                        entidad_id,
+                    ),
+                )
+                actualizados += 1
+                evento = "CONCEPTO_FISCAL_COMPRA_ACTUALIZADO_MIGRACION"
+                valor_anterior = dict(existente)
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO conceptos_fiscales_compra_config
+                    (empresa_id, concepto, descripcion, tratamiento_fiscal, uso_operativo_id,
+                     cuenta_sugerida_id, afecta_iva, afecta_iibb, afecta_ganancias,
+                     computable, mayor_costo, informativo, requiere_periodo_fiscal,
+                     permite_diferir_periodo, estado, vigencia_desde, motivo_estado,
+                     usuario_ultima_modificacion, fecha_ultima_modificacion)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVO', NULL, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (
+                        empresa_id,
+                        concepto,
+                        concepto,
+                        tratamiento,
+                        uso_id,
+                        cuenta_sugerida_id,
+                        flags["afecta_iva"],
+                        flags["afecta_iibb"],
+                        flags["afecta_ganancias"],
+                        flags["computable"],
+                        flags["mayor_costo"],
+                        flags["informativo"],
+                        flags["requiere_periodo_fiscal"],
+                        flags["permite_diferir_periodo"],
+                        motivo,
+                        usuario,
+                    ),
+                )
+                entidad_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+                migrados += 1
+                evento = "CONCEPTO_FISCAL_COMPRA_MIGRADO"
+                valor_anterior = dict(fila)
 
             registrar_auditoria_configuracion(
                 empresa_id=empresa_id,
                 entidad="conceptos_fiscales_compra_config",
                 entidad_id=entidad_id,
-                evento="CONCEPTO_FISCAL_COMPRA_MIGRADO",
-                valor_anterior=dict(fila),
+                evento=evento,
+                valor_anterior=valor_anterior,
                 valor_nuevo={
                     "concepto": concepto,
                     "uso_operativo": uso_operativo,
@@ -1402,6 +1656,7 @@ def migrar_conceptos_fiscales_compra_actuales(
             "ok": True,
             "detectados": len(filas),
             "migrados": migrados,
+            "actualizados": actualizados,
         }
     except Exception as exc:
         if propia:
