@@ -521,6 +521,8 @@ def diagnosticar_libro_diario(
         col_fecha = _first_existing(columnas, ("fecha", "fecha_asiento", "fecha_contable"))
         col_ejercicio = _first_existing(columnas, ("ejercicio_id", "id_ejercicio"))
         col_origen = _first_existing(columnas, ("origen", "modulo_origen", "tipo_origen"))
+        col_origen_tabla = _first_existing(columnas, ("origen_tabla", "tabla_origen"))
+        col_origen_id = _first_existing(columnas, ("origen_id", "id_origen"))
 
         if not col_fecha:
             return [
@@ -547,6 +549,7 @@ def diagnosticar_libro_diario(
         fechas_invalidas = []
         fechas_fuera_ejercicio = []
         sin_origen = 0
+        trazabilidad_incompleta = 0
         rows = _fetch_dicts(conn, sql, tuple(params))
         for row in rows:
             row_id = row.get(col_id) if col_id != "rowid" else row.get("__rowid__")
@@ -559,6 +562,11 @@ def diagnosticar_libro_diario(
 
             if col_origen and not row.get(col_origen):
                 sin_origen += 1
+            elif col_origen and row.get(col_origen) and (col_origen_tabla or col_origen_id):
+                tiene_origen_tabla = True if not col_origen_tabla else bool(row.get(col_origen_tabla))
+                tiene_origen_id = True if not col_origen_id else row.get(col_origen_id) not in (None, "")
+                if not (tiene_origen_tabla and tiene_origen_id):
+                    trazabilidad_incompleta += 1
 
             if col_ejercicio and row.get(col_ejercicio) and _table_exists(conn, "ejercicios_contables"):
                 ejercicio = _fetch_dicts(
@@ -611,6 +619,17 @@ def diagnosticar_libro_diario(
                     "LIBRO_ASIENTOS_SIN_ORIGEN",
                     "Hay asientos sin origen trazable",
                     f"Se detectaron {sin_origen} asientos sin origen informado dentro de los últimos {len(rows)} revisados.",
+                )
+            )
+
+        if trazabilidad_incompleta:
+            resultados.append(
+                diagnostico(
+                    "Libro Diario",
+                    SEVERIDAD_INFO,
+                    "LIBRO_ASIENTOS_TRAZABILIDAD_INCOMPLETA",
+                    "Hay asientos con trazabilidad incompleta",
+                    f"Se detectaron {trazabilidad_incompleta} asientos con origen informado pero sin origen_tabla u origen_id completo. No bloquea, pero conviene normalizarlo para auditoría y reversos controlados.",
                 )
             )
 
@@ -1155,6 +1174,399 @@ def diagnosticar_comportamientos_configurados(
         if propia:
             conn.close()
 
+
+def _es_imputable_valor(valor: Any, default: bool = True) -> bool:
+    if valor is None:
+        return default
+    if isinstance(valor, bool):
+        return valor
+    if isinstance(valor, (int, float)):
+        return int(valor) != 0
+    texto = str(valor).strip().upper()
+    if texto in {"S", "SI", "SÍ", "1", "TRUE", "VERDADERO", "IMPUTABLE"}:
+        return True
+    if texto in {"N", "NO", "0", "FALSE", "FALSO", "NO_IMPUTABLE", "AGRUPADORA"}:
+        return False
+    return default
+
+
+def _lista_resumida(items: list[str], limite: int = 15) -> str:
+    unicos = []
+    vistos = set()
+    for item in items:
+        texto = str(item or "").strip()
+        if not texto or texto in vistos:
+            continue
+        vistos.add(texto)
+        unicos.append(texto)
+
+    if not unicos:
+        return ""
+
+    visibles = unicos[:limite]
+    texto = "; ".join(visibles)
+    restantes = len(unicos) - len(visibles)
+    if restantes > 0:
+        texto += f"; y {restantes} más"
+    return texto
+
+
+def _agregar_cuenta_lookup(
+    lookup_codigo: dict[str, dict[str, Any]],
+    lookup_nombre: dict[str, dict[str, Any]],
+    codigo: Any,
+    nombre: Any,
+    imputable: Any = True,
+    fuente: str = "",
+) -> None:
+    codigo_txt = _clave_cuenta(codigo)
+    nombre_txt = str(nombre or "").strip()
+    info = {
+        "codigo": codigo_txt,
+        "nombre": nombre_txt,
+        "imputable": _es_imputable_valor(imputable, True),
+        "fuente": fuente,
+    }
+
+    if codigo_txt:
+        for clave in _claves_busqueda_cuenta(codigo_txt):
+            lookup_codigo[clave] = info
+
+    if nombre_txt:
+        lookup_nombre[normalizar_codigo(nombre_txt)] = info
+
+
+def _lookup_cuentas_contables(conn: sqlite3.Connection, empresa_id: int | None = None) -> dict[str, Any]:
+    lookup_codigo: dict[str, dict[str, Any]] = {}
+    lookup_nombre: dict[str, dict[str, Any]] = {}
+
+    if _table_exists(conn, "plan_cuentas_empresa"):
+        columnas = _columns(conn, "plan_cuentas_empresa")
+        where = []
+        params: list[Any] = []
+
+        if empresa_id is not None and "empresa_id" in columnas:
+            where.append("empresa_id = ?")
+            params.append(empresa_id)
+
+        if "estado" in columnas:
+            where.append("COALESCE(estado, 'ACTIVA') NOT IN ('ANULADO', 'ANULADA', 'INACTIVO', 'INACTIVA', 'BAJA', 'ELIMINADO', 'ELIMINADA')")
+
+        sql = "SELECT * FROM plan_cuentas_empresa"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+
+        for row in _fetch_dicts(conn, sql, tuple(params)):
+            _agregar_cuenta_lookup(
+                lookup_codigo,
+                lookup_nombre,
+                row.get("codigo"),
+                row.get("nombre"),
+                row.get("imputable", 1),
+                "plan_cuentas_empresa",
+            )
+
+    if _table_exists(conn, "plan_cuentas_detallado"):
+        columnas = _columns(conn, "plan_cuentas_detallado")
+        col_empresa = _first_existing(columnas, ("empresa_id", "id_empresa"))
+        where = []
+        params = []
+        if empresa_id is not None and col_empresa:
+            where.append(f"{col_empresa} = ?")
+            params.append(empresa_id)
+
+        sql = "SELECT * FROM plan_cuentas_detallado"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+
+        for row in _fetch_dicts(conn, sql, tuple(params)):
+            _agregar_cuenta_lookup(
+                lookup_codigo,
+                lookup_nombre,
+                row.get("cuenta"),
+                row.get("detalle"),
+                row.get("imputable", "S"),
+                "plan_cuentas_detallado",
+            )
+
+    if _table_exists(conn, "plan_cuentas"):
+        columnas = _columns(conn, "plan_cuentas")
+        col_empresa = _first_existing(columnas, ("empresa_id", "id_empresa"))
+        where = []
+        params = []
+        if empresa_id is not None and col_empresa:
+            where.append(f"{col_empresa} = ?")
+            params.append(empresa_id)
+
+        sql = "SELECT * FROM plan_cuentas"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+
+        for row in _fetch_dicts(conn, sql, tuple(params)):
+            _agregar_cuenta_lookup(
+                lookup_codigo,
+                lookup_nombre,
+                row.get("codigo"),
+                row.get("nombre"),
+                row.get("imputable", 1),
+                "plan_cuentas",
+            )
+
+    return {
+        "por_codigo": lookup_codigo,
+        "por_nombre": lookup_nombre,
+    }
+
+
+def _buscar_cuenta_lookup(mapa: dict[str, Any], codigo: Any, nombre: Any = None) -> dict[str, Any] | None:
+    por_codigo: dict[str, dict[str, Any]] = mapa.get("por_codigo", {})
+    for clave in _claves_busqueda_cuenta(codigo):
+        if clave in por_codigo:
+            return por_codigo[clave]
+
+    nombre_txt = str(nombre or "").strip()
+    if nombre_txt:
+        return mapa.get("por_nombre", {}).get(normalizar_codigo(nombre_txt))
+
+    return None
+
+
+def diagnosticar_vinculacion_plan_maestro(
+    empresa_id: int | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Controla que las cuentas operativas de la empresa apunten al Plan Maestro FF.
+
+    No modifica cuentas. Solo informa cuentas heredadas, sin vínculo o con vínculo
+    inconsistente para que se corrijan desde Configuración → Plan de Cuentas.
+    """
+    propia = conn is None
+    conn = conn or _conectar_default()
+    _asegurar_row_factory(conn)
+    resultados: list[DiagnosticoCoherencia] = []
+
+    try:
+        if not _table_exists(conn, "plan_cuentas_empresa") or not _table_exists(conn, "plan_cuentas_maestro"):
+            return []
+
+        columnas_empresa = _columns(conn, "plan_cuentas_empresa")
+        columnas_maestro = _columns(conn, "plan_cuentas_maestro")
+
+        requeridas_empresa = {"codigo", "nombre", "cuenta_maestro_id"}
+        requeridas_maestro = {"id", "codigo", "nombre"}
+
+        if not requeridas_empresa.issubset(columnas_empresa) or not requeridas_maestro.issubset(columnas_maestro):
+            return []
+
+        where = []
+        params: list[Any] = []
+
+        if empresa_id is not None and "empresa_id" in columnas_empresa:
+            where.append("e.empresa_id = ?")
+            params.append(empresa_id)
+
+        if "estado" in columnas_empresa:
+            where.append("COALESCE(e.estado, 'ACTIVA') NOT IN ('ANULADO', 'ANULADA', 'INACTIVO', 'INACTIVA', 'BAJA', 'ELIMINADO', 'ELIMINADA')")
+
+        sql = """
+            SELECT
+                e.id AS cuenta_empresa_id,
+                e.codigo AS codigo_empresa,
+                e.nombre AS nombre_empresa,
+                e.cuenta_maestro_id,
+                e.imputable,
+                e.estado,
+                m_id.id AS maestro_id_vinculado,
+                m_id.codigo AS codigo_maestro_vinculado,
+                m_id.nombre AS nombre_maestro_vinculado,
+                m_codigo.id AS maestro_id_por_codigo,
+                m_codigo.nombre AS nombre_maestro_por_codigo
+            FROM plan_cuentas_empresa e
+            LEFT JOIN plan_cuentas_maestro m_id
+              ON m_id.id = e.cuenta_maestro_id
+            LEFT JOIN plan_cuentas_maestro m_codigo
+              ON m_codigo.codigo = e.codigo
+             AND COALESCE(m_codigo.estado, 'ACTIVA') = 'ACTIVA'
+        """
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+
+        filas = _fetch_dicts(conn, sql, tuple(params))
+
+        vinculos_inconsistentes = []
+        heredadas_mismo_codigo = []
+        heredadas_sin_vinculo = []
+
+        for row in filas:
+            descripcion = _descripcion_cuenta(row.get("codigo_empresa"), row.get("nombre_empresa"))
+            cuenta_maestro_id = row.get("cuenta_maestro_id")
+
+            if cuenta_maestro_id and not row.get("maestro_id_vinculado"):
+                vinculos_inconsistentes.append(descripcion)
+            elif not cuenta_maestro_id and row.get("maestro_id_por_codigo"):
+                heredadas_mismo_codigo.append(
+                    f"{descripcion} coincide con {row.get('nombre_maestro_por_codigo')}"
+                )
+            elif not cuenta_maestro_id and not row.get("maestro_id_por_codigo"):
+                heredadas_sin_vinculo.append(descripcion)
+
+        if vinculos_inconsistentes:
+            resultados.append(
+                diagnostico(
+                    "Plan de cuentas",
+                    SEVERIDAD_ERROR,
+                    "PLAN_CUENTAS_EMPRESA_VINCULO_INCONSISTENTE",
+                    "Hay cuentas vinculadas a una cuenta maestra inexistente",
+                    "Cuentas afectadas: " + _lista_resumida(vinculos_inconsistentes) + ". Revise el vínculo desde Configuración → Plan de Cuentas.",
+                    "plan_cuentas_empresa",
+                )
+            )
+
+        if heredadas_mismo_codigo:
+            resultados.append(
+                diagnostico(
+                    "Plan de cuentas",
+                    SEVERIDAD_ADVERTENCIA,
+                    "PLAN_CUENTAS_EMPRESA_HEREDADAS_PENDIENTES",
+                    "Hay cuentas heredadas pendientes de vincular al Plan Maestro",
+                    "Cuentas afectadas: " + _lista_resumida(heredadas_mismo_codigo) + ". Deben vincularse al Plan Maestro FF para dejar de operar como heredadas.",
+                    "plan_cuentas_empresa",
+                )
+            )
+
+        if heredadas_sin_vinculo:
+            resultados.append(
+                diagnostico(
+                    "Plan de cuentas",
+                    SEVERIDAD_ADVERTENCIA,
+                    "PLAN_CUENTAS_EMPRESA_SIN_VINCULO_MAESTRO",
+                    "Hay cuentas de empresa sin vínculo con el Plan Maestro",
+                    "Cuentas afectadas: " + _lista_resumida(heredadas_sin_vinculo) + ". Revise si corresponde vincularlas, reemplazarlas por una cuenta creada desde modelo o mantenerlas solo por compatibilidad.",
+                    "plan_cuentas_empresa",
+                )
+            )
+
+        return [item.as_dict() for item in resultados]
+    finally:
+        if propia:
+            conn.close()
+
+
+def diagnosticar_asientos_propuestos_plan_cuentas(
+    empresa_id: int | None = None,
+    conn: sqlite3.Connection | None = None,
+    limite_revision: int = 5000,
+) -> list[dict[str, Any]]:
+    """
+    Controla las cuentas usadas en la Bandeja de asientos propuestos.
+
+    Esta validación es más confiable que revisar Libro Diario por código porque
+    asientos_propuestos_detalle sí guarda cuenta_codigo y cuenta_nombre.
+    """
+    propia = conn is None
+    conn = conn or _conectar_default()
+    _asegurar_row_factory(conn)
+    resultados: list[DiagnosticoCoherencia] = []
+
+    try:
+        if not _table_exists(conn, "asientos_propuestos") or not _table_exists(conn, "asientos_propuestos_detalle"):
+            return []
+
+        mapa_cuentas = _lookup_cuentas_contables(conn, empresa_id=empresa_id)
+
+        if not mapa_cuentas.get("por_codigo") and not mapa_cuentas.get("por_nombre"):
+            return []
+
+        columnas_asientos = _columns(conn, "asientos_propuestos")
+        where = ["COALESCE(a.estado, '') NOT IN ('ANULADO', 'RECHAZADO', 'REVERTIDO')"]
+        params: list[Any] = []
+
+        if empresa_id is not None and "empresa_id" in columnas_asientos:
+            where.append("a.empresa_id = ?")
+            params.append(empresa_id)
+
+        sql = """
+            SELECT
+                a.id AS asiento_propuesto_id,
+                a.estado AS estado_asiento,
+                d.id AS detalle_id,
+                d.renglon,
+                d.cuenta_codigo,
+                d.cuenta_nombre
+            FROM asientos_propuestos_detalle d
+            JOIN asientos_propuestos a
+              ON a.id = d.asiento_propuesto_id
+        """
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY a.id DESC, d.renglon ASC LIMIT ?"
+        params.append(limite_revision)
+
+        cuentas_no_reconocidas = []
+        cuentas_no_imputables = []
+        lineas_sin_codigo = []
+
+        for row in _fetch_dicts(conn, sql, tuple(params)):
+            codigo = row.get("cuenta_codigo")
+            nombre = row.get("cuenta_nombre")
+            descripcion = f"Propuesta {row.get('asiento_propuesto_id')} renglón {row.get('renglon')}: {_descripcion_cuenta(codigo, nombre)}"
+
+            cuenta = _buscar_cuenta_lookup(mapa_cuentas, codigo, nombre)
+
+            if not _clave_cuenta(codigo):
+                lineas_sin_codigo.append(descripcion)
+                if cuenta:
+                    continue
+
+            if not cuenta:
+                cuentas_no_reconocidas.append(descripcion)
+                continue
+
+            if not cuenta.get("imputable", True):
+                cuentas_no_imputables.append(descripcion)
+
+        if cuentas_no_reconocidas:
+            resultados.append(
+                diagnostico(
+                    "Bandeja de asientos",
+                    SEVERIDAD_ERROR,
+                    "ASIENTOS_PROPUESTOS_CUENTA_NO_RECONOCIDA",
+                    "Hay propuestas contables con cuentas no reconocidas en el Plan de Cuentas",
+                    "Revise: " + _lista_resumida(cuentas_no_reconocidas) + ". No conviene contabilizar propuestas con cuentas inexistentes o no vinculadas.",
+                    "asientos_propuestos_detalle",
+                )
+            )
+
+        if cuentas_no_imputables:
+            resultados.append(
+                diagnostico(
+                    "Bandeja de asientos",
+                    SEVERIDAD_ERROR,
+                    "ASIENTOS_PROPUESTOS_CUENTA_NO_IMPUTABLE",
+                    "Hay propuestas contables usando cuentas no imputables",
+                    "Revise: " + _lista_resumida(cuentas_no_imputables) + ". Una cuenta agrupadora/no imputable no debería recibir movimientos.",
+                    "asientos_propuestos_detalle",
+                )
+            )
+
+        if lineas_sin_codigo:
+            resultados.append(
+                diagnostico(
+                    "Bandeja de asientos",
+                    SEVERIDAD_ADVERTENCIA,
+                    "ASIENTOS_PROPUESTOS_LINEA_SIN_CODIGO_CUENTA",
+                    "Hay líneas de propuestas sin código de cuenta",
+                    "Revise: " + _lista_resumida(lineas_sin_codigo) + ". Para controles futuros de saldo normal y trazabilidad conviene que cada línea tenga código.",
+                    "asientos_propuestos_detalle",
+                )
+            )
+
+        return [item.as_dict() for item in resultados]
+    finally:
+        if propia:
+            conn.close()
+
 def diagnosticar_nucleo_coherencia(
     empresa_id: int | None = None,
     conn: sqlite3.Connection | None = None,
@@ -1168,6 +1580,8 @@ def diagnosticar_nucleo_coherencia(
         diagnosticos: list[dict[str, Any]] = []
         diagnosticos.extend(diagnosticar_ejercicios_contables(empresa_id=empresa_id, conn=conn))
         diagnosticos.extend(diagnosticar_plan_cuentas(empresa_id=empresa_id, conn=conn))
+        diagnosticos.extend(diagnosticar_vinculacion_plan_maestro(empresa_id=empresa_id, conn=conn))
+        diagnosticos.extend(diagnosticar_asientos_propuestos_plan_cuentas(empresa_id=empresa_id, conn=conn))
         diagnosticos.extend(diagnosticar_comportamientos_configurados(empresa_id=empresa_id, conn=conn))
         diagnosticos.extend(diagnosticar_inicio_contable_capital(empresa_id=empresa_id, conn=conn))
         diagnosticos.extend(diagnosticar_libro_diario(empresa_id=empresa_id, conn=conn))
