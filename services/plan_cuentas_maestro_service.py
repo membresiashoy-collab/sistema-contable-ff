@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import re
 import sqlite3
 from typing import Any
 
@@ -85,6 +86,16 @@ USOS_OPERATIVOS_COMPLEMENTARIOS = [
         "descripcion": "Ajustes de capital dentro del patrimonio neto.",
         "tipo_uso": "PATRIMONIO_NETO",
         "modulo_sugerido": "Contabilidad",
+        "requiere_cuenta_imputable": 1,
+        "permite_multiples_cuentas_por_empresa": 0,
+        "visible_en_ui": 0,
+    },
+    {
+        "codigo": "IMPUESTOS_TASAS_CONTRIBUCIONES",
+        "nombre": "Impuestos, tasas y contribuciones",
+        "descripcion": "Gastos por impuestos, tasas y contribuciones que no corresponden a cargas sociales.",
+        "tipo_uso": "RESULTADO_NEGATIVO",
+        "modulo_sugerido": "Compras/Contabilidad",
         "requiere_cuenta_imputable": 1,
         "permite_multiples_cuentas_por_empresa": 0,
         "visible_en_ui": 0,
@@ -178,7 +189,7 @@ def _normalizar_codigo(valor: Any) -> str:
     texto = _upper(valor)
     texto = texto.replace("Á", "A").replace("É", "E").replace("Í", "I").replace("Ó", "O").replace("Ú", "U")
     texto = texto.replace("Ñ", "N")
-    texto = texto.replace("-", "_").replace(" ", "_").replace("/", "_")
+    texto = re.sub(r"[^A-Z0-9]+", "_", texto)
     while "__" in texto:
         texto = texto.replace("__", "_")
     return texto.strip("_")
@@ -446,6 +457,50 @@ def uso_operativo_desde_comportamiento(
     finally:
         if propia:
             conn.close()
+
+
+def inferir_uso_operativo_para_cuenta(
+    *,
+    codigo: str,
+    nombre: str,
+    comportamiento_contable: str = "",
+    conn: sqlite3.Connection | None = None,
+) -> str:
+    """
+    Infere el uso operativo correcto para una cuenta migrada.
+
+    Esta función corrige el principal defecto del esquema anterior:
+    el comportamiento_contable era demasiado amplio y podía clasificar
+    anticipos, billeteras o saldos fiscales como clientes/proveedores/banco.
+    """
+    codigo_norm = _normalizar_codigo(codigo)
+    nombre_norm = _normalizar_codigo(nombre)
+    comportamiento_norm = _normalizar_codigo(comportamiento_contable)
+
+    reglas_especificas = [
+        (("MERCADO_PAGO", "BILLETERA", "BILLETERAS", "UALA", "MODO"), "BILLETERA_VIRTUAL"),
+        (("ANTICIPOS_A_PROVEEDORES", "ANTICIPO_A_PROVEEDOR"), "ANTICIPOS_PROVEEDORES"),
+        (("ANTICIPOS_DE_CLIENTES", "ANTICIPO_DE_CLIENTE"), "ANTICIPOS_CLIENTES"),
+        (("IVA_A_PAGAR", "SALDO_IVA_A_PAGAR"), "IVA_SALDO_A_PAGAR"),
+        (("IVA_CREDITO_FISCAL",), "IVA_CREDITO_FISCAL"),
+        (("IVA_DEBITO_FISCAL",), "IVA_DEBITO_FISCAL"),
+        (("IMPUESTOS_TASAS_Y_CONTRIBUCIONES", "IMPUESTOS_TASAS_CONTRIBUCIONES"), "IMPUESTOS_TASAS_CONTRIBUCIONES"),
+        (("CARGAS_SOCIALES",), "CARGAS_SOCIALES_GASTO"),
+        (("SUELDOS_Y_JORNALES", "SUELDOS_JORNALES"), "SUELDOS_GASTO"),
+        (("ART_A_PAGAR",), "ART_A_PAGAR"),
+        (("OBRA_SOCIAL_A_PAGAR",), "OBRA_SOCIAL_A_PAGAR"),
+        (("SINDICATO_A_PAGAR",), "SINDICATO_A_PAGAR"),
+        (("CAPITAL_SOCIAL",), "CAPITAL_SOCIAL"),
+    ]
+
+    for patrones, uso_operativo in reglas_especificas:
+        if any(patron in nombre_norm or patron in codigo_norm for patron in patrones):
+            return uso_operativo
+
+    if comportamiento_norm:
+        return uso_operativo_desde_comportamiento(comportamiento_norm, conn=conn)
+
+    return ""
 
 
 def registrar_auditoria_plan(
@@ -826,7 +881,12 @@ def migrar_plan_actual_a_plan_empresa(
             imputable = 1 if _upper(cuenta.get("imputable")) == "S" else 0
             ajustable = 1 if _upper(cuenta.get("ajustable")) == "S" else 0
             comportamiento = _normalizar_codigo(cuenta.get("comportamiento_contable"))
-            uso_operativo = uso_operativo_desde_comportamiento(comportamiento, conn=conn) if comportamiento else ""
+            uso_operativo = inferir_uso_operativo_para_cuenta(
+                codigo=codigo,
+                nombre=nombre,
+                comportamiento_contable=comportamiento,
+                conn=conn,
+            )
 
             anterior = conn.execute(
                 """
@@ -1727,6 +1787,231 @@ def _flags_fiscales(concepto: str, tratamiento: str) -> dict[str, int]:
     }
 
 
+def sanear_mapeos_contables_migrados(
+    *,
+    empresa_id: int = 1,
+    usuario: str | None = None,
+    motivo: str = "Saneamiento de mapeos migrados desde comportamiento_contable",
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """
+    Repara mapeos nacidos desde comportamiento_contable cuando el comportamiento
+    viejo era demasiado genérico.
+
+    Ejemplos:
+    - Mercado Pago / Billeteras no debe quedar como BANCO_CUENTA_CORRIENTE.
+    - Anticipos de clientes no debe quedar como CLIENTES_CC.
+    - Anticipos a proveedores no debe quedar como PROVEEDORES_CC.
+    - IVA a pagar no debe quedar como IVA_DEBITO_FISCAL.
+    """
+    propia = conn is None
+    conn = conn or _conectar_default()
+    _asegurar_row_factory(conn)
+
+    try:
+        asegurar_estructura_maestro(conn)
+
+        cuentas = _fetch_dicts(
+            conn,
+            """
+            SELECT id, codigo, nombre, uso_operativo_sistema, estado
+            FROM plan_cuentas_empresa
+            WHERE empresa_id = ?
+              AND estado = 'ACTIVA'
+            ORDER BY codigo
+            """,
+            (empresa_id,),
+        )
+
+        corregidas = 0
+        mapeos_inactivados = 0
+        mapeos_correctos = 0
+
+        for cuenta in cuentas:
+            uso_correcto = inferir_uso_operativo_para_cuenta(
+                codigo=cuenta["codigo"],
+                nombre=cuenta["nombre"],
+                comportamiento_contable=cuenta.get("uso_operativo_sistema") or "",
+                conn=conn,
+            )
+
+            if not uso_correcto:
+                continue
+
+            uso_actual = _limpiar(cuenta.get("uso_operativo_sistema"))
+
+            if uso_actual != uso_correcto:
+                conn.execute(
+                    """
+                    UPDATE plan_cuentas_empresa
+                       SET uso_operativo_sistema = ?,
+                           motivo_estado = ?,
+                           usuario_ultima_modificacion = ?,
+                           fecha_ultima_modificacion = CURRENT_TIMESTAMP,
+                           actualizado_en = CURRENT_TIMESTAMP
+                     WHERE id = ?
+                    """,
+                    (uso_correcto, motivo, usuario, int(cuenta["id"])),
+                )
+                corregidas += 1
+
+                registrar_auditoria_plan(
+                    empresa_id=empresa_id,
+                    cuenta_empresa_id=int(cuenta["id"]),
+                    evento="USO_OPERATIVO_SANEADO",
+                    valor_anterior={"uso_operativo_sistema": uso_actual},
+                    valor_nuevo={"uso_operativo_sistema": uso_correcto},
+                    motivo=motivo,
+                    usuario=usuario,
+                    conn=conn,
+                )
+
+            uso_correcto_id = _id_uso(conn, uso_correcto)
+            if uso_correcto_id is None:
+                continue
+
+            # Inactivar mapeos activos incorrectos de la misma cuenta.
+            incorrectos = _fetch_dicts(
+                conn,
+                """
+                SELECT m.id, u.codigo AS uso_operativo_codigo
+                FROM mapeos_contables_empresa m
+                JOIN usos_operativos_contables u ON u.id = m.uso_operativo_id
+                WHERE m.empresa_id = ?
+                  AND m.cuenta_empresa_id = ?
+                  AND m.estado = 'ACTIVO'
+                  AND u.codigo <> ?
+                """,
+                (empresa_id, int(cuenta["id"]), uso_correcto),
+            )
+
+            for incorrecto in incorrectos:
+                conn.execute(
+                    """
+                    UPDATE mapeos_contables_empresa
+                       SET estado = 'INACTIVO',
+                           motivo = ?,
+                           usuario = ?,
+                           fecha_baja = CURRENT_TIMESTAMP
+                     WHERE id = ?
+                    """,
+                    (motivo, usuario, int(incorrecto["id"])),
+                )
+                mapeos_inactivados += 1
+                registrar_auditoria_configuracion(
+                    empresa_id=empresa_id,
+                    entidad="mapeos_contables_empresa",
+                    entidad_id=int(incorrecto["id"]),
+                    evento="MAPEO_CONTABLE_INACTIVADO_SANEAMIENTO",
+                    valor_anterior=incorrecto,
+                    valor_nuevo={"estado": "INACTIVO"},
+                    motivo=motivo,
+                    usuario=usuario,
+                    conn=conn,
+                )
+
+            # Normalizar el mapeo correcto sin duplicar por diferencias heredadas
+            # de módulo/evento_operativo.
+            correctos_existentes = _fetch_dicts(
+                conn,
+                """
+                SELECT m.id
+                FROM mapeos_contables_empresa m
+                WHERE m.empresa_id = ?
+                  AND m.cuenta_empresa_id = ?
+                  AND m.uso_operativo_id = ?
+                  AND m.estado = 'ACTIVO'
+                ORDER BY m.id
+                """,
+                (empresa_id, int(cuenta["id"]), uso_correcto_id),
+            )
+
+            if correctos_existentes:
+                canonico_id = int(correctos_existentes[0]["id"])
+                conn.execute(
+                    """
+                    UPDATE mapeos_contables_empresa
+                       SET modulo = '',
+                           evento_operativo = '',
+                           motivo = ?,
+                           usuario = ?
+                     WHERE id = ?
+                    """,
+                    (motivo, usuario, canonico_id),
+                )
+
+                for duplicado in correctos_existentes[1:]:
+                    duplicado_id = int(duplicado["id"])
+                    conn.execute(
+                        """
+                        UPDATE mapeos_contables_empresa
+                           SET estado = 'INACTIVO',
+                               motivo = ?,
+                               usuario = ?,
+                               fecha_baja = CURRENT_TIMESTAMP
+                         WHERE id = ?
+                        """,
+                        (motivo, usuario, duplicado_id),
+                    )
+                    mapeos_inactivados += 1
+                    registrar_auditoria_configuracion(
+                        empresa_id=empresa_id,
+                        entidad="mapeos_contables_empresa",
+                        entidad_id=duplicado_id,
+                        evento="MAPEO_CONTABLE_DUPLICADO_INACTIVADO_SANEAMIENTO",
+                        valor_anterior={"id": duplicado_id, "uso_operativo": uso_correcto},
+                        valor_nuevo={"estado": "INACTIVO"},
+                        motivo=motivo,
+                        usuario=usuario,
+                        conn=conn,
+                    )
+
+                registrar_auditoria_configuracion(
+                    empresa_id=empresa_id,
+                    entidad="mapeos_contables_empresa",
+                    entidad_id=canonico_id,
+                    evento="MAPEO_CONTABLE_NORMALIZADO_SANEAMIENTO",
+                    valor_nuevo={
+                        "uso_operativo_codigo": uso_correcto,
+                        "cuenta_empresa_id": int(cuenta["id"]),
+                    },
+                    motivo=motivo,
+                    usuario=usuario,
+                    conn=conn,
+                )
+                mapeos_correctos += 1
+            else:
+                resultado_mapeo = crear_o_actualizar_mapeo_contable(
+                    empresa_id=empresa_id,
+                    uso_operativo_codigo=uso_correcto,
+                    cuenta_empresa_id=int(cuenta["id"]),
+                    modulo="",
+                    evento_operativo="",
+                    motivo=motivo,
+                    usuario=usuario,
+                    conn=conn,
+                )
+                if resultado_mapeo.get("ok"):
+                    mapeos_correctos += 1
+
+        if propia:
+            conn.commit()
+
+        return {
+            "ok": True,
+            "cuentas_corregidas": corregidas,
+            "mapeos_inactivados": mapeos_inactivados,
+            "mapeos_correctos_creados_o_actualizados": mapeos_correctos,
+        }
+    except Exception as exc:
+        if propia:
+            conn.rollback()
+        return {"ok": False, "error": str(exc)}
+    finally:
+        if propia:
+            conn.close()
+
+
 def migrar_configuracion_contable_actual(
     *,
     empresa_id: int = 1,
@@ -1754,6 +2039,14 @@ def migrar_configuracion_contable_actual(
         if not resultado_plan.get("ok"):
             raise RuntimeError(resultado_plan.get("error", "Error migrando plan actual."))
 
+        resultado_saneamiento = sanear_mapeos_contables_migrados(
+            empresa_id=empresa_id,
+            usuario=usuario,
+            conn=conn,
+        )
+        if not resultado_saneamiento.get("ok"):
+            raise RuntimeError(resultado_saneamiento.get("error", "Error saneando mapeos contables migrados."))
+
         resultado_categorias = migrar_categorias_compra_actuales(
             empresa_id=empresa_id,
             usuario=usuario,
@@ -1776,6 +2069,7 @@ def migrar_configuracion_contable_actual(
         return {
             "ok": True,
             "plan": resultado_plan,
+            "saneamiento_mapeos": resultado_saneamiento,
             "categorias": resultado_categorias,
             "conceptos_fiscales": resultado_conceptos,
         }
