@@ -1,0 +1,420 @@
+codigo,nombre,codigo_madre,nivel,orden,imputable,elemento,clasificacion_corriente_no_corriente,rubro,cuenta,subcuenta,requiere_auxiliar,tipo_auxiliar,es_regularizadora,cuenta_regularizada_codigo,tipo_regularizadora,saldo_normal,significado_saldo_normal,permite_saldo_deudor,significado_saldo_deudor,permite_saldo_acreedor,significado_saldo_acreedor,alertar_saldo_invertido,tratamiento_saldo_invertido,requiere_reclasificacion_saldo_invertido,monetaria_no_monetaria,criterio_medicion,ajustable,participa_recpam,admite_moneda_extranjera,requiere_tipo_cambio,genera_diferencia_cambio,es_cuenta_modelo,permite_copiar_modelo,uso_operativo_sistema,modulo_sugerido,presentacion_estado_contable,orden_presentacion,cuando_debitar,cuando_acreditar,errores_frecuentes,observaciones,estado
+1.00.00.00,ACTIVO,,4,10,0,ACTIVO,NO_APLICA,,ACTIVO,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,10,,,,,ACTIVA
+1.10.00.00,ACTIVO CORRIENTE,1.00.00.00,4,11,0,ACTIVO,CORRIENTE,,ACTIVO CORRIENTE,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,11,,,,,ACTIVA
+1.1.01.00,Caja y Bancos,1.10.00.00,4,12,0,ACTIVO,CORRIENTE,,Caja y Bancos,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,12,,,,,ACTIVA
+1.1.01.01,Caja,1.1.01.00,4,13,1,ACTIVO,CORRIENTE,Caja y Bancos,,Caja,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,1,1,CAJA_GENERAL,Caja,,13,,,,,ACTIVA
+1.1.02.00,Banco Cta. Cte.,1.1.01.00,4,14,0,ACTIVO,CORRIENTE,Caja y Bancos,Banco Cta. Cte.,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,1,1,BANCO_CUENTA_CORRIENTE,Banco/Caja,,14,,,,,ACTIVA
+1.1.02.1,Banco Nación Cta. Cte.,1.1.02.00,4,15,1,ACTIVO,CORRIENTE,Banco Cta. Cte.,,Banco Nación Cta. Cte.,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,BANCO_CUENTA_CORRIENTE,Banco/Caja,,15,,,,,ACTIVA
+1.1.02.2,Banco Río Cta. Cte.,1.1.02.00,4,16,1,ACTIVO,CORRIENTE,Banco Cta. Cte.,,Banco Río Cta. Cte.,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,BANCO_CUENTA_CORRIENTE,Banco/Caja,,16,,,,,ACTIVA
+1.1.02.3,Banco Francés Cta. Cte.,1.1.02.00,4,17,1,ACTIVO,CORRIENTE,Banco Cta. Cte.,,Banco Francés Cta. Cte.,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,BANCO_CUENTA_CORRIENTE,Banco/Caja,,17,,,,,ACTIVA
+1.1.02.4,Banco Macro Cta. Cte.,1.1.02.00,4,18,1,ACTIVO,CORRIENTE,Banco Cta. Cte.,,Banco Macro Cta. Cte.,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,BANCO_CUENTA_CORRIENTE,Banco/Caja,,18,,,,,ACTIVA
+1.1.02.50,Billeteras virtuales y plataformas de cobro,1.1.01.00,4,19,0,ACTIVO,CORRIENTE,Caja y Bancos,Billeteras virtuales y plataformas de cobro,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,1,1,BILLETERA_VIRTUAL,Banco/Caja,,19,,,,Cuenta agregada para compatibilidad operativa del sistema actual.,ACTIVA
+1.1.02.50.1,Mercado Pago / Billeteras Virtuales,1.1.02.50,5,20,1,ACTIVO,CORRIENTE,Billeteras virtuales y plataformas de cobro,,Mercado Pago / Billeteras Virtuales,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,BILLETERA_VIRTUAL,Banco/Caja,,20,,,,Cuenta agregada para compatibilidad operativa del sistema actual.,ACTIVA
+1.1.03.00,Fondo Fijo,1.1.01.00,4,21,1,ACTIVO,CORRIENTE,Caja y Bancos,,Fondo Fijo,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,1,1,FONDO_FIJO,Caja,,21,,,,,ACTIVA
+1.1.04.00,Giros Bancarios,1.1.01.00,4,22,1,ACTIVO,CORRIENTE,Caja y Bancos,,Giros Bancarios,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,BANCO_CUENTA_CORRIENTE,Banco/Caja,,22,,,,,ACTIVA
+1.1.05.00,Moneda Extranjera,1.1.01.00,4,23,0,ACTIVO,CORRIENTE,Caja y Bancos,Moneda Extranjera,,0,,0,,,DEUDOR,,,,,,,,,,,,,1,1,1,1,1,CAJA_GENERAL,Caja,,23,,,,,ACTIVA
+1.1.05.1,Moneda Extranjera Dólares,1.1.05.00,4,24,1,ACTIVO,CORRIENTE,Moneda Extranjera,,Moneda Extranjera Dólares,0,,0,,,DEUDOR,,,,,,,,,,,,,1,1,1,0,0,CAJA_GENERAL,,,24,,,,,ACTIVA
+1.1.05.2,Moneda Extranjera Euros,1.1.05.00,4,25,1,ACTIVO,CORRIENTE,Moneda Extranjera,,Moneda Extranjera Euros,0,,0,,,DEUDOR,,,,,,,,,,,,,1,1,1,0,0,CAJA_GENERAL,,,25,,,,,ACTIVA
+1.1.06.00,Valores a Depositar,1.1.01.00,4,26,1,ACTIVO,CORRIENTE,Caja y Bancos,,Valores a Depositar,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,VALORES_A_DEPOSITAR,Banco/Caja,,26,,,,,ACTIVA
+1.1.07.00,Recaudaciones a Depositar,1.1.01.00,4,27,1,ACTIVO,CORRIENTE,Caja y Bancos,,Recaudaciones a Depositar,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,RECAUDACIONES_A_DEPOSITAR,Banco/Caja,,27,,,,,ACTIVA
+1.1.08.00,(-) Prev. p/ Diferencia de Cotiz. Mon. Extranjera,1.1.01.00,4,28,1,ACTIVO,CORRIENTE,Caja y Bancos,,(-) Prev. p/ Diferencia de Cotiz. Mon. Extranjera,0,,1,1.1.05.00,PREVISION,ACREEDOR,,,,,,,,,,,,,1,1,1,0,0,,,,28,,,,,ACTIVA
+1.1.09.00,(-) Prev. p/ Desvalorización Mon. Extranjera,1.1.01.00,4,29,1,ACTIVO,CORRIENTE,Caja y Bancos,,(-) Prev. p/ Desvalorización Mon. Extranjera,0,,1,1.1.05.00,PREVISION,ACREEDOR,,,,,,,,,,,,,1,1,1,0,0,,,,29,,,,,ACTIVA
+1.1.20.00,Inversiones Temporarias,1.10.00.00,4,30,0,ACTIVO,CORRIENTE,,Inversiones Temporarias,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,30,,,,,ACTIVA
+1.1.20.01,Títulos y Acciones,1.1.20.00,4,31,1,ACTIVO,CORRIENTE,Inversiones Temporarias,,Títulos y Acciones,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,31,,,,,ACTIVA
+1.1.20.02,Títulos Públicos,1.1.20.00,4,32,0,ACTIVO,CORRIENTE,Inversiones Temporarias,Títulos Públicos,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,32,,,,,ACTIVA
+1.1.20.02.1,Títulos Públicos con Cotización,1.1.20.02,5,33,1,ACTIVO,CORRIENTE,Títulos Públicos,,Títulos Públicos con Cotización,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,33,,,,,ACTIVA
+1.1.20.02.2,Títulos sin cotización,1.1.20.02,5,34,1,ACTIVO,CORRIENTE,Títulos Públicos,,Títulos sin cotización,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,34,,,,,ACTIVA
+1.1.20.03,Acciones con y sin Cotización,1.1.20.00,4,35,1,ACTIVO,CORRIENTE,Inversiones Temporarias,,Acciones con y sin Cotización,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,35,,,,,ACTIVA
+1.1.20.04,Acciones a Recibir,1.1.20.00,4,36,1,ACTIVO,CORRIENTE,Inversiones Temporarias,,Acciones a Recibir,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,36,,,,,ACTIVA
+1.1.20.05,Banco XX Plazo Fijo,1.1.20.00,4,37,0,ACTIVO,CORRIENTE,Inversiones Temporarias,Banco XX Plazo Fijo,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,1,1,BANCO_PLAZO_FIJO,Banco/Caja,,37,,,,,ACTIVA
+1.1.20.05.1,Banco Francés Plazo Fijo,1.1.20.05,5,38,1,ACTIVO,CORRIENTE,Banco XX Plazo Fijo,,Banco Francés Plazo Fijo,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,BANCO_PLAZO_FIJO,Banco/Caja,,38,,,,,ACTIVA
+1.1.20.06,Banco XX Caja de Ahorro,1.1.20.00,4,39,0,ACTIVO,CORRIENTE,Inversiones Temporarias,Banco XX Caja de Ahorro,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,1,1,BANCO_CAJA_AHORRO,Banco/Caja,,39,,,,,ACTIVA
+1.1.20.06.1,Banco Galicia Caja de Ahorro,1.1.20.06,5,40,1,ACTIVO,CORRIENTE,Banco XX Caja de Ahorro,,Banco Galicia Caja de Ahorro,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,BANCO_CAJA_AHORRO,Banco/Caja,,40,,,,,ACTIVA
+1.1.20.07,Banco XX Depósito Caja de Ahorro,1.1.20.06,4,41,1,ACTIVO,CORRIENTE,Banco XX Caja de Ahorro,,Banco XX Depósito Caja de Ahorro,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,BANCO_CAJA_AHORRO,Banco/Caja,,41,,,,,ACTIVA
+1.1.20.08,Banco XX Fondo Común de Inversión,1.1.20.00,4,42,1,ACTIVO,CORRIENTE,Inversiones Temporarias,,Banco XX Fondo Común de Inversión,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,1,1,FONDO_COMUN_INVERSION,Banco/Caja,,42,,,,,ACTIVA
+1.1.20.09,Valores Mobiliarios,1.1.20.00,4,43,1,ACTIVO,CORRIENTE,Inversiones Temporarias,,Valores Mobiliarios,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,43,,,,,ACTIVA
+1.1.20.10,Inmuebles p/ Alquiler,1.1.20.00,4,44,1,ACTIVO,CORRIENTE,Inversiones Temporarias,,Inmuebles p/ Alquiler,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,44,,,,,ACTIVA
+1.1.20.11,(-) Prev. p/ Desvalorización de Títulos y Acciones,1.1.20.00,4,45,1,ACTIVO,CORRIENTE,Inversiones Temporarias,,(-) Prev. p/ Desvalorización de Títulos y Acciones,0,,1,1.1.20.00,PREVISION,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,45,,,,,ACTIVA
+1.1.20.12,(-) Prev. p/ Diferencia de Cot. Acciones,1.1.20.00,4,46,1,ACTIVO,CORRIENTE,Inversiones Temporarias,,(-) Prev. p/ Diferencia de Cot. Acciones,0,,1,1.1.20.00,PREVISION,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,46,,,,,ACTIVA
+1.1.20.13,(-) Prev. p/ Fluctuaciones de Valores,1.1.20.00,4,47,1,ACTIVO,CORRIENTE,Inversiones Temporarias,,(-) Prev. p/ Fluctuaciones de Valores,0,,1,1.1.20.00,PREVISION,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,47,,,,,ACTIVA
+1.1.30.00,Créditos por Ventas,1.10.00.00,4,48,0,ACTIVO,CORRIENTE,,Créditos por Ventas,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,48,,,,,ACTIVA
+1.1.30.01,Deudores por Ventas,1.1.30.00,4,49,1,ACTIVO,CORRIENTE,Créditos por Ventas,,Deudores por Ventas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,CLIENTES_CC,Ventas,,49,,,,,ACTIVA
+1.1.30.02,Deudores Morosos,1.1.30.00,4,50,1,ACTIVO,CORRIENTE,Créditos por Ventas,,Deudores Morosos,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,CLIENTES_CC,Ventas,,50,,,,,ACTIVA
+1.1.30.03,Deudores en Gestión Judicial,1.1.30.00,4,51,1,ACTIVO,CORRIENTE,Créditos por Ventas,,Deudores en Gestión Judicial,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,CLIENTES_CC,Ventas,,51,,,,,ACTIVA
+1.1.30.04,Deudores Prendarios,1.1.30.00,4,52,1,ACTIVO,CORRIENTE,Créditos por Ventas,,Deudores Prendarios,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,52,,,,,ACTIVA
+1.1.30.05,Deudores Hipotecarios,1.1.30.00,4,53,1,ACTIVO,CORRIENTE,Créditos por Ventas,,Deudores Hipotecarios,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,53,,,,,ACTIVA
+1.1.30.06,Deudores en Moneda Extranjera,1.1.30.00,4,54,1,ACTIVO,CORRIENTE,Créditos por Ventas,,Deudores en Moneda Extranjera,0,,0,,,DEUDOR,,,,,,,,,,,,,1,1,1,0,0,CLIENTES_CC,,,54,,,,,ACTIVA
+1.1.30.07,Documentos a Cobrar,1.1.30.00,4,55,0,ACTIVO,CORRIENTE,Créditos por Ventas,Documentos a Cobrar,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,55,,,,,ACTIVA
+1.1.30.07.1,Documentos a Cobrar en Mora,1.1.30.07,5,56,1,ACTIVO,CORRIENTE,Documentos a Cobrar,,Documentos a Cobrar en Mora,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,56,,,,,ACTIVA
+1.1.30.07.2,Documentos a Cobrar Vencidos,1.1.30.07,5,57,1,ACTIVO,CORRIENTE,Documentos a Cobrar,,Documentos a Cobrar Vencidos,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,57,,,,,ACTIVA
+1.1.30.07.3,Documentos a Cobrar en Gestión Judicial,1.1.30.07,5,58,1,ACTIVO,CORRIENTE,Documentos a Cobrar,,Documentos a Cobrar en Gestión Judicial,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,58,,,,,ACTIVA
+1.1.30.08,Cheques de Pago Diferido a Cobrar,1.1.30.00,4,59,1,ACTIVO,CORRIENTE,Créditos por Ventas,,Cheques de Pago Diferido a Cobrar,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,59,,,,,ACTIVA
+1.1.30.09,Cupones de Tarjeta de Crédito a Cobrar,1.1.30.00,4,60,1,ACTIVO,CORRIENTE,Créditos por Ventas,,Cupones de Tarjeta de Crédito a Cobrar,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,60,,,,,ACTIVA
+1.1.30.10,Órdenes de Compra a Cobrar,1.1.30.00,4,61,1,ACTIVO,CORRIENTE,Créditos por Ventas,,Órdenes de Compra a Cobrar,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,61,,,,,ACTIVA
+1.1.30.11,Valores Diferidos a Depositar,1.1.30.00,4,62,1,ACTIVO,CORRIENTE,Créditos por Ventas,,Valores Diferidos a Depositar,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,62,,,,,ACTIVA
+1.1.30.12,(-) Prev. p/ Deudores Incobrables,1.1.30.00,4,63,1,ACTIVO,CORRIENTE,Créditos por Ventas,,(-) Prev. p/ Deudores Incobrables,0,,1,1.1.30.01,PREVISION,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,63,,,,,ACTIVA
+1.1.30.13,(-) Prev. p/ Descuentos,1.1.30.00,4,64,1,ACTIVO,CORRIENTE,Créditos por Ventas,,(-) Prev. p/ Descuentos,0,,1,1.1.30.00,PREVISION,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,64,,,,,ACTIVA
+1.1.30.14,(-) Intereses Positivos a Devengar,1.1.30.00,4,65,1,ACTIVO,CORRIENTE,Créditos por Ventas,,(-) Intereses Positivos a Devengar,0,,1,1.1.30.00,INTERESES_A_DEVENGAR,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,65,,,,,ACTIVA
+1.1.40.00,Otros Créditos,1.10.00.00,4,66,0,ACTIVO,CORRIENTE,,Otros Créditos,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,66,,,,,ACTIVA
+1.1.40.01,Anticipos de Sueldos y Jornales,1.1.40.00,4,67,1,ACTIVO,CORRIENTE,Otros Créditos,,Anticipos de Sueldos y Jornales,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,67,,,,,ACTIVA
+1.1.40.02,Anticipos al Personal,1.1.40.00,4,68,1,ACTIVO,CORRIENTE,Otros Créditos,,Anticipos al Personal,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,68,,,,,ACTIVA
+1.1.40.03,Préstamos al Personal,1.1.40.00,4,69,1,ACTIVO,CORRIENTE,Otros Créditos,,Préstamos al Personal,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,69,,,,,ACTIVA
+1.1.40.04,Anticipo de Honorarios a Directores y Síndicos,1.1.40.00,4,70,1,ACTIVO,CORRIENTE,Otros Créditos,,Anticipo de Honorarios a Directores y Síndicos,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,70,,,,,ACTIVA
+1.1.40.05,Anticipo de Impuestos,1.1.40.00,4,71,0,ACTIVO,CORRIENTE,Otros Créditos,Anticipo de Impuestos,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,71,,,,,ACTIVA
+1.1.40.05.1,Anticipo de Impuesto a los Ingresos Brutos,1.1.40.05,5,72,1,ACTIVO,CORRIENTE,Anticipo de Impuestos,,Anticipo de Impuesto a los Ingresos Brutos,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,72,,,,,ACTIVA
+1.1.40.05.2,Anticipo de Impuesto a las Ganancias,1.1.40.05,5,73,1,ACTIVO,CORRIENTE,Anticipo de Impuestos,,Anticipo de Impuesto a las Ganancias,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,73,,,,,ACTIVA
+1.1.40.06,Deudores Varios,1.1.40.00,4,74,1,ACTIVO,CORRIENTE,Otros Créditos,,Deudores Varios,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,74,,,,,ACTIVA
+1.1.40.07,Deudores Prendarios,1.1.40.00,4,75,1,ACTIVO,CORRIENTE,Otros Créditos,,Deudores Prendarios,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,75,,,,,ACTIVA
+1.1.40.08,Accionistas,1.1.40.00,4,76,1,ACTIVO,CORRIENTE,Otros Créditos,,Accionistas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,76,,,,,ACTIVA
+1.1.40.09,IVA Crédito Fiscal,1.1.40.00,4,77,1,ACTIVO,CORRIENTE,Otros Créditos,,IVA Crédito Fiscal,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,IVA_CREDITO_FISCAL,IVA,,77,,,,,ACTIVA
+1.1.40.10,IVA Saldo a Favor,1.1.40.00,4,78,0,ACTIVO,CORRIENTE,Otros Créditos,IVA Saldo a Favor,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,IVA_SALDO_A_FAVOR,IVA,,78,,,,,ACTIVA
+1.1.40.10.1,DGI IVA Saldo a Favor,1.1.40.10,5,79,1,ACTIVO,CORRIENTE,IVA Saldo a Favor,,DGI IVA Saldo a Favor,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,IVA_SALDO_A_FAVOR,IVA,,79,,,,,ACTIVA
+1.1.40.11,Gastos Pagados por Adelantado,1.1.40.00,4,80,1,ACTIVO,CORRIENTE,Otros Créditos,,Gastos Pagados por Adelantado,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,80,,,,,ACTIVA
+1.1.40.12,Comisiones Pagadas por Adelantado,1.1.40.00,4,81,1,ACTIVO,CORRIENTE,Otros Créditos,,Comisiones Pagadas por Adelantado,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,81,,,,,ACTIVA
+1.1.40.13,Alquileres Pagados por Adelantado,1.1.40.00,4,82,1,ACTIVO,CORRIENTE,Otros Créditos,,Alquileres Pagados por Adelantado,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,82,,,,,ACTIVA
+1.1.40.14,Intereses Pagados por Adelantado,1.1.40.00,4,83,1,ACTIVO,CORRIENTE,Otros Créditos,,Intereses Pagados por Adelantado,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,83,,,,,ACTIVA
+1.1.40.15,Seguros Pagados por Adelantado,1.1.40.00,4,84,1,ACTIVO,CORRIENTE,Otros Créditos,,Seguros Pagados por Adelantado,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,84,,,,,ACTIVA
+1.1.40.16,Inmuebles por Alquiler Pagados por Adelantado,1.1.40.00,4,85,1,ACTIVO,CORRIENTE,Otros Créditos,,Inmuebles por Alquiler Pagados por Adelantado,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,85,,,,,ACTIVA
+1.1.40.17,LIMS Pagado por Adelantado,1.1.40.00,4,86,1,ACTIVO,CORRIENTE,Otros Créditos,,LIMS Pagado por Adelantado,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,86,,,,Lectura proveniente del PDF escaneado,
+1.1.40.18,Ganancias a Cobrar,1.1.40.00,4,87,1,ACTIVO,CORRIENTE,Otros Créditos,,Ganancias a Cobrar,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,87,,,,,ACTIVA
+1.1.40.19,Alquileres a Cobrar,1.1.40.00,4,88,1,ACTIVO,CORRIENTE,Otros Créditos,,Alquileres a Cobrar,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,88,,,,,ACTIVA
+1.1.40.20,Hipotecas a Cobrar,1.1.40.00,4,89,1,ACTIVO,CORRIENTE,Otros Créditos,,Hipotecas a Cobrar,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,89,,,,,ACTIVA
+1.1.40.21,Intereses a Cobrar,1.1.40.00,4,90,1,ACTIVO,CORRIENTE,Otros Créditos,,Intereses a Cobrar,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,90,,,,,ACTIVA
+1.1.40.22,Comisiones a Cobrar,1.1.40.00,4,91,1,ACTIVO,CORRIENTE,Otros Créditos,,Comisiones a Cobrar,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,91,,,,,ACTIVA
+1.1.40.23,Dividendos en Efectivo a Cobrar,1.1.40.00,4,92,1,ACTIVO,CORRIENTE,Otros Créditos,,Dividendos en Efectivo a Cobrar,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,92,,,,,ACTIVA
+1.1.40.24,Depósito en Garantía,1.1.40.00,4,93,1,ACTIVO,CORRIENTE,Otros Créditos,,Depósito en Garantía,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,93,,,,,ACTIVA
+1.1.40.25,Socio X Cuenta Particular,1.1.40.00,4,94,0,ACTIVO,CORRIENTE,Otros Créditos,Socio X Cuenta Particular,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,94,,,,,ACTIVA
+1.1.40.25.1,Socio Martín Cuenta Particular,1.1.40.25,5,95,1,ACTIVO,CORRIENTE,Socio X Cuenta Particular,,Socio Martín Cuenta Particular,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,95,,,,,ACTIVA
+1.1.40.26,Socio A Cuenta Aporte,1.1.40.00,4,96,1,ACTIVO,CORRIENTE,Otros Créditos,,Socio A Cuenta Aporte,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,96,,,,,ACTIVA
+1.1.40.27,Socio X Cuenta Suscripta,1.1.40.00,4,97,1,ACTIVO,CORRIENTE,Otros Créditos,,Socio X Cuenta Suscripta,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,97,,,,,ACTIVA
+1.1.40.28,(-) Previsión por Descuentos,1.1.40.00,4,98,1,ACTIVO,CORRIENTE,Otros Créditos,,(-) Previsión por Descuentos,0,,1,1.1.40.00,PREVISION,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,98,,,,,ACTIVA
+1.1.40.29,(-) Intereses Positivos a Devengar,1.1.40.00,4,99,1,ACTIVO,CORRIENTE,Otros Créditos,,(-) Intereses Positivos a Devengar,0,,1,1.1.40.00,INTERESES_A_DEVENGAR,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,99,,,,,ACTIVA
+1.1.40.30,Percepciones IVA,1.1.40.00,4,100,1,ACTIVO,CORRIENTE,Otros Créditos,,Percepciones IVA,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,PERCEPCION_IVA,IVA,,100,,,,"Cuenta agregada para compatibilidad con compras, banco fiscal e IVA PRO.",ACTIVA
+1.1.40.31,Retenciones IVA Sufridas,1.1.40.00,4,101,1,ACTIVO,CORRIENTE,Otros Créditos,,Retenciones IVA Sufridas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,RETENCION_IVA_SUFRIDA,IVA,,101,,,,Cuenta agregada para compatibilidad con compras e IVA PRO.,ACTIVA
+1.1.40.32,Percepciones IIBB,1.1.40.00,4,102,1,ACTIVO,CORRIENTE,Otros Créditos,,Percepciones IIBB,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,PERCEPCION_IIBB,Compras/IVA,,102,,,,,ACTIVA
+1.1.40.33,Retenciones IIBB Sufridas,1.1.40.00,4,103,1,ACTIVO,CORRIENTE,Otros Créditos,,Retenciones IIBB Sufridas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,RETENCION_IIBB_SUFRIDA,Compras/IVA,,103,,,,,ACTIVA
+1.1.40.34,Percepciones Ganancias,1.1.40.00,4,104,1,ACTIVO,CORRIENTE,Otros Créditos,,Percepciones Ganancias,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,PERCEPCION_GANANCIAS,Compras,,104,,,,,ACTIVA
+1.1.40.35,Retenciones Ganancias Sufridas,1.1.40.00,4,105,1,ACTIVO,CORRIENTE,Otros Créditos,,Retenciones Ganancias Sufridas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,RETENCION_GANANCIAS_SUFRIDA,Compras,,105,,,,,ACTIVA
+1.1.40.36,Percepciones Municipales,1.1.40.00,4,106,1,ACTIVO,CORRIENTE,Otros Créditos,,Percepciones Municipales,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,PERCEPCION_MUNICIPAL,Compras,,106,,,,,ACTIVA
+1.1.40.37,Percepciones Otros Impuestos Nacionales,1.1.40.00,4,107,1,ACTIVO,CORRIENTE,Otros Créditos,,Percepciones Otros Impuestos Nacionales,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,PERCEPCION_OTROS_NACIONALES,Compras,,107,,,,,ACTIVA
+1.1.50.00,Bienes de Cambio,1.10.00.00,4,108,0,ACTIVO,CORRIENTE,,Bienes de Cambio,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,108,,,,,ACTIVA
+1.1.50.01,Mercaderías,1.1.50.00,4,109,0,ACTIVO,CORRIENTE,Bienes de Cambio,Mercaderías,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,MERCADERIAS_REVENTA,Compras,,109,,,,,ACTIVA
+1.1.50.01.1,Mercaderías de Reventa,1.1.50.01,5,110,1,ACTIVO,CORRIENTE,Mercaderías,,Mercaderías de Reventa,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,MERCADERIAS_REVENTA,Compras,,110,,,,,ACTIVA
+1.1.50.02,Mercaderías en Tránsito,1.1.50.00,4,111,1,ACTIVO,CORRIENTE,Bienes de Cambio,,Mercaderías en Tránsito,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,111,,,,,ACTIVA
+1.1.50.03,Stock de Mercaderías,1.1.50.00,4,112,1,ACTIVO,CORRIENTE,Bienes de Cambio,,Stock de Mercaderías,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,112,,,,,ACTIVA
+1.1.50.04,Materias Primas,1.1.50.00,4,113,1,ACTIVO,CORRIENTE,Bienes de Cambio,,Materias Primas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,MATERIAS_PRIMAS,Compras,,113,,,,,ACTIVA
+1.1.50.05,Materia Prima en Tránsito,1.1.50.00,4,114,1,ACTIVO,CORRIENTE,Bienes de Cambio,,Materia Prima en Tránsito,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,114,,,,,ACTIVA
+1.1.50.06,Insumos o Materiales,1.1.50.00,4,115,1,ACTIVO,CORRIENTE,Bienes de Cambio,,Insumos o Materiales,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,INSUMOS_PRODUCTIVOS,Compras,,115,,,,,ACTIVA
+1.1.50.07,Otros Insumos o Materiales,1.1.50.00,4,116,1,ACTIVO,CORRIENTE,Bienes de Cambio,,Otros Insumos o Materiales,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,116,,,,,ACTIVA
+1.1.50.08,Materiales Diversos,1.1.50.00,4,117,1,ACTIVO,CORRIENTE,Bienes de Cambio,,Materiales Diversos,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,117,,,,,ACTIVA
+1.1.50.09,Productos en Proceso,1.1.50.00,4,118,1,ACTIVO,CORRIENTE,Bienes de Cambio,,Productos en Proceso,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,118,,,,,ACTIVA
+1.1.50.10,Productos Terminados,1.1.50.00,4,119,1,ACTIVO,CORRIENTE,Bienes de Cambio,,Productos Terminados,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,119,,,,,ACTIVA
+1.1.50.11,Subproductos,1.1.50.00,4,120,1,ACTIVO,CORRIENTE,Bienes de Cambio,,Subproductos,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,120,,,,,ACTIVA
+1.1.50.12,Anticipo a Proveedores,1.1.50.00,4,121,1,ACTIVO,CORRIENTE,Bienes de Cambio,,Anticipo a Proveedores,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,ANTICIPOS_PROVEEDORES,Compras/Pagos,,121,,,,,ACTIVA
+1.1.50.13,(-) Prev. p/ Desvalorización de Mercaderías,1.1.50.00,4,122,1,ACTIVO,CORRIENTE,Bienes de Cambio,,(-) Prev. p/ Desvalorización de Mercaderías,0,,1,1.1.50.00,PREVISION,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,122,,,,,ACTIVA
+1.1.60.00,Otros Activos,1.10.00.00,4,123,0,ACTIVO,CORRIENTE,,Otros Activos,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,123,,,,,ACTIVA
+1.1.60.01,Elementos de Propaganda,1.1.60.00,4,124,1,ACTIVO,CORRIENTE,Otros Activos,,Elementos de Propaganda,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,124,,,,,ACTIVA
+1.1.60.02,Materiales de Propaganda,1.1.60.00,4,125,1,ACTIVO,CORRIENTE,Otros Activos,,Materiales de Propaganda,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,125,,,,,ACTIVA
+1.1.60.03,Productos de Propaganda y Publicidad,1.1.60.00,4,126,1,ACTIVO,CORRIENTE,Otros Activos,,Productos de Propaganda y Publicidad,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,126,,,,,ACTIVA
+1.1.60.04,Insumos,1.1.60.00,4,127,1,ACTIVO,CORRIENTE,Otros Activos,,Insumos,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,127,,,,,ACTIVA
+1.1.60.05,Envases,1.1.60.00,4,128,1,ACTIVO,CORRIENTE,Otros Activos,,Envases,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,128,,,,,ACTIVA
+1.1.60.06,Muestras Gratis,1.1.60.00,4,129,1,ACTIVO,CORRIENTE,Otros Activos,,Muestras Gratis,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,129,,,,,ACTIVA
+1.1.60.07,Inventario de Papelería,1.1.60.00,4,130,1,ACTIVO,CORRIENTE,Otros Activos,,Inventario de Papelería,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,130,,,,,ACTIVA
+1.1.60.08,Papelería y Útiles de Escritorio,1.1.60.00,4,131,1,ACTIVO,CORRIENTE,Otros Activos,,Papelería y Útiles de Escritorio,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,131,,,,,ACTIVA
+1.1.60.09,Repuestos de Bienes de Uso,1.1.60.00,4,132,1,ACTIVO,CORRIENTE,Otros Activos,,Repuestos de Bienes de Uso,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,132,,,,,ACTIVA
+1.1.60.10,Combustibles y Lubricantes,1.1.60.00,4,133,1,ACTIVO,CORRIENTE,Otros Activos,,Combustibles y Lubricantes,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,133,,,,,ACTIVA
+1.1.60.11,Stock Insumos de Computación,1.1.60.00,4,134,1,ACTIVO,CORRIENTE,Otros Activos,,Stock Insumos de Computación,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,134,,,,,ACTIVA
+1.1.60.12,Stock de Papelería y Útiles de Escritorio,1.1.60.00,4,135,1,ACTIVO,CORRIENTE,Otros Activos,,Stock de Papelería y Útiles de Escritorio,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,135,,,,,ACTIVA
+1.20.00.00,ACTIVO NO CORRIENTE,1.00.00.00,4,136,0,ACTIVO,NO_CORRIENTE,,ACTIVO NO CORRIENTE,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,136,,,,,ACTIVA
+1.2.01.00,Créditos por Ventas,1.20.00.00,4,137,1,ACTIVO,NO_CORRIENTE,,,Créditos por Ventas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,137,,,,Rubro no corriente análogo al activo corriente.,ACTIVA
+1.2.02.00,Otros Créditos,1.20.00.00,4,138,0,ACTIVO,NO_CORRIENTE,,Otros Créditos,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,138,,,,,ACTIVA
+1.2.02.01,Deudores Varios,1.2.02.00,4,139,1,ACTIVO,NO_CORRIENTE,Otros Créditos,,Deudores Varios,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,139,,,,,ACTIVA
+1.2.02.02,Accionistas,1.2.02.00,4,140,1,ACTIVO,NO_CORRIENTE,Otros Créditos,,Accionistas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,140,,,,,ACTIVA
+1.2.02.03,Gastos Pagados por Adelantado,1.2.02.00,4,141,1,ACTIVO,NO_CORRIENTE,Otros Créditos,,Gastos Pagados por Adelantado,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,141,,,,,ACTIVA
+1.2.02.04,Anticipos a Proveedores,1.2.02.00,4,142,1,ACTIVO,NO_CORRIENTE,Otros Créditos,,Anticipos a Proveedores,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,142,,,,,ACTIVA
+1.2.02.05,Préstamos al Personal,1.2.02.00,4,143,1,ACTIVO,NO_CORRIENTE,Otros Créditos,,Préstamos al Personal,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,143,,,,,ACTIVA
+1.2.02.06,Socio X Cta. Particular,1.2.02.00,4,144,1,ACTIVO,NO_CORRIENTE,Otros Créditos,,Socio X Cta. Particular,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,144,,,,,ACTIVA
+1.2.03.00,Bienes de Cambio,1.20.00.00,4,145,1,ACTIVO,NO_CORRIENTE,,,Bienes de Cambio,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,145,,,,Rubro no corriente análogo al activo corriente.,ACTIVA
+1.2.04.00,Bienes de Uso,1.20.00.00,4,146,0,ACTIVO,NO_CORRIENTE,,Bienes de Uso,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,146,,,,,ACTIVA
+1.2.04.01,Rodados,1.2.04.00,4,147,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Rodados,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,1,1,BIENES_USO_RODADOS,Compras,,147,,,,,ACTIVA
+1.2.04.02,Rodados en Tránsito,1.2.04.00,4,148,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Rodados en Tránsito,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,148,,,,,ACTIVA
+1.2.04.03,Instalaciones,1.2.04.00,4,149,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Instalaciones,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,1,1,BIENES_USO_INSTALACIONES,Compras,,149,,,,,ACTIVA
+1.2.04.03.1,Instalaciones Industriales,1.2.04.00,5,150,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Instalaciones Industriales,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,BIENES_USO_INSTALACIONES,Compras,,150,,,,,ACTIVA
+1.2.04.04,Muebles y Útiles,1.2.04.00,4,151,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Muebles y Útiles,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,1,1,BIENES_USO_MUEBLES_UTILES,Compras,,151,,,,,ACTIVA
+1.2.04.04.1,Muebles y Útiles de Oficina,1.2.04.00,5,152,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Muebles y Útiles de Oficina,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,BIENES_USO_MUEBLES_UTILES,Compras,,152,,,,,ACTIVA
+1.2.04.05,Maquinarias,1.2.04.00,4,153,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Maquinarias,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,1,1,BIENES_USO_MAQUINARIAS,Compras,,153,,,,,ACTIVA
+1.2.04.06,Herramientas,1.2.04.00,4,154,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Herramientas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,154,,,,,ACTIVA
+1.2.04.07,Implementos Agrícolas,1.2.04.00,4,155,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Implementos Agrícolas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,155,,,,,ACTIVA
+1.2.04.08,Útiles de Labranza y Herramientas,1.2.04.00,4,156,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Útiles de Labranza y Herramientas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,156,,,,,ACTIVA
+1.2.04.09,Equipos de Computación,1.2.04.00,4,157,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Equipos de Computación,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,1,1,BIENES_USO_EQUIPOS_COMPUTACION,Compras,,157,,,,,ACTIVA
+1.2.04.10,Equipos Especiales,1.2.04.00,4,158,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Equipos Especiales,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,158,,,,,ACTIVA
+1.2.04.11,Inmuebles,1.2.04.00,4,159,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Inmuebles,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,1,1,BIENES_USO_INMUEBLES,Compras/Contabilidad,,159,,,,,ACTIVA
+1.2.04.11.1,Terrenos,1.2.04.00,5,160,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Terrenos,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,160,,,,,ACTIVA
+1.2.04.11.2,Edificios,1.2.04.00,5,161,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Edificios,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,161,,,,,ACTIVA
+1.2.04.12,Obras en Construcción,1.2.04.00,4,162,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Obras en Construcción,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,162,,,,,ACTIVA
+1.2.04.13,Alambrados y Tranqueras,1.2.04.00,4,163,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Alambrados y Tranqueras,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,163,,,,,ACTIVA
+1.2.04.14,Finca XX,1.2.04.00,4,164,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Finca XX,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,164,,,,,ACTIVA
+1.2.04.15,Represa,1.2.04.00,4,165,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Represa,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,165,,,,,ACTIVA
+1.2.04.16,Mobiliario Salón de Ventas,1.2.04.00,4,166,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Mobiliario Salón de Ventas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,166,,,,,ACTIVA
+1.2.04.17,Anticipos p/ Compra Bs. de Uso,1.2.04.00,4,167,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Anticipos p/ Compra Bs. de Uso,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,167,,,,,ACTIVA
+1.2.04.18,Anticipos Compra Inmuebles,1.2.04.00,4,168,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,Anticipos Compra Inmuebles,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,168,,,,,ACTIVA
+1.2.04.19,(-) Amortización Acumulada Cuentas Regularizadoras del Activo,1.2.04.00,4,169,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,(-) Amortización Acumulada Cuentas Regularizadoras del Activo,0,,1,1.2.04.00,AMORTIZACION_ACUMULADA,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,169,,,,,ACTIVA
+1.2.04.20,(-) Amortización Acum. Bs. de Uso,1.2.04.00,4,170,0,ACTIVO,NO_CORRIENTE,Bienes de Uso,(-) Amortización Acum. Bs. de Uso,,0,,1,1.2.04.00,AMORTIZACION_ACUMULADA,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,170,,,,,ACTIVA
+1.2.04.20.1,(-) Amortización Acum. Instalaciones,1.2.04.20,5,171,1,ACTIVO,NO_CORRIENTE,(-) Amortización Acum. Bs. de Uso,,(-) Amortización Acum. Instalaciones,0,,1,1.2.04.03,AMORTIZACION_ACUMULADA,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,171,,,,,ACTIVA
+1.2.04.20.2,(-) Amortización Acum. Inmuebles,1.2.04.20,5,172,1,ACTIVO,NO_CORRIENTE,(-) Amortización Acum. Bs. de Uso,,(-) Amortización Acum. Inmuebles,0,,1,1.2.04.11,AMORTIZACION_ACUMULADA,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,172,,,,,ACTIVA
+1.2.04.20.3,(-) Amortización Acum. Rodados,1.2.04.20,5,173,1,ACTIVO,NO_CORRIENTE,(-) Amortización Acum. Bs. de Uso,,(-) Amortización Acum. Rodados,0,,1,1.2.04.01,AMORTIZACION_ACUMULADA,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,173,,,,,ACTIVA
+1.2.04.21,(-) Prev. p/ Desvalorización Bs. de Uso,1.2.04.00,4,174,1,ACTIVO,NO_CORRIENTE,Bienes de Uso,,(-) Prev. p/ Desvalorización Bs. de Uso,0,,1,1.2.04.00,PREVISION,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,174,,,,,ACTIVA
+1.2.05.00,Participación Permanente en Otras Empresas,1.20.00.00,4,175,0,ACTIVO,NO_CORRIENTE,,Participación Permanente en Otras Empresas,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,175,,,,,ACTIVA
+1.2.05.01,Participación XX S.A.,1.2.05.00,4,176,1,ACTIVO,NO_CORRIENTE,Participación Permanente en Otras Empresas,,Participación XX S.A.,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,176,,,,,ACTIVA
+1.2.05.02,Participación Única S.A. Control,1.2.05.00,4,177,1,ACTIVO,NO_CORRIENTE,Participación Permanente en Otras Empresas,,Participación Única S.A. Control,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,177,,,,,ACTIVA
+1.2.05.03,Jujuy Sociedad Controlada,1.2.05.00,4,178,1,ACTIVO,NO_CORRIENTE,Participación Permanente en Otras Empresas,,Jujuy Sociedad Controlada,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,178,,,,,ACTIVA
+1.2.05.04,Acciones Vinculadas,1.2.05.00,4,179,1,ACTIVO,NO_CORRIENTE,Participación Permanente en Otras Empresas,,Acciones Vinculadas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,179,,,,,ACTIVA
+1.2.05.05,Acciones a Recibir,1.2.05.00,4,180,1,ACTIVO,NO_CORRIENTE,Participación Permanente en Otras Empresas,,Acciones a Recibir,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,180,,,,,ACTIVA
+1.2.06.00,Otras Inversiones,1.20.00.00,4,181,0,ACTIVO,NO_CORRIENTE,,Otras Inversiones,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,181,,,,,ACTIVA
+1.2.06.01,Inmuebles p/ Alquiler,1.2.06.00,4,182,1,ACTIVO,NO_CORRIENTE,Otras Inversiones,,Inmuebles p/ Alquiler,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,182,,,,,ACTIVA
+1.2.06.02,Inmuebles en Alquiler,1.2.06.00,4,183,1,ACTIVO,NO_CORRIENTE,Otras Inversiones,,Inmuebles en Alquiler,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,183,,,,,ACTIVA
+1.2.06.03,Muebles p/ Alquiler,1.2.06.00,4,184,1,ACTIVO,NO_CORRIENTE,Otras Inversiones,,Muebles p/ Alquiler,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,184,,,,,ACTIVA
+1.2.06.04,Edificios p/ Alquiler,1.2.06.00,4,185,1,ACTIVO,NO_CORRIENTE,Otras Inversiones,,Edificios p/ Alquiler,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,185,,,,,ACTIVA
+1.2.06.05,Terrenos p/ Alquiler,1.2.06.00,4,186,1,ACTIVO,NO_CORRIENTE,Otras Inversiones,,Terrenos p/ Alquiler,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,186,,,,,ACTIVA
+1.2.06.06,Maquinarias y Equipos p/ Alquiler,1.2.06.00,4,187,1,ACTIVO,NO_CORRIENTE,Otras Inversiones,,Maquinarias y Equipos p/ Alquiler,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,187,,,,,ACTIVA
+1.2.06.07,Rodados p/ Alquiler,1.2.06.00,4,188,1,ACTIVO,NO_CORRIENTE,Otras Inversiones,,Rodados p/ Alquiler,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,188,,,,,ACTIVA
+1.2.06.08,Anticipo a Proveedores p/ Alquiler,1.2.06.00,4,189,1,ACTIVO,NO_CORRIENTE,Otras Inversiones,,Anticipo a Proveedores p/ Alquiler,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,189,,,,,ACTIVA
+1.2.06.09,(-) Amort. Acum. (según Rubros),1.2.06.00,4,190,0,ACTIVO,NO_CORRIENTE,Otras Inversiones,(-) Amort. Acum. (según Rubros),,0,,1,1.2.06.00,AMORTIZACION_ACUMULADA,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,190,,,,,ACTIVA
+1.2.06.10,(-) Amort. Acum. Inmuebles en Alquiler,1.2.06.09,4,191,1,ACTIVO,NO_CORRIENTE,(-) Amort. Acum. (según Rubros),,(-) Amort. Acum. Inmuebles en Alquiler,0,,1,1.2.06.02,AMORTIZACION_ACUMULADA,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,191,,,,,ACTIVA
+1.2.07.00,Activos Intangibles,1.20.00.00,4,192,0,ACTIVO,NO_CORRIENTE,,Activos Intangibles,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,192,,,,,ACTIVA
+1.2.07.01,Bienes Inmateriales,1.2.07.00,4,193,0,ACTIVO,NO_CORRIENTE,Activos Intangibles,Bienes Inmateriales,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,193,,,,,ACTIVA
+1.2.07.01.1,Marcas Registradas,1.2.07.01,5,194,1,ACTIVO,NO_CORRIENTE,Bienes Inmateriales,,Marcas Registradas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,194,,,,,ACTIVA
+1.2.07.01.2,Marca de Fábrica,1.2.07.01,5,195,1,ACTIVO,NO_CORRIENTE,Bienes Inmateriales,,Marca de Fábrica,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,195,,,,,ACTIVA
+1.2.07.01.3,Patente de Invención,1.2.07.01,5,196,1,ACTIVO,NO_CORRIENTE,Bienes Inmateriales,,Patente de Invención,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,196,,,,,ACTIVA
+1.2.07.01.4,Derechos de Autor,1.2.07.01,5,197,1,ACTIVO,NO_CORRIENTE,Bienes Inmateriales,,Derechos de Autor,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,197,,,,,ACTIVA
+1.2.07.01.5,Gastos de Organización,1.2.07.01,5,198,1,ACTIVO,NO_CORRIENTE,Bienes Inmateriales,,Gastos de Organización,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,198,,,,,ACTIVA
+1.2.07.01.6,Concesiones,1.2.07.01,5,199,1,ACTIVO,NO_CORRIENTE,Bienes Inmateriales,,Concesiones,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,199,,,,,ACTIVA
+1.2.07.01.7,Franquicias,1.2.07.01,5,200,1,ACTIVO,NO_CORRIENTE,Bienes Inmateriales,,Franquicias,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,200,,,,,ACTIVA
+1.2.07.02,Cargos Diferidos,1.2.07.00,4,201,0,ACTIVO,NO_CORRIENTE,Activos Intangibles,Cargos Diferidos,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,201,,,,,ACTIVA
+1.2.07.02.1,Gastos de Investigación y Desarrollo,1.2.07.02,5,202,1,ACTIVO,NO_CORRIENTE,Cargos Diferidos,,Gastos de Investigación y Desarrollo,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,202,,,,,ACTIVA
+1.2.07.02.2,Gastos de Exploración,1.2.07.02,5,203,1,ACTIVO,NO_CORRIENTE,Cargos Diferidos,,Gastos de Exploración,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,203,,,,,ACTIVA
+1.2.07.02.3,Gastos de Organización,1.2.07.02,5,204,1,ACTIVO,NO_CORRIENTE,Cargos Diferidos,,Gastos de Organización,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,204,,,,,ACTIVA
+1.2.07.02.4,(-) Amort. Acum. Activos Intangibles,1.2.07.02,5,205,0,ACTIVO,NO_CORRIENTE,Cargos Diferidos,(-) Amort. Acum. Activos Intangibles,,0,,1,1.2.07.02,AMORTIZACION_ACUMULADA,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,205,,,,,ACTIVA
+1.2.07.02.5,(-) Amortización Marcas y Patentes,1.2.07.02.4,5,206,1,ACTIVO,NO_CORRIENTE,(-) Amort. Acum. Activos Intangibles,,(-) Amortización Marcas y Patentes,0,,1,1.2.07.01,AMORTIZACION_ACUMULADA,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,206,,,,,ACTIVA
+1.2.07.02.6,(-) Amortización Marca de Fábrica,1.2.07.02.4,5,207,1,ACTIVO,NO_CORRIENTE,(-) Amort. Acum. Activos Intangibles,,(-) Amortización Marca de Fábrica,0,,1,1.2.07.01,AMORTIZACION_ACUMULADA,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,207,,,,,ACTIVA
+1.2.07.02.7,(-) Amortización Gastos de Organización,1.2.07.02.4,5,208,1,ACTIVO,NO_CORRIENTE,(-) Amort. Acum. Activos Intangibles,,(-) Amortización Gastos de Organización,0,,1,1.2.07.02,AMORTIZACION_ACUMULADA,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,208,,,,,ACTIVA
+1.2.08.00,Otros Activos,1.20.00.00,4,209,0,ACTIVO,NO_CORRIENTE,,Otros Activos,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,209,,,,,ACTIVA
+1.2.08.01,Bien de Uso Obsoleto,1.2.08.00,4,210,0,ACTIVO,NO_CORRIENTE,Otros Activos,Bien de Uso Obsoleto,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,210,,,,,ACTIVA
+1.2.08.01.1,Rodado Obsoleto,1.2.08.01,5,211,1,ACTIVO,NO_CORRIENTE,Bien de Uso Obsoleto,,Rodado Obsoleto,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,211,,,,,ACTIVA
+1.2.08.01.2,Máquinas Obsoletas,1.2.08.01,5,212,1,ACTIVO,NO_CORRIENTE,Bien de Uso Obsoleto,,Máquinas Obsoletas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,212,,,,,ACTIVA
+1.2.08.02,Bienes de Uso Desafectados,1.2.08.00,4,213,1,ACTIVO,NO_CORRIENTE,Otros Activos,,Bienes de Uso Desafectados,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,213,,,,,ACTIVA
+1.2.08.03,Insumos,1.2.08.00,4,214,1,ACTIVO,NO_CORRIENTE,Otros Activos,,Insumos,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,214,,,,,ACTIVA
+1.2.08.04,Repuestos,1.2.08.00,4,215,1,ACTIVO,NO_CORRIENTE,Otros Activos,,Repuestos,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,215,,,,,ACTIVA
+1.2.09.00,Llave de Negocio,1.20.00.00,4,216,0,ACTIVO,NO_CORRIENTE,,Llave de Negocio,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,216,,,,,ACTIVA
+1.2.09.01,Valor Llave,1.2.09.00,4,217,1,ACTIVO,NO_CORRIENTE,Llave de Negocio,,Valor Llave,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,217,,,,,ACTIVA
+1.2.09.02,(-) Amortización Llave de Negocio,1.2.09.00,4,218,1,ACTIVO,NO_CORRIENTE,Llave de Negocio,,(-) Amortización Llave de Negocio,0,,1,1.2.09.01,AMORTIZACION_ACUMULADA,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,218,,,,,ACTIVA
+2.00.00.00,PASIVO,,4,219,0,PASIVO,NO_APLICA,,PASIVO,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,219,,,,,ACTIVA
+2.10.00.00,PASIVO CORRIENTE,2.00.00.00,4,220,0,PASIVO,CORRIENTE,,PASIVO CORRIENTE,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,220,,,,,ACTIVA
+2.1.01.00,Deudas Comerciales,2.10.00.00,4,221,0,PASIVO,CORRIENTE,,Deudas Comerciales,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,221,,,,,ACTIVA
+2.1.01.01,Proveedores,2.1.01.00,4,222,1,PASIVO,CORRIENTE,Deudas Comerciales,,Proveedores,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,PROVEEDORES_CC,Compras/Pagos,,222,,,,,ACTIVA
+2.1.01.01.1,Proveedores del Exterior,2.1.01.00,5,223,1,PASIVO,CORRIENTE,Deudas Comerciales,,Proveedores del Exterior,0,,0,,,ACREEDOR,,,,,,,,,,,,,1,1,1,0,0,PROVEEDORES_CC,Compras/Pagos,,223,,,,,ACTIVA
+2.1.01.01.2,Proveedores en Moneda Extranjera,2.1.01.00,5,224,1,PASIVO,CORRIENTE,Deudas Comerciales,,Proveedores en Moneda Extranjera,0,,0,,,ACREEDOR,,,,,,,,,,,,,1,1,1,0,0,PROVEEDORES_CC,Compras/Pagos,,224,,,,,ACTIVA
+2.1.01.02,Acreedores Varios,2.1.01.00,4,225,1,PASIVO,CORRIENTE,Deudas Comerciales,,Acreedores Varios,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,225,,,,,ACTIVA
+2.1.01.03,Cuentas por Pagar,2.1.01.00,4,226,1,PASIVO,CORRIENTE,Deudas Comerciales,,Cuentas por Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,226,,,,,ACTIVA
+2.1.01.04,Obligaciones a Pagar,2.1.01.00,4,227,1,PASIVO,CORRIENTE,Deudas Comerciales,,Obligaciones a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,227,,,,,ACTIVA
+2.1.01.04.1,Obligaciones a Pagar con Avales de Terceros,2.1.01.00,5,228,1,PASIVO,CORRIENTE,Deudas Comerciales,,Obligaciones a Pagar con Avales de Terceros,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,228,,,,,ACTIVA
+2.1.01.04.2,Obligaciones a Pagar con Garantía Hipotecaria,2.1.01.00,5,229,1,PASIVO,CORRIENTE,Deudas Comerciales,,Obligaciones a Pagar con Garantía Hipotecaria,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,229,,,,,ACTIVA
+2.1.01.05,Documentos a Pagar,2.1.01.00,4,230,1,PASIVO,CORRIENTE,Deudas Comerciales,,Documentos a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,230,,,,,ACTIVA
+2.1.01.06,Cheques de Pago Diferido a Pagar,2.1.01.00,4,231,1,PASIVO,CORRIENTE,Deudas Comerciales,,Cheques de Pago Diferido a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,231,,,,,ACTIVA
+2.1.01.07,Luz y Agua a Pagar,2.1.01.00,4,232,1,PASIVO,CORRIENTE,Deudas Comerciales,,Luz y Agua a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,232,,,,,ACTIVA
+2.1.01.08,Seguro contra Incendio a Pagar,2.1.01.00,4,233,1,PASIVO,CORRIENTE,Deudas Comerciales,,Seguro contra Incendio a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,233,,,,,ACTIVA
+2.1.01.09,Intereses Moratorios a Pagar,2.1.01.00,4,234,1,PASIVO,CORRIENTE,Deudas Comerciales,,Intereses Moratorios a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,234,,,,,ACTIVA
+2.1.01.10,(-) Intereses Negativos a Devengar,2.1.01.00,4,235,1,PASIVO,CORRIENTE,Deudas Comerciales,,(-) Intereses Negativos a Devengar,0,,1,2.1.01.00,INTERESES_A_DEVENGAR,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,235,,,,,ACTIVA
+2.1.02.00,Préstamos,2.10.00.00,4,236,0,PASIVO,CORRIENTE,,Préstamos,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,236,,,,,ACTIVA
+2.1.02.01,Obligaciones a Pagar Bancarias,2.1.02.00,4,237,1,PASIVO,CORRIENTE,Préstamos,,Obligaciones a Pagar Bancarias,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,237,,,,,ACTIVA
+2.1.02.01.1,Oblig. a Pagar Banc. a Sola Firma,2.1.02.00,5,238,1,PASIVO,CORRIENTE,Préstamos,,Oblig. a Pagar Banc. a Sola Firma,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,238,,,,,ACTIVA
+2.1.02.01.2,Oblig. a Pagar Banc. con Avales de Terceros,2.1.02.00,5,239,1,PASIVO,CORRIENTE,Préstamos,,Oblig. a Pagar Banc. con Avales de Terceros,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,239,,,,,ACTIVA
+2.1.02.01.3,Oblig. a Pagar Banc. con Garantía Prendaria,2.1.02.00,5,240,1,PASIVO,CORRIENTE,Préstamos,,Oblig. a Pagar Banc. con Garantía Prendaria,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,240,,,,,ACTIVA
+2.1.02.01.4,Oblig. a Pagar Banc. con Garantía Real,2.1.02.00,5,241,1,PASIVO,CORRIENTE,Préstamos,,Oblig. a Pagar Banc. con Garantía Real,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,241,,,,,ACTIVA
+2.1.02.02,Banco XX Préstamos Bancarios,2.1.02.00,4,242,1,PASIVO,CORRIENTE,Préstamos,,Banco XX Préstamos Bancarios,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,242,,,,,ACTIVA
+2.1.02.02.1,Banco Río Préstamo Hipotecario,2.1.02.00,5,243,1,PASIVO,CORRIENTE,Préstamos,,Banco Río Préstamo Hipotecario,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,243,,,,,ACTIVA
+2.1.02.02.2,Banco Macro Préstamo Hipotecario,2.1.02.00,5,244,1,PASIVO,CORRIENTE,Préstamos,,Banco Macro Préstamo Hipotecario,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,244,,,,,ACTIVA
+2.1.02.03,Banco XX Giro en Descubierto,2.1.02.00,4,245,1,PASIVO,CORRIENTE,Préstamos,,Banco XX Giro en Descubierto,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,BANCO_CUENTA_CORRIENTE,,,245,,,,,ACTIVA
+2.1.02.04,Adelantos en Cta. Cte.,2.1.02.00,4,246,1,PASIVO,CORRIENTE,Préstamos,,Adelantos en Cta. Cte.,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,246,,,,,ACTIVA
+2.1.02.05,Acreedores Prendarios,2.1.02.00,4,247,1,PASIVO,CORRIENTE,Préstamos,,Acreedores Prendarios,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,247,,,,,ACTIVA
+2.1.02.06,Acreedores Hipotecarios,2.1.02.00,4,248,1,PASIVO,CORRIENTE,Préstamos,,Acreedores Hipotecarios,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,248,,,,,ACTIVA
+2.1.02.07,Obligaciones Negociables,2.1.02.00,4,249,1,PASIVO,CORRIENTE,Préstamos,,Obligaciones Negociables,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,249,,,,,ACTIVA
+2.1.02.08,Hipoteca a Pagar,2.1.02.00,4,250,1,PASIVO,CORRIENTE,Préstamos,,Hipoteca a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,250,,,,,ACTIVA
+2.1.02.09,(-) Intereses Bancarios Negativos a Devengar,2.1.02.00,4,251,1,PASIVO,CORRIENTE,Préstamos,,(-) Intereses Bancarios Negativos a Devengar,0,,1,2.1.02.00,INTERESES_A_DEVENGAR,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,251,,,,,ACTIVA
+2.1.02.10,(-) Intereses Negativos a Devengar por Hipoteca,2.1.02.00,4,252,1,PASIVO,CORRIENTE,Préstamos,,(-) Intereses Negativos a Devengar por Hipoteca,0,,1,2.1.02.00,INTERESES_A_DEVENGAR,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,252,,,,,ACTIVA
+2.1.02.11,(-) Intereses Hipotecarios a Devengar,2.1.02.00,4,253,1,PASIVO,CORRIENTE,Préstamos,,(-) Intereses Hipotecarios a Devengar,0,,1,2.1.02.00,INTERESES_A_DEVENGAR,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,253,,,,,ACTIVA
+2.1.03.00,Remuneraciones y Cargas Sociales,2.10.00.00,4,254,0,PASIVO,CORRIENTE,,Remuneraciones y Cargas Sociales,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,254,,,,,ACTIVA
+2.1.03.01,Sueldos y Jornales a Pagar,2.1.03.00,4,255,1,PASIVO,CORRIENTE,Remuneraciones y Cargas Sociales,,Sueldos y Jornales a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,SUELDOS_A_PAGAR,Sueldos,,255,,,,,ACTIVA
+2.1.03.02,Sueldo Anual Complementario a Pagar,2.1.03.00,4,256,1,PASIVO,CORRIENTE,Remuneraciones y Cargas Sociales,,Sueldo Anual Complementario a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,SUELDOS_A_PAGAR,Sueldos,,256,,,,,ACTIVA
+2.1.03.03,Cargas Sociales a Pagar,2.1.03.00,4,257,1,PASIVO,CORRIENTE,Remuneraciones y Cargas Sociales,,Cargas Sociales a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,CARGAS_SOCIALES_A_PAGAR,Sueldos,,257,,,,,ACTIVA
+2.1.03.04,Obra Social a Pagar,2.1.03.00,4,258,1,PASIVO,CORRIENTE,Remuneraciones y Cargas Sociales,,Obra Social a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,OBRA_SOCIAL_A_PAGAR,Sueldos,,258,,,,,ACTIVA
+2.1.03.05,Contribuciones Sociales a Pagar,2.1.03.00,4,259,1,PASIVO,CORRIENTE,Remuneraciones y Cargas Sociales,,Contribuciones Sociales a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,CARGAS_SOCIALES_A_PAGAR,Sueldos,,259,,,,,ACTIVA
+2.1.03.06,ANSES o Aporte Jubilatorio a Pagar,2.1.03.00,4,260,1,PASIVO,CORRIENTE,Remuneraciones y Cargas Sociales,,ANSES o Aporte Jubilatorio a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,CARGAS_SOCIALES_A_PAGAR,Sueldos,,260,,,,,ACTIVA
+2.1.03.07,Indemnizaciones a Pagar,2.1.03.00,4,261,1,PASIVO,CORRIENTE,Remuneraciones y Cargas Sociales,,Indemnizaciones a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,SUELDOS_A_PAGAR,Sueldos,,261,,,,,ACTIVA
+2.1.03.08,Aportes Sindicales a Pagar,2.1.03.00,4,262,1,PASIVO,CORRIENTE,Remuneraciones y Cargas Sociales,,Aportes Sindicales a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,SINDICATO_A_PAGAR,Sueldos,,262,,,,,ACTIVA
+2.1.03.09,Aporte Seguridad Social,2.1.03.00,4,263,1,PASIVO,CORRIENTE,Remuneraciones y Cargas Sociales,,Aporte Seguridad Social,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,CARGAS_SOCIALES_A_PAGAR,Sueldos,,263,,,,,ACTIVA
+2.1.03.10,Honorarios de Directores a Pagar,2.1.03.00,4,264,1,PASIVO,CORRIENTE,Remuneraciones y Cargas Sociales,,Honorarios de Directores a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,264,,,,,ACTIVA
+2.1.03.11,Vacaciones a Pagar,2.1.03.00,4,265,1,PASIVO,CORRIENTE,Remuneraciones y Cargas Sociales,,Vacaciones a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,SUELDOS_A_PAGAR,Sueldos,,265,,,,,ACTIVA
+2.1.03.12,Provisión Vacaciones,2.1.03.00,4,266,1,PASIVO,CORRIENTE,Remuneraciones y Cargas Sociales,,Provisión Vacaciones,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,SUELDOS_A_PAGAR,Sueldos,,266,,,,,ACTIVA
+2.1.04.00,Cargas Fiscales,2.10.00.00,4,267,0,PASIVO,CORRIENTE,,Cargas Fiscales,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,267,,,,,ACTIVA
+2.1.04.01,IVA Débito Fiscal,2.1.04.00,4,268,1,PASIVO,CORRIENTE,Cargas Fiscales,,IVA Débito Fiscal,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,IVA_DEBITO_FISCAL,IVA,,268,,,,,ACTIVA
+2.1.04.02,IVA DGI Fiscal,2.1.04.00,4,269,1,PASIVO,CORRIENTE,Cargas Fiscales,,IVA DGI Fiscal,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,IVA_DEBITO_FISCAL,IVA,,269,,,,,ACTIVA
+2.1.04.03,IVA Saldo a Pagar AFIP,2.1.04.00,4,270,1,PASIVO,CORRIENTE,Cargas Fiscales,,IVA Saldo a Pagar AFIP,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,IVA_SALDO_A_PAGAR,IVA,,270,,,,,ACTIVA
+2.1.04.04,IVA Responsable No Inscripto,2.1.04.00,4,271,1,PASIVO,CORRIENTE,Cargas Fiscales,,IVA Responsable No Inscripto,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,271,,,,,ACTIVA
+2.1.04.05,DGI Moratoria a Pagar,2.1.04.00,4,272,1,PASIVO,CORRIENTE,Cargas Fiscales,,DGI Moratoria a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,272,,,,,ACTIVA
+2.1.04.06,DGI IVA a Pagar,2.1.04.00,4,273,1,PASIVO,CORRIENTE,Cargas Fiscales,,DGI IVA a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,IVA_SALDO_A_PAGAR,IVA,,273,,,,,ACTIVA
+2.1.04.07,Impuestos a Pagar,2.1.04.00,4,274,1,PASIVO,CORRIENTE,Cargas Fiscales,,Impuestos a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,IMPUESTOS_TASAS_CONTRIBUCIONES,Impuestos,,274,,,,,ACTIVA
+2.1.04.08,Impuesto a los Ingresos Brutos a Pagar,2.1.04.00,4,275,1,PASIVO,CORRIENTE,Cargas Fiscales,,Impuesto a los Ingresos Brutos a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,IIBB_A_PAGAR,Impuestos,,275,,,,,ACTIVA
+2.1.04.09,Impuesto a las Ganancias a Pagar,2.1.04.00,4,276,1,PASIVO,CORRIENTE,Cargas Fiscales,,Impuesto a las Ganancias a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,GANANCIAS_A_PAGAR,Impuestos,,276,,,,,ACTIVA
+2.1.04.10,Impuesto Inmobiliario a Pagar,2.1.04.00,4,277,1,PASIVO,CORRIENTE,Cargas Fiscales,,Impuesto Inmobiliario a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,277,,,,,ACTIVA
+2.1.04.11,Impuesto Automotor a Pagar,2.1.04.00,4,278,1,PASIVO,CORRIENTE,Cargas Fiscales,,Impuesto Automotor a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,278,,,,,ACTIVA
+2.1.04.12,Retenciones a Depositar,2.1.04.00,4,279,1,PASIVO,CORRIENTE,Cargas Fiscales,,Retenciones a Depositar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,279,,,,,ACTIVA
+2.1.04.13,IIBB a Pagar,2.1.04.00,4,280,1,PASIVO,CORRIENTE,Cargas Fiscales,,IIBB a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,IIBB_A_PAGAR,Impuestos,,280,,,,,ACTIVA
+2.1.04.14,Ganancias a Pagar,2.1.04.00,4,281,1,PASIVO,CORRIENTE,Cargas Fiscales,,Ganancias a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,GANANCIAS_A_PAGAR,Impuestos,,281,,,,,ACTIVA
+2.1.05.00,Anticipo de Clientes,2.10.00.00,4,282,0,PASIVO,CORRIENTE,,Anticipo de Clientes,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,ANTICIPOS_CLIENTES,Ventas/Cobranzas,,282,,,,,ACTIVA
+2.1.05.01,Adelantos Recibidos por Ventas,2.1.05.00,4,283,1,PASIVO,CORRIENTE,Anticipo de Clientes,,Adelantos Recibidos por Ventas,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,ANTICIPOS_CLIENTES,Ventas/Cobranzas,,283,,,,,ACTIVA
+2.1.05.02,Anticipo p/ Ventas de Mercaderías,2.1.05.00,4,284,1,PASIVO,CORRIENTE,Anticipo de Clientes,,Anticipo p/ Ventas de Mercaderías,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,ANTICIPOS_CLIENTES,Ventas/Cobranzas,,284,,,,,ACTIVA
+2.1.05.03,Anticipo p/ Ventas de Productos en Proceso,2.1.05.00,4,285,1,PASIVO,CORRIENTE,Anticipo de Clientes,,Anticipo p/ Ventas de Productos en Proceso,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,ANTICIPOS_CLIENTES,Ventas/Cobranzas,,285,,,,,ACTIVA
+2.1.05.04,Señas Recibidas,2.1.05.00,4,286,1,PASIVO,CORRIENTE,Anticipo de Clientes,,Señas Recibidas,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,ANTICIPOS_CLIENTES,Ventas/Cobranzas,,286,,,,,ACTIVA
+2.1.05.05,Depósitos Recibidos en Garantía,2.1.05.00,4,287,1,PASIVO,CORRIENTE,Anticipo de Clientes,,Depósitos Recibidos en Garantía,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,ANTICIPOS_CLIENTES,Ventas/Cobranzas,,287,,,,,ACTIVA
+2.1.06.00,Dividendos a Pagar,2.10.00.00,4,288,0,PASIVO,CORRIENTE,,Dividendos a Pagar,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,288,,,,,ACTIVA
+2.1.06.01,Dividendos a Pagar,2.1.06.00,4,289,0,PASIVO,CORRIENTE,Dividendos a Pagar,Dividendos a Pagar,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,289,,,,,ACTIVA
+2.1.06.01.1,Dividendos en Efectivo a Pagar,2.1.06.01,5,290,1,PASIVO,CORRIENTE,Dividendos a Pagar,,Dividendos en Efectivo a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,290,,,,,ACTIVA
+2.1.07.00,Otras Deudas,2.10.00.00,4,291,0,PASIVO,CORRIENTE,,Otras Deudas,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,291,,,,,ACTIVA
+2.1.07.01,Alquileres Cobrados p/ Adelantado,2.1.07.00,4,292,1,PASIVO,CORRIENTE,Otras Deudas,,Alquileres Cobrados p/ Adelantado,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,292,,,,,ACTIVA
+2.1.07.02,Rentas Cobradas por Adelantado,2.1.07.00,4,293,1,PASIVO,CORRIENTE,Otras Deudas,,Rentas Cobradas por Adelantado,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,293,,,,,ACTIVA
+2.1.07.03,Seguros Cobrados p/ Adelantado,2.1.07.00,4,294,1,PASIVO,CORRIENTE,Otras Deudas,,Seguros Cobrados p/ Adelantado,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,294,,,,,ACTIVA
+2.1.07.04,Intereses Cobrados por Adelantado,2.1.07.00,4,295,1,PASIVO,CORRIENTE,Otras Deudas,,Intereses Cobrados por Adelantado,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,295,,,,,ACTIVA
+2.1.07.05,Comisiones Cobradas p/ Adelantadas,2.1.07.00,4,296,1,PASIVO,CORRIENTE,Otras Deudas,,Comisiones Cobradas p/ Adelantadas,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,296,,,,,ACTIVA
+2.1.07.06,Alquileres a Pagar,2.1.07.00,4,297,1,PASIVO,CORRIENTE,Otras Deudas,,Alquileres a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,297,,,,,ACTIVA
+2.1.07.07,Alquiler Salón de Ventas a Pagar,2.1.07.00,4,298,1,PASIVO,CORRIENTE,Otras Deudas,,Alquiler Salón de Ventas a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,298,,,,,ACTIVA
+2.1.07.08,Inmueble p/ Alquiler a Pagar,2.1.07.00,4,299,1,PASIVO,CORRIENTE,Otras Deudas,,Inmueble p/ Alquiler a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,299,,,,,ACTIVA
+2.1.07.09,Gastos a Pagar,2.1.07.00,4,300,1,PASIVO,CORRIENTE,Otras Deudas,,Gastos a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,300,,,,,ACTIVA
+2.1.07.10,Seguros a Pagar,2.1.07.00,4,301,1,PASIVO,CORRIENTE,Otras Deudas,,Seguros a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,301,,,,,ACTIVA
+2.1.07.11,Comisiones a Pagar,2.1.07.00,4,302,1,PASIVO,CORRIENTE,Otras Deudas,,Comisiones a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,302,,,,,ACTIVA
+2.1.07.12,Fletes a Pagar,2.1.07.00,4,303,1,PASIVO,CORRIENTE,Otras Deudas,,Fletes a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,303,,,,,ACTIVA
+2.1.07.13,Honorarios a Pagar,2.1.07.00,4,304,1,PASIVO,CORRIENTE,Otras Deudas,,Honorarios a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,304,,,,,ACTIVA
+2.1.07.14,Intereses a Pagar,2.1.07.00,4,305,1,PASIVO,CORRIENTE,Otras Deudas,,Intereses a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,305,,,,,ACTIVA
+2.1.07.15,Concesiones y Franquicias a Pagar,2.1.07.00,4,306,1,PASIVO,CORRIENTE,Otras Deudas,,Concesiones y Franquicias a Pagar,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,306,,,,,ACTIVA
+2.1.07.16,Provisión por Gastos,2.1.07.00,4,307,1,PASIVO,CORRIENTE,Otras Deudas,,Provisión por Gastos,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,307,,,,,ACTIVA
+2.1.07.17,Deudas Diversas,2.1.07.00,4,308,1,PASIVO,CORRIENTE,Otras Deudas,,Deudas Diversas,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,308,,,,,ACTIVA
+2.1.07.18,(-) Intereses Negativos a Devengar,2.1.07.00,4,309,1,PASIVO,CORRIENTE,Otras Deudas,,(-) Intereses Negativos a Devengar,0,,1,2.1.07.00,INTERESES_A_DEVENGAR,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,309,,,,,ACTIVA
+2.1.07.19,(-) Comisiones Negativas a Devengar,2.1.07.00,4,310,1,PASIVO,CORRIENTE,Otras Deudas,,(-) Comisiones Negativas a Devengar,0,,1,2.1.07.00,INTERESES_A_DEVENGAR,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,310,,,,,ACTIVA
+2.1.08.00,Previsiones,2.10.00.00,4,311,0,PASIVO,CORRIENTE,,Previsiones,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,311,,,,,ACTIVA
+2.1.08.01,Prev. p/ Juicios y Demandas,2.1.08.00,4,312,1,PASIVO,CORRIENTE,Previsiones,,Prev. p/ Juicios y Demandas,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,312,,,,,ACTIVA
+2.1.08.02,Prev. p/ Garantías,2.1.08.00,4,313,1,PASIVO,CORRIENTE,Previsiones,,Prev. p/ Garantías,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,313,,,,,ACTIVA
+2.1.08.03,Prev. p/ Enfermedad,2.1.08.00,4,314,1,PASIVO,CORRIENTE,Previsiones,,Prev. p/ Enfermedad,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,314,,,,,ACTIVA
+2.1.08.04,Prev. p/ Despidos,2.1.08.00,4,315,1,PASIVO,CORRIENTE,Previsiones,,Prev. p/ Despidos,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,315,,,,,ACTIVA
+2.1.08.05,Prev. p/ Accidentes,2.1.08.00,4,316,1,PASIVO,CORRIENTE,Previsiones,,Prev. p/ Accidentes,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,316,,,,,ACTIVA
+2.1.08.06,Prev. p/ Vacaciones,2.1.08.00,4,317,1,PASIVO,CORRIENTE,Previsiones,,Prev. p/ Vacaciones,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,317,,,,,ACTIVA
+2.1.08.07,Prev. p/ Impuestos,2.1.08.00,4,318,1,PASIVO,CORRIENTE,Previsiones,,Prev. p/ Impuestos,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,318,,,,,ACTIVA
+2.1.08.08,Prev. p/ Multas e Infracciones,2.1.08.00,4,319,1,PASIVO,CORRIENTE,Previsiones,,Prev. p/ Multas e Infracciones,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,319,,,,,ACTIVA
+2.20.00.00,PASIVO NO CORRIENTE,2.00.00.00,4,320,0,PASIVO,NO_CORRIENTE,,PASIVO NO CORRIENTE,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,320,,,,,ACTIVA
+2.2.01.00,Deudas,2.20.00.00,4,321,1,PASIVO,NO_CORRIENTE,,,Deudas,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,321,,,,Rubro no corriente análogo a deudas corrientes.,ACTIVA
+2.2.08.00,Previsiones,2.20.00.00,4,322,0,PASIVO,NO_CORRIENTE,,Previsiones,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,322,,,,,ACTIVA
+2.2.08.01,Previsión por Juicio,2.2.08.00,4,323,1,PASIVO,NO_CORRIENTE,Previsiones,,Previsión por Juicio,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,323,,,,,ACTIVA
+2.2.08.02,Previsión por Indemnización de Despido,2.2.08.00,4,324,1,PASIVO,NO_CORRIENTE,Previsiones,,Previsión por Indemnización de Despido,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,324,,,,,ACTIVA
+2.2.09.00,Participación de Terceros en Sociedades,2.20.00.00,4,325,1,PASIVO,NO_CORRIENTE,,,Participación de Terceros en Sociedades,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,325,,,,,ACTIVA
+3.00.00.00,PATRIMONIO NETO,,4,326,0,PATRIMONIO_NETO,NO_APLICA,,PATRIMONIO NETO,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,326,,,,,ACTIVA
+3.1.00.00,Capital,3.00.00.00,4,327,0,PATRIMONIO_NETO,NO_APLICA,,Capital,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,327,,,,,ACTIVA
+3.1.01.00,Capital (Acciones en Circulación),3.1.00.00,4,328,1,PATRIMONIO_NETO,NO_APLICA,,,Capital (Acciones en Circulación),0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,CAPITAL_SOCIAL,Contabilidad,,328,,,,Lectura normalizada desde PDF escaneado.,ACTIVA
+3.1.02.00,Capital Suscripto,3.1.00.00,4,329,1,PATRIMONIO_NETO,NO_APLICA,,,Capital Suscripto,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,CAPITAL_SOCIAL,Contabilidad,,329,,,,,ACTIVA
+3.1.03.00,Ajustes de Capital,3.1.00.00,4,330,1,PATRIMONIO_NETO,NO_APLICA,,,Ajustes de Capital,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,AJUSTES_CAPITAL,Contabilidad,,330,,,,,ACTIVA
+3.1.04.00,Aportes Irrevocables,3.1.00.00,4,331,1,PATRIMONIO_NETO,NO_APLICA,,,Aportes Irrevocables,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,CAPITAL_SOCIAL,Contabilidad,,331,,,,,ACTIVA
+3.2.00.00,Prima de Emisión,3.00.00.00,4,332,0,PATRIMONIO_NETO,NO_APLICA,,Prima de Emisión,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,332,,,,,ACTIVA
+3.2.01.00,Prima de Emisión de Acciones,3.2.00.00,4,333,1,PATRIMONIO_NETO,NO_APLICA,,,Prima de Emisión de Acciones,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,333,,,,,ACTIVA
+3.3.00.00,Ganancias Reservadas,3.00.00.00,4,334,0,PATRIMONIO_NETO,NO_APLICA,,Ganancias Reservadas,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,334,,,,,ACTIVA
+3.3.01.00,Reserva Legal,3.3.00.00,4,335,1,PATRIMONIO_NETO,NO_APLICA,,,Reserva Legal,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,RESERVA_LEGAL,Contabilidad,,335,,,,,ACTIVA
+3.3.02.00,Reserva Estatutaria,3.3.00.00,4,336,1,PATRIMONIO_NETO,NO_APLICA,,,Reserva Estatutaria,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,336,,,,,ACTIVA
+3.3.03.00,Reserva Facultativa,3.3.00.00,4,337,1,PATRIMONIO_NETO,NO_APLICA,,,Reserva Facultativa,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,337,,,,,ACTIVA
+3.4.00.00,Resultados No Asignados,3.00.00.00,4,338,0,PATRIMONIO_NETO,NO_APLICA,,Resultados No Asignados,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,RESULTADOS_NO_ASIGNADOS,Contabilidad,,338,,,,,ACTIVA
+3.4.01.00,Resultado del Ejercicio,3.4.00.00,4,339,1,PATRIMONIO_NETO,NO_APLICA,,,Resultado del Ejercicio,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,339,,,,,ACTIVA
+3.4.02.00,Resultado del Ejercicio Anterior,3.4.00.00,4,340,1,PATRIMONIO_NETO,NO_APLICA,,,Resultado del Ejercicio Anterior,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,340,,,,,ACTIVA
+4.00.00.00,CUENTAS DE MOVIMIENTO,,4,341,0,CUENTAS_MOVIMIENTO,NO_APLICA,,CUENTAS DE MOVIMIENTO,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,341,,,,,ACTIVA
+4.1.00.00,Compras,4.00.00.00,4,342,1,CUENTAS_MOVIMIENTO,NO_APLICA,,,Compras,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,COMPRAS_MERCADERIAS,Compras,,342,,,,,ACTIVA
+4.2.00.00,Compras de Materias Primas,4.00.00.00,4,343,1,CUENTAS_MOVIMIENTO,NO_APLICA,,,Compras de Materias Primas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,MATERIAS_PRIMAS,Compras,,343,,,,,ACTIVA
+4.3.00.00,Compras de Accesorios,4.00.00.00,4,344,1,CUENTAS_MOVIMIENTO,NO_APLICA,,,Compras de Accesorios,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,COMPRAS_MERCADERIAS,Compras,,344,,,,,ACTIVA
+4.4.00.00,Devolución Compras,4.00.00.00,4,345,1,CUENTAS_MOVIMIENTO,NO_APLICA,,,Devolución Compras,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,COMPRAS_MERCADERIAS,Compras,,345,,,,,ACTIVA
+4.5.00.00,Devolución Ventas,4.00.00.00,4,346,1,CUENTAS_MOVIMIENTO,NO_APLICA,,,Devolución Ventas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,VENTAS,Ventas,,346,,,,,ACTIVA
+5.00.00.00,CUENTAS DE INGRESOS (Ganancias),,4,347,0,INGRESOS_GANANCIAS,NO_APLICA,,CUENTAS DE INGRESOS (Ganancias),,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,347,,,,,ACTIVA
+5.1.00.00,GANANCIAS ORDINARIAS,5.00.00.00,4,348,0,INGRESOS_GANANCIAS,NO_APLICA,,GANANCIAS ORDINARIAS,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,348,,,,,ACTIVA
+5.1.01.00,Ventas,5.1.00.00,4,349,0,INGRESOS_GANANCIAS,NO_APLICA,,Ventas,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,VENTAS,Ventas,,349,,,,,ACTIVA
+5.1.01.01,Ventas Minoristas,5.1.01.00,4,350,1,INGRESOS_GANANCIAS,NO_APLICA,Ventas,,Ventas Minoristas,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,VENTAS,Ventas,,350,,,,,ACTIVA
+5.1.02.00,Ventas Mayoristas,5.1.00.00,4,351,1,INGRESOS_GANANCIAS,NO_APLICA,,,Ventas Mayoristas,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,VENTAS,Ventas,,351,,,,,ACTIVA
+5.1.03.00,Ventas al Contado,5.1.00.00,4,352,1,INGRESOS_GANANCIAS,NO_APLICA,,,Ventas al Contado,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,VENTAS,Ventas,,352,,,,,ACTIVA
+5.1.04.00,Ventas en Cuenta Corriente,5.1.00.00,4,353,1,INGRESOS_GANANCIAS,NO_APLICA,,,Ventas en Cuenta Corriente,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,VENTAS,Ventas,,353,,,,,ACTIVA
+5.1.20.00,Otros Ingresos,5.1.00.00,4,354,0,INGRESOS_GANANCIAS,NO_APLICA,,Otros Ingresos,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,354,,,,,ACTIVA
+5.1.20.01,Alquileres Ganados,5.1.20.00,4,355,1,INGRESOS_GANANCIAS,NO_APLICA,Otros Ingresos,,Alquileres Ganados,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,355,,,,,ACTIVA
+5.1.20.02,Intereses Ganados,5.1.20.00,4,356,1,INGRESOS_GANANCIAS,NO_APLICA,Otros Ingresos,,Intereses Ganados,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,356,,,,,ACTIVA
+5.1.20.03,Comisiones Ganadas,5.1.20.00,4,357,1,INGRESOS_GANANCIAS,NO_APLICA,Otros Ingresos,,Comisiones Ganadas,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,357,,,,,ACTIVA
+5.1.20.04,Dividendos Obtenidos,5.1.20.00,4,358,1,INGRESOS_GANANCIAS,NO_APLICA,Otros Ingresos,,Dividendos Obtenidos,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,358,,,,,ACTIVA
+5.1.20.05,Descuentos Obtenidos,5.1.20.00,4,359,1,INGRESOS_GANANCIAS,NO_APLICA,Otros Ingresos,,Descuentos Obtenidos,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,359,,,,,ACTIVA
+5.1.20.06,Renta de Valores Mobiliarios,5.1.20.00,4,360,1,INGRESOS_GANANCIAS,NO_APLICA,Otros Ingresos,,Renta de Valores Mobiliarios,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,360,,,,,ACTIVA
+5.1.20.07,Renta Venta de Acciones,5.1.20.00,4,361,1,INGRESOS_GANANCIAS,NO_APLICA,Otros Ingresos,,Renta Venta de Acciones,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,361,,,,,ACTIVA
+5.1.20.08,Comisiones de Inversiones Temporarias,5.1.20.00,4,362,1,INGRESOS_GANANCIAS,NO_APLICA,Otros Ingresos,,Comisiones de Inversiones Temporarias,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,362,,,,,ACTIVA
+5.2.00.00,GANANCIAS EXTRAORDINARIAS,5.00.00.00,4,363,0,INGRESOS_GANANCIAS,NO_APLICA,,GANANCIAS EXTRAORDINARIAS,,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,363,,,,,ACTIVA
+5.2.01.00,Sobrante de Caja,5.2.00.00,4,364,1,INGRESOS_GANANCIAS,NO_APLICA,,,Sobrante de Caja,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,SOBRANTE_CAJA,Caja,,364,,,,,ACTIVA
+5.2.02.00,Sobrante de Mercaderías,5.2.00.00,4,365,1,INGRESOS_GANANCIAS,NO_APLICA,,,Sobrante de Mercaderías,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,365,,,,,ACTIVA
+5.2.03.00,Diferencia Positiva de Cotización,5.2.00.00,4,366,1,INGRESOS_GANANCIAS,NO_APLICA,,,Diferencia Positiva de Cotización,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,DIFERENCIA_CAMBIO_POSITIVA,Contabilidad,,366,,,,,ACTIVA
+5.2.04.00,Resultado Positivo de Ventas,5.2.00.00,4,367,1,INGRESOS_GANANCIAS,NO_APLICA,,,Resultado Positivo de Ventas,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,367,,,,,ACTIVA
+5.2.05.00,Resultado por Obsolescencia Bienes de Uso,5.2.00.00,4,368,1,INGRESOS_GANANCIAS,NO_APLICA,,,Resultado por Obsolescencia Bienes de Uso,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,RESULTADO_TENENCIA_POSITIVO,Contabilidad,,368,,,,,ACTIVA
+5.2.06.00,Recupero de Previsión,5.2.00.00,4,369,1,INGRESOS_GANANCIAS,NO_APLICA,,,Recupero de Previsión,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,,,,369,,,,,ACTIVA
+5.2.07.00,Resultado por Tenencia Positivo,5.2.00.00,4,370,1,INGRESOS_GANANCIAS,NO_APLICA,,,Resultado por Tenencia Positivo,0,,0,,,ACREEDOR,,,,,,,,,,,,,,,,0,0,RESULTADO_TENENCIA_POSITIVO,Contabilidad,,370,,,,Cuenta agregada para resultados financieros y por tenencia.,ACTIVA
+6.00.00.00,CUENTAS DE EGRESOS (Pérdidas),,4,371,0,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,,CUENTAS DE EGRESOS (Pérdidas),,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,371,,,,,ACTIVA
+6.1.00.00,GASTOS DE VENTA ADMINISTRACIÓN,6.00.00.00,4,372,0,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,,GASTOS DE VENTA ADMINISTRACIÓN,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,372,,,,,ACTIVA
+6.1.01.00,Retribuciones y Cargas Sociales,6.1.00.00,4,373,0,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,,Retribuciones y Cargas Sociales,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,373,,,,,ACTIVA
+6.1.01.01,Retribuciones,6.1.01.00,4,374,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Retribuciones y Cargas Sociales,,Retribuciones,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,SUELDOS_GASTO,Compras,,374,,,,,ACTIVA
+6.1.01.02,Cargas Sociales,6.1.01.00,4,375,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Retribuciones y Cargas Sociales,,Cargas Sociales,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,CARGAS_SOCIALES_GASTO,Sueldos,,375,,,,,ACTIVA
+6.1.01.03,Honorarios,6.1.01.00,4,376,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Retribuciones y Cargas Sociales,,Honorarios,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,HONORARIOS_PROFESIONALES,Compras,,376,,,,,ACTIVA
+6.1.01.04,Otras,6.1.01.00,4,377,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Retribuciones y Cargas Sociales,,Otras,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,SERVICIOS_CONTRATADOS,Compras,,377,,,,,ACTIVA
+6.1.02.00,Impuestos Tasas,6.1.00.00,4,378,0,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,,Impuestos Tasas,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,IMPUESTOS_TASAS_CONTRIBUCIONES,Compras/Contabilidad,,378,,,,,ACTIVA
+6.1.02.01,Impuesto a los Ingresos Brutos,6.1.02.00,4,379,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Impuestos Tasas,,Impuesto a los Ingresos Brutos,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,IMPUESTOS_TASAS_CONTRIBUCIONES,Compras/IVA,,379,,,,,ACTIVA
+6.1.02.02,Impuesto a las Ganancias,6.1.02.00,4,380,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Impuestos Tasas,,Impuesto a las Ganancias,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,IMPUESTOS_TASAS_CONTRIBUCIONES,Compras/IVA,,380,,,,,ACTIVA
+6.1.02.03,Sellos,6.1.02.00,4,381,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Impuestos Tasas,,Sellos,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,IMPUESTOS_TASAS_CONTRIBUCIONES,Compras/IVA,,381,,,,,ACTIVA
+6.1.02.04,Tasa Comercio,6.1.02.00,4,382,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Impuestos Tasas,,Tasa Comercio,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,IMPUESTOS_TASAS_CONTRIBUCIONES,Compras/IVA,,382,,,,,ACTIVA
+6.1.02.10,IVA no computable / mayor costo,6.1.02.00,4,383,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Impuestos Tasas,,IVA no computable / mayor costo,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,IVA_NO_COMPUTABLE_MAYOR_COSTO,Compras/IVA,,383,,,,,ACTIVA
+6.1.03.00,Costo de Ventas,6.1.00.00,4,384,0,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,,Costo de Ventas,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,CMV,Ventas/Contabilidad,,384,,,,,ACTIVA
+6.1.03.01,Costo de Mercaderías Vendidas,6.1.03.00,4,385,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Costo de Ventas,,Costo de Mercaderías Vendidas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,CMV,Ventas/Contabilidad,,385,,,,,ACTIVA
+6.1.04.00,Alquileres Pagados,6.1.00.00,4,386,0,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,,Alquileres Pagados,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,ALQUILERES,Compras,,386,,,,,ACTIVA
+6.1.04.01,Alquileres,6.1.04.00,4,387,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Alquileres Pagados,,Alquileres,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,ALQUILERES,Compras,,387,,,,,ACTIVA
+6.1.04.02,Impuestos y Tasas a la Propiedad,6.1.04.00,4,388,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Alquileres Pagados,,Impuestos y Tasas a la Propiedad,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,IMPUESTOS_TASAS_CONTRIBUCIONES,Compras,,388,,,,,ACTIVA
+6.1.05.00,Depreciaciones,6.1.00.00,4,389,0,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,,Depreciaciones,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,389,,,,,ACTIVA
+6.1.05.01,Depreciaciones Bs. de Uso,6.1.05.00,4,390,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Depreciaciones,,Depreciaciones Bs. de Uso,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,390,,,,,ACTIVA
+6.1.06.00,Gastos de Conservación de Bs. de Uso,6.1.00.00,4,391,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,,,Gastos de Conservación de Bs. de Uso,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,REPARACIONES_MANTENIMIENTO,Compras,,391,,,,,ACTIVA
+6.1.07.00,Mantenimiento de Bienes de Uso,6.1.00.00,4,392,0,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,,Mantenimiento de Bienes de Uso,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,REPARACIONES_MANTENIMIENTO,Compras,,392,,,,,ACTIVA
+6.1.07.01,Accidentes de Trabajo,6.1.07.00,4,393,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Mantenimiento de Bienes de Uso,,Accidentes de Trabajo,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,ART_GASTO,Sueldos,,393,,,,,ACTIVA
+6.1.08.00,Automotores,6.1.00.00,4,394,0,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,,Automotores,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,394,,,,,ACTIVA
+6.1.08.01,Combustibles y Lubricantes,6.1.08.00,4,395,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Automotores,,Combustibles y Lubricantes,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,COMBUSTIBLES_LUBRICANTES,Compras,,395,,,,,ACTIVA
+6.1.08.02,Engrase,6.1.08.00,4,396,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Automotores,,Engrase,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,COMBUSTIBLES_LUBRICANTES,Compras,,396,,,,,ACTIVA
+6.1.08.03,Reparación y Mantenimiento,6.1.08.00,4,397,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Automotores,,Reparación y Mantenimiento,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,REPARACIONES_MANTENIMIENTO,Compras,,397,,,,,ACTIVA
+6.1.09.00,Publicidad,6.1.00.00,4,398,0,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,,Publicidad,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,PUBLICIDAD_MARKETING,Compras,,398,,,,,ACTIVA
+6.1.09.01,Gastos de Publicidad y Propaganda,6.1.09.00,4,399,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Publicidad,,Gastos de Publicidad y Propaganda,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,PUBLICIDAD_MARKETING,Compras,,399,,,,,ACTIVA
+6.1.09.02,Publicidad Perdida,6.1.09.00,4,400,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Publicidad,,Publicidad Perdida,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,PUBLICIDAD_MARKETING,Compras,,400,,,,,ACTIVA
+6.1.10.00,Financieros,6.1.00.00,4,401,0,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,,Financieros,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,401,,,,,ACTIVA
+6.1.10.01,Comisiones y Gastos Bancarios,6.1.10.00,4,402,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Financieros,,Comisiones y Gastos Bancarios,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,GASTOS_BANCARIOS,Banco/Caja,,402,,,,,ACTIVA
+6.1.10.02,Comisiones Perdidas,6.1.10.00,4,403,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Financieros,,Comisiones Perdidas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,GASTOS_BANCARIOS,Banco/Caja,,403,,,,,ACTIVA
+6.1.10.03,Comisiones Inmobiliarias,6.1.10.00,4,404,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Financieros,,Comisiones Inmobiliarias,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,SERVICIOS_CONTRATADOS,Contabilidad,,404,,,,,ACTIVA
+6.1.10.04,Intereses Bancarios Perdidos,6.1.10.00,4,405,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Financieros,,Intereses Bancarios Perdidos,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,GASTOS_BANCARIOS,Banco/Caja,,405,,,,,ACTIVA
+6.1.10.05,Descuentos Concedidos,6.1.10.00,4,406,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Financieros,,Descuentos Concedidos,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,406,,,,,ACTIVA
+6.1.10.06,Bonificaciones Cedidas,6.1.10.00,4,407,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Financieros,,Bonificaciones Cedidas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,407,,,,,ACTIVA
+6.1.10.07,Resultado por Tenencia Perdida,6.1.10.00,4,408,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Financieros,,Resultado por Tenencia Perdida,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,RESULTADO_TENENCIA_NEGATIVO,Contabilidad,,408,,,,,ACTIVA
+6.1.10.08,Deudores Incobrables,6.1.10.00,4,409,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Financieros,,Deudores Incobrables,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,409,,,,,ACTIVA
+6.1.10.09,Intereses Comerciales Perdidos,6.1.10.00,4,410,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Financieros,,Intereses Comerciales Perdidos,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,410,,,,,ACTIVA
+6.1.10.20,Diferencia Negativa de Cambio,6.1.10.00,4,411,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Financieros,,Diferencia Negativa de Cambio,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,DIFERENCIA_CAMBIO_NEGATIVA,Contabilidad,,411,,,,,ACTIVA
+6.1.10.21,Resultado por Tenencia Negativo,6.1.10.00,4,412,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Financieros,,Resultado por Tenencia Negativo,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,RESULTADO_TENENCIA_NEGATIVO,Contabilidad,,412,,,,,ACTIVA
+6.1.10.22,RECPAM,6.1.10.00,4,413,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Financieros,,RECPAM,0,,0,,,SEGUN_NATURALEZA,,,,,,,,,,,,,,,,0,0,RECPAM,Contabilidad,,413,,,,,ACTIVA
+6.1.11.00,Gastos Generales,6.1.00.00,4,414,0,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,,Gastos Generales,,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,,,,414,,,,,ACTIVA
+6.1.11.01,Energía Eléctrica,6.1.11.00,4,415,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Gastos Generales,,Energía Eléctrica,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,SERVICIOS_PUBLICOS,Compras,,415,,,,,ACTIVA
+6.1.11.02,Comunicaciones,6.1.11.00,4,416,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Gastos Generales,,Comunicaciones,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,SERVICIOS_PUBLICOS,Compras,,416,,,,,ACTIVA
+6.1.11.03,Agua y Gas,6.1.11.00,4,417,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Gastos Generales,,Agua y Gas,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,SERVICIOS_PUBLICOS,Compras,,417,,,,,ACTIVA
+6.1.11.04,Teléfono/Fax,6.1.11.00,4,418,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Gastos Generales,,Teléfono/Fax,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,SERVICIOS_PUBLICOS,Compras,,418,,,,,ACTIVA
+6.1.11.05,Fletes y Acarreo,6.1.11.00,4,419,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Gastos Generales,,Fletes y Acarreo,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,FLETES_LOGISTICA,Compras,,419,,,,,ACTIVA
+6.1.11.06,Gastos de Limpieza,6.1.11.00,4,420,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Gastos Generales,,Gastos de Limpieza,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,LIMPIEZA_SEGURIDAD,Compras,,420,,,,,ACTIVA
+6.1.11.07,Gastos de mantenimiento de Edificios,6.1.11.00,4,421,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Gastos Generales,,Gastos de mantenimiento de Edificios,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,REPARACIONES_MANTENIMIENTO,Compras,,421,,,,,ACTIVA
+6.1.11.08,Servicios y Garantías,6.1.11.00,4,422,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Gastos Generales,,Servicios y Garantías,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,SERVICIOS_CONTRATADOS,Compras,,422,,,,,ACTIVA
+6.1.11.09,Seguridad y Vigilancia,6.1.11.00,4,423,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Gastos Generales,,Seguridad y Vigilancia,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,LIMPIEZA_SEGURIDAD,Compras,,423,,,,,ACTIVA
+6.1.11.10,"Papeles, Útiles y Gastos de Escritorio",6.1.11.00,4,424,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Gastos Generales,,"Papeles, Útiles y Gastos de Escritorio",0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,SERVICIOS_CONTRATADOS,Compras,,424,,,,,ACTIVA
+6.1.11.11,Insumo de Computación,6.1.11.00,4,425,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Gastos Generales,,Insumo de Computación,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,SERVICIOS_CONTRATADOS,Compras,,425,,,,,ACTIVA
+6.1.11.12,Movilidad,6.1.11.00,4,426,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Gastos Generales,,Movilidad,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,VIATICOS_MOVILIDAD,Compras,,426,,,,,ACTIVA
+6.1.11.13,Viajes y Representaciones,6.1.11.00,4,427,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Gastos Generales,,Viajes y Representaciones,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,VIATICOS_MOVILIDAD,Compras,,427,,,,,ACTIVA
+6.1.11.14,Gastos de Papelería e Imprenta,6.1.11.00,4,428,1,EGRESOS_GASTOS_PERDIDAS,NO_APLICA,Gastos Generales,,Gastos de Papelería e Imprenta,0,,0,,,DEUDOR,,,,,,,,,,,,,,,,0,0,SERVICIOS_CONTRATADOS,Compras,,428,,,,,ACTIVA
