@@ -57,6 +57,12 @@ from services.plan_cuentas_service import (
     sugerir_comportamiento_plan,
 )
 
+from services.plan_cuentas_limpieza_demo_service import (
+    CONFIRMACION_LIMPIEZA_DEMO,
+    limpiar_plan_cuentas_demo_desde_maestro,
+    previsualizar_limpieza_plan_cuentas_demo,
+)
+
 
 # ======================================================
 # FUNCIONES AUXILIARES
@@ -1002,6 +1008,134 @@ def _mostrar_herramientas_compatibilidad_plan(empresa_id):
                 st.error("No se pudo borrar: " + "; ".join(resultado.get("errores", [])))
 
 
+def _mostrar_limpieza_demo_plan(empresa_id):
+    st.markdown("#### Limpieza demo del Plan de Cuentas")
+
+    st.error(
+        "Herramienta exclusiva para demo/base de prueba. "
+        "Elimina el catálogo actual de cuentas de empresa y lo reconstruye desde el Plan Maestro FF. "
+        "No debe usarse sobre una base productiva real."
+    )
+
+    st.caption(
+        "Esta acción apunta a sacar de raíz las cuentas heredadas del demo. "
+        "Antes de ejecutar crea backups internos de las tablas afectadas y limpia referencias técnicas "
+        "en mapeos, categorías de compra y conceptos fiscales de compra."
+    )
+
+    resultado_key = f"plan_limpieza_demo_resultado_{empresa_id}"
+
+    if st.session_state.get(resultado_key):
+        resultado_anterior = st.session_state[resultado_key]
+        st.success("Última limpieza demo ejecutada correctamente.")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Cuentas antes", resultado_anterior.get("cuentas_antes", 0))
+        c2.metric("Eliminadas", resultado_anterior.get("cuentas_eliminadas", 0))
+        c3.metric("Reconstruidas", resultado_anterior.get("cuentas_reconstruidas", 0))
+        c4.metric("Backups", len(resultado_anterior.get("backups", [])))
+
+        with st.expander("Ver resultado técnico de la última limpieza", expanded=False):
+            st.json(resultado_anterior)
+
+        if st.button(
+            "Ocultar resultado anterior",
+            key="plan_limpieza_demo_ocultar_resultado",
+            use_container_width=True,
+        ):
+            st.session_state.pop(resultado_key, None)
+            st.rerun()
+
+    st.divider()
+
+    try:
+        preview = previsualizar_limpieza_plan_cuentas_demo(empresa_id=empresa_id)
+    except Exception as exc:
+        st.error("No se pudo previsualizar la limpieza demo del Plan de Cuentas.")
+        st.exception(exc)
+        return
+
+    if not preview.get("ok"):
+        st.error(preview.get("error", "No se pudo previsualizar la limpieza demo."))
+        return
+
+    st.markdown("##### Previsualización")
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Catálogo empresa actual", preview.get("total_plan_empresa_actual", 0))
+    col2.metric("Plan Maestro activo", preview.get("total_plan_maestro_activo", 0))
+    col3.metric("Vinculadas", preview.get("cuentas_vinculadas_al_maestro", 0))
+    col4.metric("No vinculadas", preview.get("cuentas_no_vinculadas", 0))
+    col5.metric("Específicas empresa", preview.get("cuentas_especificas_empresa", 0))
+
+    st.warning(
+        "Al ejecutar, el catálogo actual de cuentas de esta empresa se eliminará y se reconstruirá "
+        "desde las cuentas activas del Plan Maestro FF. "
+        "También se limpiarán referencias técnicas que apunten a las cuentas eliminadas."
+    )
+
+    with st.expander("Qué tablas se afectan", expanded=False):
+        st.markdown(
+            """
+            - `plan_cuentas_empresa`: se elimina y reconstruye para la empresa activa.
+            - `mapeos_contables_empresa`: se eliminan mapeos vinculados al catálogo anterior.
+            - `categorias_compra_config`: se limpian cuentas sugeridas anteriores.
+            - `conceptos_fiscales_compra_config`: se limpian cuentas sugeridas anteriores.
+            - `auditoria_cambios`: se registra el evento de limpieza.
+            """
+        )
+
+    st.divider()
+
+    st.markdown("##### Confirmación de limpieza demo")
+
+    motivo = st.text_area(
+        "Motivo obligatorio",
+        value="Limpieza radical demo: reconstrucción desde Plan Maestro FF",
+        key="plan_limpieza_demo_motivo",
+        help="Queda registrado en auditoría.",
+    )
+
+    confirmacion = st.text_input(
+        f"Para ejecutar escribí exactamente: {CONFIRMACION_LIMPIEZA_DEMO}",
+        key="plan_limpieza_demo_confirmacion",
+    )
+
+    crear_backup = st.checkbox(
+        "Crear backup interno antes de limpiar",
+        value=True,
+        key="plan_limpieza_demo_crear_backup",
+    )
+
+    puede_ejecutar = (
+        confirmacion == CONFIRMACION_LIMPIEZA_DEMO
+        and bool(str(motivo or "").strip())
+    )
+
+    if st.button(
+        "Ejecutar limpieza demo y reconstruir desde Plan Maestro FF",
+        type="primary",
+        disabled=not puede_ejecutar,
+        use_container_width=True,
+        key="plan_limpieza_demo_ejecutar",
+    ):
+        try:
+            resultado = limpiar_plan_cuentas_demo_desde_maestro(
+                empresa_id=empresa_id,
+                confirmacion=confirmacion,
+                usuario=_usuario_actual_nombre(),
+                motivo=motivo,
+                crear_backup=crear_backup,
+            )
+        except Exception as exc:
+            st.error("No se pudo ejecutar la limpieza demo del Plan de Cuentas.")
+            st.exception(exc)
+            return
+
+        st.session_state[resultado_key] = resultado
+        st.rerun()
+
+
 def _mostrar_auditoria_plan_unificado(empresa_id):
     st.markdown("#### Auditoría del Plan de Cuentas")
 
@@ -1042,6 +1176,7 @@ def mostrar_plan_cuentas():
         "🧩 Modelos copiables",
         "🔗 Vinculación",
         "🕓 Auditoría",
+        "🧹 Limpieza demo",
         "🧰 Avanzado",
     ])
 
@@ -1064,6 +1199,9 @@ def mostrar_plan_cuentas():
         _mostrar_auditoria_plan_unificado(empresa_id)
 
     with tabs[6]:
+        _mostrar_limpieza_demo_plan(empresa_id)
+
+    with tabs[7]:
         st.markdown("#### Administración avanzada")
         st.caption(
             "Estas opciones no forman parte de la estructura contable visible. "
