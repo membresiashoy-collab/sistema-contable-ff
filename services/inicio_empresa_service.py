@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -5,38 +7,35 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from database import conectar, ejecutar_query
-from services.ejercicios_contables_service import (
-    migrar_ejercicios_contables,
-    obtener_ejercicio_actual,
-    obtener_ejercicio_por_id,
-    validar_fecha_operativa_contable,
-)
-from services.asientos_origen_service import (
-    anular_asiento_origen,
-    crear_asiento_origen,
-    migrar_asientos_origen,
-)
 
+
+TIPO_SUJETO_NO_DEFINIDO = "NO_DEFINIDO"
+TIPO_SUJETO_PERSONA_HUMANA = "PERSONA_HUMANA"
+TIPO_SUJETO_PERSONA_JURIDICA = "PERSONA_JURIDICA_SOCIEDAD"
+TIPO_SUJETO_OTRO_ENTE = "OTRO_ENTE"
+
+ESTADO_ONBOARDING_PENDIENTE = "PENDIENTE"
+ESTADO_ONBOARDING_INCOMPLETO = "INCOMPLETO"
+ESTADO_ONBOARDING_OPERATIVA_BASE = "OPERATIVA_BASE"
+
+TABLA_DOCUMENTACION = "empresa_documentacion_respaldo"
+TABLA_EVENTOS = "empresa_inicio_eventos"
 
 TOLERANCIA = 0.01
 
-ORIGEN_TESORERIA = "TESORERIA"
-TABLA_TESORERIA_OPERACIONES = "tesoreria_operaciones"
-TABLA_CAPITAL_ORIGENES = "capital_integraciones_origenes"
-
 
 def _resultado(ok: bool, mensaje: str, **extras) -> Dict[str, Any]:
-    data = {"ok": ok, "mensaje": mensaje}
+    data = {"ok": bool(ok), "mensaje": str(mensaje)}
     data.update(extras)
     return data
 
 
-def _texto(valor: Any) -> str:
+def _texto(valor: Any, default: str = "") -> str:
     if valor is None:
-        return ""
+        return default
     try:
         if pd.isna(valor):
-            return ""
+            return default
     except Exception:
         pass
     return str(valor).strip()
@@ -46,34 +45,158 @@ def _texto_upper(valor: Any) -> str:
     return _texto(valor).upper()
 
 
-def _numero(valor: Any) -> float:
+def _numero(valor: Any, default: float = 0.0) -> float:
     try:
-        if valor is None or pd.isna(valor):
-            return 0.0
+        if valor is None:
+            return default
+        if isinstance(valor, str) and valor.strip() == "":
+            return default
+        if pd.isna(valor):
+            return default
         return round(float(valor), 2)
     except Exception:
-        return 0.0
+        return default
 
 
-def _normalizar_fecha(valor: Any, nombre_campo: str = "fecha") -> str:
+def _normalizar_cuit(valor: Any) -> str:
+    return "".join(ch for ch in _texto(valor) if ch.isdigit())
+
+
+def _normalizar_fecha_opcional(valor: Any) -> str:
+    if valor is None:
+        return ""
     if isinstance(valor, datetime):
         return valor.date().isoformat()
     if isinstance(valor, date):
         return valor.isoformat()
-    if isinstance(valor, str):
-        limpio = valor.strip()
-        try:
-            return date.fromisoformat(limpio).isoformat()
-        except Exception as exc:
-            raise ValueError(f"{nombre_campo} debe tener formato YYYY-MM-DD.") from exc
-    raise ValueError(f"{nombre_campo} debe tener formato YYYY-MM-DD.")
+
+    texto = _texto(valor)
+    if not texto:
+        return ""
+
+    try:
+        return date.fromisoformat(texto[:10]).isoformat()
+    except Exception:
+        return texto
 
 
-def _df_a_dict(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
-    if df is None or df.empty:
-        return None
-    fila = df.iloc[0].to_dict()
-    return {k: (None if pd.isna(v) else v) for k, v in fila.items()}
+def _normalizar_token(valor: Any) -> str:
+    texto = _texto(valor).upper()
+    reemplazos = {
+        "Á": "A",
+        "É": "E",
+        "Í": "I",
+        "Ó": "O",
+        "Ú": "U",
+        "Ñ": "N",
+        "-": " ",
+        "_": " ",
+        "/": " ",
+        ".": " ",
+    }
+    for origen, destino in reemplazos.items():
+        texto = texto.replace(origen, destino)
+    return " ".join(texto.split())
+
+
+def normalizar_tipo_sujeto(valor: Any) -> str:
+    texto = _normalizar_token(valor)
+
+    if not texto:
+        return TIPO_SUJETO_NO_DEFINIDO
+
+    persona_humana = {
+        "PERSONA HUMANA",
+        "HUMANA",
+        "FISICA",
+        "PERSONA FISICA",
+        "PF",
+        "PH",
+        "MONOTRIBUTISTA",
+        "RESPONSABLE INSCRIPTO PERSONA HUMANA",
+    }
+    if texto in persona_humana:
+        return TIPO_SUJETO_PERSONA_HUMANA
+
+    if texto in {"OTRO", "OTRO ENTE", "ENTE", "FIDEICOMISO", "CONSORCIO", "SUCESION INDIVISA"}:
+        return TIPO_SUJETO_OTRO_ENTE
+
+    palabras_sociedad = {
+        "SOCIEDAD",
+        "JURIDICA",
+        "PERSONA JURIDICA",
+        "SA",
+        "S A",
+        "SRL",
+        "S R L",
+        "SAS",
+        "S A S",
+        "SOCIEDAD ANONIMA",
+        "SOCIEDAD DE RESPONSABILIDAD LIMITADA",
+        "SOCIEDAD POR ACCIONES SIMPLIFICADA",
+        "ASOCIACION",
+        "FUNDACION",
+        "COOPERATIVA",
+    }
+    if texto in palabras_sociedad:
+        return TIPO_SUJETO_PERSONA_JURIDICA
+
+    if "SOCIEDAD" in texto or "JURIDICA" in texto:
+        return TIPO_SUJETO_PERSONA_JURIDICA
+
+    return TIPO_SUJETO_NO_DEFINIDO
+
+
+def etiqueta_tipo_sujeto(tipo_sujeto: Any) -> str:
+    tipo = normalizar_tipo_sujeto(tipo_sujeto)
+    if tipo == TIPO_SUJETO_PERSONA_HUMANA:
+        return "Persona humana"
+    if tipo == TIPO_SUJETO_PERSONA_JURIDICA:
+        return "Persona jurídica / sociedad"
+    if tipo == TIPO_SUJETO_OTRO_ENTE:
+        return "Otro ente"
+    return "No definido"
+
+
+def opciones_tipo_sujeto() -> List[Dict[str, str]]:
+    return [
+        {"codigo": TIPO_SUJETO_PERSONA_HUMANA, "nombre": "Persona humana"},
+        {"codigo": TIPO_SUJETO_PERSONA_JURIDICA, "nombre": "Persona jurídica / sociedad"},
+        {"codigo": TIPO_SUJETO_OTRO_ENTE, "nombre": "Otro ente"},
+    ]
+
+
+def _sql_migracion_inicio_empresa() -> str:
+    ruta = Path(__file__).resolve().parents[1] / "migrations" / "023_inicio_empresa_tipo_sujeto.sql"
+    if ruta.exists():
+        return ruta.read_text(encoding="utf-8")
+    return f"""
+    CREATE TABLE IF NOT EXISTS {TABLA_DOCUMENTACION} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        empresa_id INTEGER NOT NULL,
+        tipo_documento TEXT NOT NULL,
+        referencia TEXT,
+        descripcion TEXT,
+        archivo_nombre TEXT,
+        archivo_ruta TEXT,
+        obligatorio INTEGER NOT NULL DEFAULT 0,
+        estado TEXT NOT NULL DEFAULT 'ACTIVO',
+        usuario_creacion TEXT,
+        fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        usuario_anulacion TEXT,
+        fecha_anulacion TIMESTAMP,
+        motivo_anulacion TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS {TABLA_EVENTOS} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        empresa_id INTEGER NOT NULL,
+        evento TEXT NOT NULL,
+        detalle TEXT,
+        usuario TEXT,
+        fecha_evento TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """
 
 
 def _tabla_existe(conn, tabla: str) -> bool:
@@ -107,1422 +230,661 @@ def _agregar_columna_si_no_existe(conn, tabla: str, columna: str, definicion: st
         conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {definicion}")
 
 
-def _leer_sql_migracion(ruta_relativa: str, fallback: str = "") -> str:
-    ruta = Path(__file__).resolve().parents[1] / ruta_relativa
-    if ruta.exists():
-        return ruta.read_text(encoding="utf-8")
-    return fallback
-
-
-def _sql_migracion_capital() -> str:
-    return _leer_sql_migracion(
-        "migrations/016_asientos_origen.sql",
+def _asegurar_tabla_empresas_minima(conn) -> None:
+    conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS socios_empresa (
+        CREATE TABLE IF NOT EXISTS empresas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            empresa_id INTEGER NOT NULL DEFAULT 1,
             nombre TEXT NOT NULL,
             cuit TEXT,
-            tipo_socio TEXT NOT NULL DEFAULT 'SOCIO',
-            porcentaje_participacion REAL NOT NULL DEFAULT 0,
-            observaciones TEXT,
-            estado TEXT NOT NULL DEFAULT 'ACTIVO',
-            usuario_creacion TEXT,
-            fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            usuario_actualizacion TEXT,
-            fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            usuario_baja TEXT,
-            fecha_baja TIMESTAMP,
-            motivo_baja TEXT
-        );
-        CREATE TABLE IF NOT EXISTS capital_social_empresa (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            empresa_id INTEGER NOT NULL DEFAULT 1,
-            ejercicio_id INTEGER,
-            fecha_instrumento TEXT NOT NULL,
-            tipo_instrumento TEXT NOT NULL DEFAULT 'INICIO_CONTABLE',
-            referencia TEXT,
-            descripcion TEXT NOT NULL DEFAULT 'Capital social inicial',
-            capital_social_total REAL NOT NULL DEFAULT 0,
-            total_suscripto REAL NOT NULL DEFAULT 0,
-            total_integrado REAL NOT NULL DEFAULT 0,
-            total_pendiente_integracion REAL NOT NULL DEFAULT 0,
-            cuenta_socios_integracion_codigo TEXT,
-            cuenta_socios_integracion_nombre TEXT,
-            cuenta_capital_codigo TEXT,
-            cuenta_capital_nombre TEXT,
-            estado TEXT NOT NULL DEFAULT 'PROPUESTO',
-            asiento_suscripcion_origen_id INTEGER,
-            asiento_suscripcion_propuesto_id INTEGER,
-            asiento_integracion_origen_id INTEGER,
-            asiento_integracion_propuesto_id INTEGER,
-            usuario_creacion TEXT,
-            fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            usuario_anulacion TEXT,
-            fecha_anulacion TIMESTAMP,
-            motivo_anulacion TEXT,
-            fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS capital_suscripciones (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            capital_id INTEGER NOT NULL,
-            empresa_id INTEGER NOT NULL DEFAULT 1,
-            socio_id INTEGER NOT NULL,
-            porcentaje REAL NOT NULL DEFAULT 0,
-            importe_suscripto REAL NOT NULL DEFAULT 0,
-            importe_integrado REAL NOT NULL DEFAULT 0,
-            importe_pendiente REAL NOT NULL DEFAULT 0,
-            observaciones TEXT,
-            estado TEXT NOT NULL DEFAULT 'ACTIVO',
+            razon_social TEXT,
+            domicilio TEXT,
+            actividad TEXT,
+            activo INTEGER DEFAULT 1,
             fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS capital_integraciones (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            capital_id INTEGER NOT NULL,
-            suscripcion_id INTEGER,
-            empresa_id INTEGER NOT NULL DEFAULT 1,
-            socio_id INTEGER NOT NULL,
-            fecha TEXT NOT NULL,
-            importe REAL NOT NULL DEFAULT 0,
-            medio_integracion TEXT NOT NULL DEFAULT 'NO_INTEGRADO',
-            cuenta_destino_codigo TEXT,
-            cuenta_destino_nombre TEXT,
-            referencia TEXT,
-            observaciones TEXT,
-            asiento_origen_id INTEGER,
-            asiento_propuesto_id INTEGER,
-            estado TEXT NOT NULL DEFAULT 'PROPUESTO',
-            usuario_creacion TEXT,
-            fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            usuario_anulacion TEXT,
-            fecha_anulacion TIMESTAMP,
-            motivo_anulacion TEXT
-        );
-        CREATE TABLE IF NOT EXISTS capital_social_eventos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            capital_id INTEGER,
-            socio_id INTEGER,
-            empresa_id INTEGER NOT NULL DEFAULT 1,
-            evento TEXT NOT NULL,
-            detalle TEXT,
-            usuario TEXT,
-            fecha_evento TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """,
-    )
-
-
-def _sql_migracion_inicio_societario_pro() -> str:
-    return _leer_sql_migracion(
-        "migrations/022_inicio_societario_integraciones_reales.sql",
-        f"""
-        CREATE TABLE IF NOT EXISTS {TABLA_CAPITAL_ORIGENES} (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            capital_integracion_id INTEGER NOT NULL,
-            capital_id INTEGER NOT NULL,
-            suscripcion_id INTEGER,
-            empresa_id INTEGER NOT NULL DEFAULT 1,
-            socio_id INTEGER NOT NULL,
-            origen_modulo TEXT NOT NULL,
-            origen_tabla TEXT NOT NULL,
-            origen_id INTEGER NOT NULL,
-            cuenta_tesoreria_id INTEGER,
-            tesoreria_operacion_id INTEGER,
-            movimiento_caja_id INTEGER,
-            movimiento_banco_id INTEGER,
-            estado TEXT NOT NULL DEFAULT 'ACTIVO',
-            usuario_vinculacion TEXT,
-            fecha_vinculacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            usuario_anulacion TEXT,
-            fecha_anulacion TIMESTAMP,
-            motivo_anulacion TEXT
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_capital_integraciones_origenes_activo
-        ON {TABLA_CAPITAL_ORIGENES} (empresa_id, origen_modulo, origen_tabla, origen_id)
-        WHERE estado = 'ACTIVO';
-        """,
-    )
-
-
-def _asegurar_extensiones_inicio_societario_conn(conn) -> None:
-    """
-    Extiende la estructura histórica de capital social sin romper la migración 016.
-
-    SQLite no permite ADD COLUMN IF NOT EXISTS en forma portable para todos
-    los entornos del proyecto, por eso las columnas se agregan desde Python
-    de manera idempotente.
-    """
-    conn.executescript(_sql_migracion_inicio_societario_pro())
-
-    _agregar_columna_si_no_existe(conn, "capital_integraciones", "origen_modulo", "TEXT")
-    _agregar_columna_si_no_existe(conn, "capital_integraciones", "origen_tabla", "TEXT")
-    _agregar_columna_si_no_existe(conn, "capital_integraciones", "origen_id", "INTEGER")
-    _agregar_columna_si_no_existe(conn, "capital_integraciones", "cuenta_tesoreria_id", "INTEGER")
-    _agregar_columna_si_no_existe(conn, "capital_integraciones", "tesoreria_operacion_id", "INTEGER")
-    _agregar_columna_si_no_existe(conn, "capital_integraciones", "movimiento_caja_id", "INTEGER")
-    _agregar_columna_si_no_existe(conn, "capital_integraciones", "movimiento_banco_id", "INTEGER")
-    _agregar_columna_si_no_existe(conn, "capital_integraciones", "es_integracion_real", "INTEGER NOT NULL DEFAULT 0")
-    _agregar_columna_si_no_existe(conn, "capital_integraciones", "fecha_vinculacion", "TIMESTAMP")
-    _agregar_columna_si_no_existe(conn, "capital_integraciones", "usuario_vinculacion", "TEXT")
-
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_capital_integraciones_origen_real
-        ON capital_integraciones (empresa_id, origen_modulo, origen_tabla, origen_id, estado)
-        """
-    )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_capital_integraciones_tesoreria
-        ON capital_integraciones (empresa_id, tesoreria_operacion_id, estado)
-        """
-    )
-    conn.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_capital_integraciones_origen_real_activo
-        ON capital_integraciones (empresa_id, origen_modulo, origen_tabla, origen_id)
-        WHERE es_integracion_real = 1
-          AND estado <> 'ANULADO'
-          AND origen_modulo IS NOT NULL
-          AND origen_tabla IS NOT NULL
-          AND origen_id IS NOT NULL
+        )
         """
     )
 
 
-def migrar_capital_social() -> None:
-    migrar_ejercicios_contables()
-    migrar_asientos_origen()
+def asegurar_estructura_inicio_empresa() -> None:
     conn = conectar()
     try:
-        conn.executescript(_sql_migracion_capital())
-        _asegurar_extensiones_inicio_societario_conn(conn)
+        _asegurar_tabla_empresas_minima(conn)
+        conn.executescript(_sql_migracion_inicio_empresa())
+
+        _agregar_columna_si_no_existe(conn, "empresas", "tipo_sujeto", "TEXT")
+        _agregar_columna_si_no_existe(conn, "empresas", "tipo_societario", "TEXT")
+        _agregar_columna_si_no_existe(conn, "empresas", "fecha_inicio_actividades", "TEXT")
+        _agregar_columna_si_no_existe(conn, "empresas", "fecha_inicio_contable", "TEXT")
+        _agregar_columna_si_no_existe(conn, "empresas", "condicion_iva", "TEXT")
+        _agregar_columna_si_no_existe(conn, "empresas", "condicion_ganancias", "TEXT")
+        _agregar_columna_si_no_existe(conn, "empresas", "condicion_iibb", "TEXT")
+        _agregar_columna_si_no_existe(conn, "empresas", "jurisdiccion_sede", "TEXT")
+        _agregar_columna_si_no_existe(conn, "empresas", "marco_contable", "TEXT")
+        _agregar_columna_si_no_existe(conn, "empresas", "estado_onboarding", "TEXT")
+        _agregar_columna_si_no_existe(conn, "empresas", "fecha_actualizacion", "TIMESTAMP")
+
+        conn.execute(
+            """
+            UPDATE empresas
+            SET tipo_sujeto = ?
+            WHERE COALESCE(TRIM(tipo_sujeto), '') = ''
+            """,
+            (TIPO_SUJETO_NO_DEFINIDO,),
+        )
+        conn.execute(
+            """
+            UPDATE empresas
+            SET estado_onboarding = ?
+            WHERE COALESCE(TRIM(estado_onboarding), '') = ''
+            """,
+            (ESTADO_ONBOARDING_PENDIENTE,),
+        )
+
+        conn.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS idx_{TABLA_DOCUMENTACION}_empresa_estado
+            ON {TABLA_DOCUMENTACION} (empresa_id, estado)
+            """
+        )
+        conn.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS idx_{TABLA_EVENTOS}_empresa_fecha
+            ON {TABLA_EVENTOS} (empresa_id, fecha_evento)
+            """
+        )
+
         conn.commit()
     finally:
         conn.close()
 
 
-def asegurar_estructura_inicio_societario_pro() -> None:
-    migrar_capital_social()
-
-
-def _registrar_evento(capital_id=None, socio_id=None, empresa_id=1, evento="", detalle="", usuario=None, conn=None):
-    sql = """
-        INSERT INTO capital_social_eventos
-        (capital_id, socio_id, empresa_id, evento, detalle, usuario)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """
-    params = (capital_id, socio_id, empresa_id, evento, detalle, usuario)
-    if conn is not None:
-        conn.execute(sql, params)
-    else:
-        ejecutar_query(sql, params)
-
-
-def _asegurar_tesoreria_si_disponible() -> None:
-    try:
-        from services.tesoreria_service import inicializar_tesoreria
-
-        inicializar_tesoreria()
-    except Exception:
-        # La etapa actual solo consulta Tesorería si está disponible.
-        # Si no lo está, las funciones de integración devolverán error controlado.
-        pass
-
-
-def listar_socios_empresa(empresa_id: int = 1, incluir_bajas: bool = False) -> pd.DataFrame:
-    migrar_capital_social()
-    where_bajas = "" if incluir_bajas else "AND estado = 'ACTIVO'"
-    return ejecutar_query(
-        f"""
-        SELECT *
-        FROM socios_empresa
-        WHERE empresa_id = ?
-        {where_bajas}
-        ORDER BY nombre
-        """,
-        (empresa_id,),
-        fetch=True,
-    )
-
-
-def crear_socio_empresa(
-    empresa_id: int,
-    nombre: str,
-    cuit: Optional[str] = None,
-    tipo_socio: str = "SOCIO",
-    porcentaje_participacion: float = 0,
-    observaciones: Optional[str] = None,
-    usuario: Optional[str] = None,
-    conn=None,
-) -> Dict[str, Any]:
-    migrar_capital_social()
-    nombre_limpio = _texto(nombre)
-    if not nombre_limpio:
-        return _resultado(False, "El nombre del socio es obligatorio.")
-
-    porcentaje = _numero(porcentaje_participacion)
-    if porcentaje < 0 or porcentaje > 100:
-        return _resultado(False, "El porcentaje de participación debe estar entre 0 y 100.")
-
-    close_conn = False
-    if conn is None:
-        conn = conectar()
-        close_conn = True
-
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO socios_empresa
-            (empresa_id, nombre, cuit, tipo_socio, porcentaje_participacion, observaciones, usuario_creacion)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (empresa_id, nombre_limpio, _texto(cuit) or None, _texto(tipo_socio).upper() or "SOCIO", porcentaje, observaciones, usuario),
-        )
-        socio_id = int(cur.lastrowid)
-        _registrar_evento(None, socio_id, empresa_id, "ALTA_SOCIO", f"Socio creado: {nombre_limpio}.", usuario, conn)
-        if close_conn:
-            conn.commit()
-    except Exception as exc:
-        if close_conn:
-            conn.rollback()
-        return _resultado(False, f"No se pudo crear el socio: {exc}")
-    finally:
-        if close_conn:
-            conn.close()
-
-    return _resultado(True, "Socio creado correctamente.", socio_id=socio_id)
-
-
-def listar_capital_social_empresa(empresa_id: int = 1, incluir_anulados: bool = False) -> pd.DataFrame:
-    migrar_capital_social()
-    where_anulados = "" if incluir_anulados else "AND estado <> 'ANULADO'"
-    return ejecutar_query(
-        f"""
-        SELECT *
-        FROM capital_social_empresa
-        WHERE empresa_id = ?
-        {where_anulados}
-        ORDER BY fecha_instrumento DESC, id DESC
-        """,
-        (empresa_id,),
-        fetch=True,
-    )
-
-
-def obtener_capital_social(capital_id: int) -> Optional[Dict[str, Any]]:
-    migrar_capital_social()
-    cabecera = _df_a_dict(ejecutar_query("SELECT * FROM capital_social_empresa WHERE id = ?", (capital_id,), fetch=True))
-    if not cabecera:
+def _fila_a_dict(cursor, fila) -> Optional[Dict[str, Any]]:
+    if not fila:
         return None
-    suscripciones = ejecutar_query(
-        """
-        SELECT cs.*, se.nombre AS socio_nombre, se.cuit AS socio_cuit
-        FROM capital_suscripciones cs
-        LEFT JOIN socios_empresa se ON se.id = cs.socio_id
-        WHERE cs.capital_id = ?
-        ORDER BY se.nombre
-        """,
-        (capital_id,),
-        fetch=True,
-    )
-    integraciones = ejecutar_query(
-        """
-        SELECT ci.*, se.nombre AS socio_nombre, se.cuit AS socio_cuit
-        FROM capital_integraciones ci
-        LEFT JOIN socios_empresa se ON se.id = ci.socio_id
-        WHERE ci.capital_id = ?
-        ORDER BY ci.fecha, ci.id
-        """,
-        (capital_id,),
-        fetch=True,
-    )
-    cabecera["suscripciones"] = suscripciones.to_dict("records") if not suscripciones.empty else []
-    cabecera["integraciones"] = integraciones.to_dict("records") if not integraciones.empty else []
-    return cabecera
+    columnas = [col[0] for col in cursor.description]
+    return dict(zip(columnas, fila))
 
 
-def listar_eventos_capital(capital_id: int) -> pd.DataFrame:
-    migrar_capital_social()
-    return ejecutar_query(
-        """
-        SELECT *
-        FROM capital_social_eventos
-        WHERE capital_id = ?
-        ORDER BY fecha_evento DESC, id DESC
+def _obtener_empresa_conn(conn, empresa_id: int) -> Optional[Dict[str, Any]]:
+    if not _tabla_existe(conn, "empresas"):
+        return None
+    cur = conn.execute("SELECT * FROM empresas WHERE id = ? LIMIT 1", (int(empresa_id),))
+    return _fila_a_dict(cur, cur.fetchone())
+
+
+def obtener_empresa_inicio(empresa_id: int) -> Optional[Dict[str, Any]]:
+    asegurar_estructura_inicio_empresa()
+    conn = conectar()
+    try:
+        return _obtener_empresa_conn(conn, int(empresa_id))
+    finally:
+        conn.close()
+
+
+def _registrar_evento_conn(conn, empresa_id: int, evento: str, detalle: str = "", usuario: Optional[str] = None) -> None:
+    conn.execute(
+        f"""
+        INSERT INTO {TABLA_EVENTOS}
+        (empresa_id, evento, detalle, usuario)
+        VALUES (?, ?, ?, ?)
         """,
-        (capital_id,),
-        fetch=True,
+        (int(empresa_id), _texto(evento), _texto(detalle), usuario),
     )
 
 
-def _normalizar_socios_capital(socios: List[Dict[str, Any]], capital_total: float) -> Dict[str, Any]:
-    if not socios:
-        return _resultado(False, "Debe cargarse al menos un socio.")
+def _datos_basicos_faltantes(empresa: Dict[str, Any]) -> List[str]:
+    faltantes = []
+    if not _texto(empresa.get("nombre")):
+        faltantes.append("nombre interno")
 
-    normalizados = []
-    for idx, socio in enumerate(socios, start=1):
-        nombre = _texto(socio.get("nombre") or socio.get("socio_nombre"))
-        socio_id = socio.get("socio_id")
-        if not nombre and not socio_id:
-            return _resultado(False, f"El socio {idx} no tiene nombre.")
+    cuit = _normalizar_cuit(empresa.get("cuit"))
+    if not cuit:
+        faltantes.append("CUIT")
+    elif len(cuit) != 11:
+        faltantes.append("CUIT válido de 11 dígitos")
 
-        porcentaje = _numero(socio.get("porcentaje"))
-        suscripto = _numero(socio.get("importe_suscripto"))
-        integrado = _numero(socio.get("importe_integrado"))
+    if not _texto(empresa.get("razon_social")):
+        faltantes.append("razón social")
+    if not _texto(empresa.get("domicilio")):
+        faltantes.append("domicilio")
+    if not _texto(empresa.get("actividad")):
+        faltantes.append("actividad")
+    return faltantes
 
-        if porcentaje <= 0:
-            return _resultado(False, f"El socio {idx} debe tener porcentaje mayor a cero.")
-        if suscripto <= 0:
-            return _resultado(False, f"El socio {idx} debe tener capital suscripto mayor a cero.")
-        if integrado < 0:
-            return _resultado(False, f"El socio {idx} no puede tener integración negativa.")
-        if integrado - suscripto > TOLERANCIA:
-            return _resultado(False, f"El socio {idx} no puede integrar más de lo suscripto.")
 
-        normalizados.append({
-            "socio_id": int(socio_id) if socio_id else None,
-            "nombre": nombre,
-            "cuit": _texto(socio.get("cuit")) or None,
-            "tipo_socio": _texto(socio.get("tipo_socio")) or "SOCIO",
-            "porcentaje": porcentaje,
-            "importe_suscripto": suscripto,
-            "importe_integrado": integrado,
-            "importe_pendiente": round(suscripto - integrado, 2),
-            "medio_integracion": _texto(socio.get("medio_integracion")) or "NO_INTEGRADO",
-            "cuenta_destino_codigo": _texto(socio.get("cuenta_destino_codigo")),
-            "cuenta_destino_nombre": _texto(socio.get("cuenta_destino_nombre")) or "Caja/Banco/Bienes aportados",
-            "referencia": _texto(socio.get("referencia")),
-            "observaciones": _texto(socio.get("observaciones")),
-        })
+def _capital_societario_estado(empresa_id: int) -> Dict[str, Any]:
+    conn = conectar()
+    try:
+        tiene_capital = False
+        cantidad_capitales = 0
+        cantidad_socios = 0
+        total_pendiente = 0.0
 
-    total_porcentaje = round(sum(s["porcentaje"] for s in normalizados), 2)
-    total_suscripto = round(sum(s["importe_suscripto"] for s in normalizados), 2)
-    total_integrado = round(sum(s["importe_integrado"] for s in normalizados), 2)
+        if _tabla_existe(conn, "capital_social_empresa"):
+            fila = conn.execute(
+                """
+                SELECT COUNT(*) AS cantidad,
+                       ROUND(COALESCE(SUM(total_pendiente_integracion), 0), 2) AS pendiente
+                FROM capital_social_empresa
+                WHERE empresa_id = ?
+                  AND estado <> 'ANULADO'
+                """,
+                (int(empresa_id),),
+            ).fetchone()
+            cantidad_capitales = int((fila[0] if fila else 0) or 0)
+            total_pendiente = _numero(fila[1] if fila else 0)
+            tiene_capital = cantidad_capitales > 0
 
-    if abs(total_porcentaje - 100) > TOLERANCIA:
-        return _resultado(False, "La suma de participaciones debe ser 100%.", total_porcentaje=total_porcentaje)
-    if abs(total_suscripto - capital_total) > TOLERANCIA:
-        return _resultado(False, "La suma del capital suscripto debe coincidir con el capital social total.", total_suscripto=total_suscripto, capital_total=capital_total)
+        if _tabla_existe(conn, "socios_empresa"):
+            fila = conn.execute(
+                """
+                SELECT COUNT(*) AS cantidad
+                FROM socios_empresa
+                WHERE empresa_id = ?
+                  AND estado = 'ACTIVO'
+                """,
+                (int(empresa_id),),
+            ).fetchone()
+            cantidad_socios = int((fila[0] if fila else 0) or 0)
+
+        return {
+            "tiene_capital_social": tiene_capital,
+            "cantidad_capitales": cantidad_capitales,
+            "tiene_socios": cantidad_socios > 0,
+            "cantidad_socios": cantidad_socios,
+            "total_pendiente_integracion": total_pendiente,
+        }
+    finally:
+        conn.close()
+
+
+def obtener_perfil_inicio_empresa(empresa_id: int) -> Dict[str, Any]:
+    asegurar_estructura_inicio_empresa()
+    empresa = obtener_empresa_inicio(int(empresa_id))
+    if not empresa:
+        return _resultado(False, "La empresa no existe.")
+
+    tipo_sujeto = normalizar_tipo_sujeto(empresa.get("tipo_sujeto"))
+    es_persona_humana = tipo_sujeto == TIPO_SUJETO_PERSONA_HUMANA
+    es_sociedad = tipo_sujeto == TIPO_SUJETO_PERSONA_JURIDICA
+    es_otro_ente = tipo_sujeto == TIPO_SUJETO_OTRO_ENTE
+
+    campos_no_aplican = []
+    if es_persona_humana:
+        campos_no_aplican = [
+            "socios",
+            "porcentajes societarios",
+            "capital social",
+            "capital suscripto",
+            "integración de capital",
+            "cuenta particular de socios",
+        ]
 
     return _resultado(
         True,
-        "Socios validados.",
-        socios=normalizados,
-        total_porcentaje=total_porcentaje,
-        total_suscripto=total_suscripto,
-        total_integrado=total_integrado,
-        total_pendiente=round(total_suscripto - total_integrado, 2),
+        "Perfil de inicio obtenido.",
+        empresa_id=int(empresa_id),
+        empresa=empresa,
+        tipo_sujeto=tipo_sujeto,
+        tipo_sujeto_etiqueta=etiqueta_tipo_sujeto(tipo_sujeto),
+        es_persona_humana=es_persona_humana,
+        es_sociedad=es_sociedad,
+        es_otro_ente=es_otro_ente,
+        requiere_inicio_societario=es_sociedad,
+        requiere_socios=es_sociedad,
+        requiere_capital_social=es_sociedad,
+        usa_titular=es_persona_humana,
+        documentacion_obligatoria=False,
+        documentacion_opcional=True,
+        campos_no_aplican=campos_no_aplican,
     )
 
 
-def configurar_capital_social_inicial(
-    empresa_id: int,
-    ejercicio_id: int,
-    fecha_instrumento: Any,
-    capital_social_total: float,
-    socios: List[Dict[str, Any]],
-    descripcion: str = "Capital social inicial",
-    referencia: Optional[str] = None,
-    tipo_instrumento: str = "INICIO_CONTABLE",
-    cuenta_socios_integracion_codigo: str = "",
-    cuenta_socios_integracion_nombre: str = "Socios / Accionistas por integración",
-    cuenta_capital_codigo: str = "",
-    cuenta_capital_nombre: str = "Capital social",
-    usuario: Optional[str] = None,
-    generar_asientos: bool = True,
-) -> Dict[str, Any]:
-    migrar_capital_social()
+def _requisito(codigo: str, nombre: str, ok: bool, detalle: str = "", bloqueante: bool = True, recomendado: bool = False) -> Dict[str, Any]:
+    return {
+        "codigo": codigo,
+        "nombre": nombre,
+        "ok": bool(ok),
+        "estado": "OK" if ok else ("PENDIENTE_RECOMENDADO" if recomendado else "FALTA"),
+        "detalle": detalle,
+        "bloqueante": bool(bloqueante),
+        "recomendado": bool(recomendado),
+    }
 
-    try:
-        fecha_norm = _normalizar_fecha(fecha_instrumento, "fecha_instrumento")
-    except ValueError as exc:
-        return _resultado(False, str(exc))
 
-    capital_total = _numero(capital_social_total)
-    if capital_total <= 0:
-        return _resultado(False, "El capital social total debe ser mayor a cero.")
+def obtener_requisitos_inicio_empresa(empresa_id: int) -> List[Dict[str, Any]]:
+    perfil = obtener_perfil_inicio_empresa(int(empresa_id))
+    if not perfil.get("ok"):
+        return [
+            _requisito(
+                "EMPRESA_EXISTE",
+                "Empresa existente",
+                False,
+                perfil.get("mensaje", "La empresa no existe."),
+                bloqueante=True,
+            )
+        ]
 
-    ejercicio = obtener_ejercicio_por_id(int(ejercicio_id))
-    if not ejercicio or int(ejercicio.get("empresa_id") or 0) != int(empresa_id):
-        return _resultado(False, "No se encontró el ejercicio contable informado para la empresa.")
+    empresa = perfil["empresa"]
+    tipo_sujeto = perfil["tipo_sujeto"]
+    requisitos: List[Dict[str, Any]] = []
 
-    validacion_fecha = validar_fecha_operativa_contable(empresa_id, fecha_norm, permitir_periodo_cerrado=False)
-    if not validacion_fecha.get("ok"):
-        return validacion_fecha
+    faltantes_basicos = _datos_basicos_faltantes(empresa)
+    requisitos.append(
+        _requisito(
+            "DATOS_BASICOS",
+            "Datos mínimos de empresa",
+            not faltantes_basicos,
+            "Completo." if not faltantes_basicos else "Faltan: " + ", ".join(faltantes_basicos) + ".",
+            bloqueante=True,
+        )
+    )
 
-    validacion_socios = _normalizar_socios_capital(socios, capital_total)
-    if not validacion_socios["ok"]:
-        return validacion_socios
+    requisitos.append(
+        _requisito(
+            "TIPO_SUJETO",
+            "Tipo de sujeto",
+            tipo_sujeto != TIPO_SUJETO_NO_DEFINIDO,
+            "Definido como " + etiqueta_tipo_sujeto(tipo_sujeto) + "."
+            if tipo_sujeto != TIPO_SUJETO_NO_DEFINIDO
+            else "Debe indicar si es Persona humana, Sociedad/persona jurídica u Otro ente.",
+            bloqueante=True,
+        )
+    )
 
-    socios_norm = validacion_socios["socios"]
-    total_suscripto = float(validacion_socios["total_suscripto"])
-    total_integrado = float(validacion_socios["total_integrado"])
-    total_pendiente = float(validacion_socios["total_pendiente"])
+    if tipo_sujeto == TIPO_SUJETO_PERSONA_HUMANA:
+        requisitos.append(
+            _requisito(
+                "INICIO_PERSONA_HUMANA",
+                "Inicio simplificado de persona humana",
+                True,
+                "No corresponde exigir socios, capital social, suscripción ni integración.",
+                bloqueante=True,
+            )
+        )
 
-    descripcion_limpia = _texto(descripcion) or "Capital social inicial"
-    cuenta_socios_nombre = _texto(cuenta_socios_integracion_nombre) or "Socios / Accionistas por integración"
-    cuenta_capital_nombre_final = _texto(cuenta_capital_nombre) or "Capital social"
+    if tipo_sujeto == TIPO_SUJETO_PERSONA_JURIDICA:
+        tipo_societario = _texto(empresa.get("tipo_societario"))
+        requisitos.append(
+            _requisito(
+                "TIPO_SOCIETARIO",
+                "Tipo societario",
+                bool(tipo_societario),
+                "Tipo societario informado."
+                if tipo_societario
+                else "Debe informar tipo societario o forma jurídica.",
+                bloqueante=True,
+            )
+        )
 
+        capital = _capital_societario_estado(int(empresa_id))
+        requisitos.append(
+            _requisito(
+                "SOCIOS",
+                "Socios / accionistas",
+                bool(capital.get("tiene_socios")),
+                f"Socios activos: {capital.get('cantidad_socios', 0)}."
+                if capital.get("tiene_socios")
+                else "Debe cargar socios/accionistas para el inicio societario.",
+                bloqueante=True,
+            )
+        )
+        requisitos.append(
+            _requisito(
+                "CAPITAL_SOCIAL",
+                "Capital social",
+                bool(capital.get("tiene_capital_social")),
+                "Capital social cargado."
+                if capital.get("tiene_capital_social")
+                else "Debe cargar capital suscripto para el inicio societario.",
+                bloqueante=True,
+            )
+        )
+
+        if capital.get("tiene_capital_social") and _numero(capital.get("total_pendiente_integracion")) > TOLERANCIA:
+            requisitos.append(
+                _requisito(
+                    "INTEGRACION_PENDIENTE",
+                    "Integración pendiente",
+                    True,
+                    f"Hay integración pendiente por {capital.get('total_pendiente_integracion'):.2f}. No bloquea: debe controlarse por socio y movimiento real.",
+                    bloqueante=False,
+                    recomendado=True,
+                )
+            )
+
+    docs = documentacion_respaldo_listar(int(empresa_id))
+    requisitos.append(
+        _requisito(
+            "DOCUMENTACION_RESPALDO",
+            "Documentación respaldatoria",
+            True,
+            "Documentación cargada."
+            if not docs.empty
+            else "Opcional/recomendada. No bloquea el alta ni el inicio operativo básico.",
+            bloqueante=False,
+            recomendado=True,
+        )
+    )
+
+    return requisitos
+
+
+def obtener_estado_onboarding_empresa(empresa_id: int) -> Dict[str, Any]:
+    asegurar_estructura_inicio_empresa()
+    empresa = obtener_empresa_inicio(int(empresa_id))
+    if not empresa:
+        return _resultado(False, "La empresa no existe.", estado=ESTADO_ONBOARDING_PENDIENTE, faltantes=[])
+
+    requisitos = obtener_requisitos_inicio_empresa(int(empresa_id))
+    faltantes_bloqueantes = [
+        req for req in requisitos
+        if req.get("bloqueante") and not req.get("ok")
+    ]
+    recomendaciones = [
+        req for req in requisitos
+        if req.get("recomendado") and not req.get("ok")
+    ]
+
+    tipo_sujeto = normalizar_tipo_sujeto(empresa.get("tipo_sujeto"))
+    if tipo_sujeto == TIPO_SUJETO_NO_DEFINIDO:
+        estado = ESTADO_ONBOARDING_PENDIENTE
+    elif faltantes_bloqueantes:
+        estado = ESTADO_ONBOARDING_INCOMPLETO
+    else:
+        estado = ESTADO_ONBOARDING_OPERATIVA_BASE
+
+    return _resultado(
+        len(faltantes_bloqueantes) == 0,
+        "Inicio de empresa completo para operación base."
+        if len(faltantes_bloqueantes) == 0
+        else "El inicio de empresa tiene faltantes bloqueantes.",
+        empresa_id=int(empresa_id),
+        estado=estado,
+        tipo_sujeto=tipo_sujeto,
+        tipo_sujeto_etiqueta=etiqueta_tipo_sujeto(tipo_sujeto),
+        requisitos=requisitos,
+        faltantes=[req["codigo"] for req in faltantes_bloqueantes],
+        faltantes_detalle=faltantes_bloqueantes,
+        recomendaciones=recomendaciones,
+        documentacion_obligatoria=False,
+    )
+
+
+def _actualizar_estado_onboarding_persistido(empresa_id: int, estado: str) -> None:
     conn = conectar()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO capital_social_empresa
-            (empresa_id, ejercicio_id, fecha_instrumento, tipo_instrumento, referencia, descripcion,
-             capital_social_total, total_suscripto, total_integrado, total_pendiente_integracion,
-             cuenta_socios_integracion_codigo, cuenta_socios_integracion_nombre,
-             cuenta_capital_codigo, cuenta_capital_nombre, estado, usuario_creacion)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROPUESTO', ?)
-            """,
-            (
-                empresa_id, ejercicio_id, fecha_norm, _texto(tipo_instrumento) or "INICIO_CONTABLE", referencia, descripcion_limpia,
-                capital_total, total_suscripto, total_integrado, total_pendiente,
-                _texto(cuenta_socios_integracion_codigo), cuenta_socios_nombre,
-                _texto(cuenta_capital_codigo), cuenta_capital_nombre_final, usuario,
-            ),
-        )
-        capital_id = int(cur.lastrowid)
-
-        for socio in socios_norm:
-            socio_id = socio["socio_id"]
-            if not socio_id:
-                res_socio = crear_socio_empresa(
-                    empresa_id=empresa_id,
-                    nombre=socio["nombre"],
-                    cuit=socio["cuit"],
-                    tipo_socio=socio["tipo_socio"],
-                    porcentaje_participacion=socio["porcentaje"],
-                    observaciones=socio["observaciones"],
-                    usuario=usuario,
-                    conn=conn,
-                )
-                if not res_socio["ok"]:
-                    raise RuntimeError(res_socio["mensaje"])
-                socio_id = int(res_socio["socio_id"])
-            else:
-                cur.execute(
-                    """
-                    UPDATE socios_empresa
-                    SET porcentaje_participacion = ?, fecha_actualizacion = CURRENT_TIMESTAMP, usuario_actualizacion = ?
-                    WHERE id = ? AND empresa_id = ?
-                    """,
-                    (socio["porcentaje"], usuario, socio_id, empresa_id),
-                )
-
-            cur.execute(
-                """
-                INSERT INTO capital_suscripciones
-                (capital_id, empresa_id, socio_id, porcentaje, importe_suscripto, importe_integrado, importe_pendiente, observaciones)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (capital_id, empresa_id, socio_id, socio["porcentaje"], socio["importe_suscripto"], socio["importe_integrado"], socio["importe_pendiente"], socio["observaciones"]),
-            )
-            suscripcion_id = int(cur.lastrowid)
-            socio["socio_id"] = socio_id
-            socio["suscripcion_id"] = suscripcion_id
-
-            if socio["importe_integrado"] > 0:
-                cur.execute(
-                    """
-                    INSERT INTO capital_integraciones
-                    (capital_id, suscripcion_id, empresa_id, socio_id, fecha, importe, medio_integracion,
-                     cuenta_destino_codigo, cuenta_destino_nombre, referencia, observaciones, estado, usuario_creacion,
-                     es_integracion_real)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROPUESTO', ?, 0)
-                    """,
-                    (
-                        capital_id, suscripcion_id, empresa_id, socio_id, fecha_norm, socio["importe_integrado"], socio["medio_integracion"],
-                        socio["cuenta_destino_codigo"], socio["cuenta_destino_nombre"], socio["referencia"] or referencia, socio["observaciones"], usuario,
-                    ),
-                )
-        _registrar_evento(capital_id, None, empresa_id, "CREACION_CAPITAL", "Configuración inicial de capital social cargada.", usuario, conn)
-        conn.commit()
-    except Exception as exc:
-        conn.rollback()
-        conn.close()
-        return _resultado(False, f"No se pudo configurar el capital social: {exc}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-    asiento_suscripcion = None
-    asiento_integracion = None
-    if generar_asientos:
-        asiento_suscripcion = crear_asiento_origen(
-            empresa_id=empresa_id,
-            fecha=fecha_norm,
-            tipo_origen="CAPITAL_SOCIAL",
-            descripcion=f"Suscripción de capital social - {descripcion_limpia}",
-            lineas=[
-                {"cuenta_codigo": _texto(cuenta_socios_integracion_codigo), "cuenta_nombre": cuenta_socios_nombre, "debe": total_suscripto, "haber": 0, "glosa": "Capital suscripto por socios/accionistas"},
-                {"cuenta_codigo": _texto(cuenta_capital_codigo), "cuenta_nombre": cuenta_capital_nombre_final, "debe": 0, "haber": total_suscripto, "glosa": "Capital social suscripto"},
-            ],
-            ejercicio_id=ejercicio_id,
-            referencia=referencia,
-            observaciones=f"Generado desde Inicio contable. Capital ID {capital_id}.",
-            usuario=usuario,
-            generar_propuesta=True,
-        )
-        if not asiento_suscripcion.get("ok"):
-            return _resultado(False, f"Capital cargado, pero no se pudo generar asiento de suscripción: {asiento_suscripcion.get('mensaje')}", capital_id=capital_id)
-
-        if total_integrado > 0:
-            agrupado = {}
-            for socio in socios_norm:
-                importe = _numero(socio["importe_integrado"])
-                if importe <= 0:
-                    continue
-                clave = (socio["cuenta_destino_codigo"], socio["cuenta_destino_nombre"])
-                agrupado[clave] = round(agrupado.get(clave, 0) + importe, 2)
-
-            lineas_integracion = [
-                {"cuenta_codigo": codigo, "cuenta_nombre": nombre or "Caja/Banco/Bienes aportados", "debe": importe, "haber": 0, "glosa": "Integración de capital por socios/accionistas"}
-                for (codigo, nombre), importe in agrupado.items()
-            ]
-            lineas_integracion.append({"cuenta_codigo": _texto(cuenta_socios_integracion_codigo), "cuenta_nombre": cuenta_socios_nombre, "debe": 0, "haber": total_integrado, "glosa": "Cancelación parcial/total de integración pendiente"})
-
-            asiento_integracion = crear_asiento_origen(
-                empresa_id=empresa_id,
-                fecha=fecha_norm,
-                tipo_origen="CAPITAL_SOCIAL",
-                descripcion=f"Integración de capital social - {descripcion_limpia}",
-                lineas=lineas_integracion,
-                ejercicio_id=ejercicio_id,
-                referencia=referencia,
-                observaciones=f"Generado desde Inicio contable. Capital ID {capital_id}.",
-                usuario=usuario,
-                generar_propuesta=True,
-            )
-            if not asiento_integracion.get("ok"):
-                return _resultado(False, f"Capital cargado, pero no se pudo generar asiento de integración: {asiento_integracion.get('mensaje')}", capital_id=capital_id)
-
-        conn = conectar()
-        try:
+        if _tabla_existe(conn, "empresas") and "estado_onboarding" in _columnas_tabla(conn, "empresas"):
             conn.execute(
                 """
-                UPDATE capital_social_empresa
-                SET asiento_suscripcion_origen_id = ?, asiento_suscripcion_propuesto_id = ?,
-                    asiento_integracion_origen_id = ?, asiento_integracion_propuesto_id = ?,
+                UPDATE empresas
+                SET estado_onboarding = ?,
                     fecha_actualizacion = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
-                (
-                    asiento_suscripcion.get("asiento_origen_id") if asiento_suscripcion else None,
-                    asiento_suscripcion.get("asiento_propuesto_id") if asiento_suscripcion else None,
-                    asiento_integracion.get("asiento_origen_id") if asiento_integracion else None,
-                    asiento_integracion.get("asiento_propuesto_id") if asiento_integracion else None,
-                    capital_id,
-                ),
+                (_texto(estado) or ESTADO_ONBOARDING_PENDIENTE, int(empresa_id)),
             )
-            _registrar_evento(capital_id, None, empresa_id, "ASIENTOS_PROPUESTOS", "Asientos propuestos de capital generados.", usuario, conn)
             conn.commit()
-        finally:
-            conn.close()
-
-    return _resultado(
-        True,
-        "Inicio de capital social configurado correctamente. Los asientos quedaron como propuestas; todavía no impactan en Libro Diario.",
-        capital_id=capital_id,
-        asiento_suscripcion_origen_id=asiento_suscripcion.get("asiento_origen_id") if asiento_suscripcion else None,
-        asiento_suscripcion_propuesto_id=asiento_suscripcion.get("asiento_propuesto_id") if asiento_suscripcion else None,
-        asiento_integracion_origen_id=asiento_integracion.get("asiento_origen_id") if asiento_integracion else None,
-        asiento_integracion_propuesto_id=asiento_integracion.get("asiento_propuesto_id") if asiento_integracion else None,
-        capital=obtener_capital_social(capital_id),
-    )
-
-
-def _obtener_capital_conn(conn, capital_id: int) -> Optional[Dict[str, Any]]:
-    cur = conn.execute("SELECT * FROM capital_social_empresa WHERE id = ? LIMIT 1", (int(capital_id),))
-    fila = cur.fetchone()
-    if not fila:
-        return None
-    columnas = [col[0] for col in cur.description]
-    return dict(zip(columnas, fila))
-
-
-def _obtener_suscripcion_conn(conn, capital_id: int, socio_id: int) -> Optional[Dict[str, Any]]:
-    cur = conn.execute(
-        """
-        SELECT cs.*, se.nombre AS socio_nombre, se.cuit AS socio_cuit
-        FROM capital_suscripciones cs
-        LEFT JOIN socios_empresa se ON se.id = cs.socio_id
-        WHERE cs.capital_id = ?
-          AND cs.socio_id = ?
-          AND cs.estado = 'ACTIVO'
-        LIMIT 1
-        """,
-        (int(capital_id), int(socio_id)),
-    )
-    fila = cur.fetchone()
-    if not fila:
-        return None
-    columnas = [col[0] for col in cur.description]
-    return dict(zip(columnas, fila))
-
-
-def _obtener_integracion_conn(conn, integracion_id: int) -> Optional[Dict[str, Any]]:
-    cur = conn.execute(
-        """
-        SELECT ci.*, cse.cuenta_socios_integracion_codigo, cse.cuenta_socios_integracion_nombre,
-               cse.ejercicio_id, se.nombre AS socio_nombre
-        FROM capital_integraciones ci
-        LEFT JOIN capital_social_empresa cse ON cse.id = ci.capital_id
-        LEFT JOIN socios_empresa se ON se.id = ci.socio_id
-        WHERE ci.id = ?
-        LIMIT 1
-        """,
-        (int(integracion_id),),
-    )
-    fila = cur.fetchone()
-    if not fila:
-        return None
-    columnas = [col[0] for col in cur.description]
-    return dict(zip(columnas, fila))
-
-
-def _obtener_operacion_tesoreria_conn(conn, empresa_id: int, operacion_id: int) -> Optional[Dict[str, Any]]:
-    if not _tabla_existe(conn, "tesoreria_operaciones"):
-        return None
-
-    sql = """
-        SELECT op.*,
-               tc.tipo_cuenta AS cuenta_tesoreria_tipo,
-               tc.nombre AS cuenta_tesoreria_nombre,
-               tc.cuenta_contable_codigo AS cuenta_tesoreria_codigo,
-               tc.cuenta_contable_nombre AS cuenta_tesoreria_cuenta_nombre
-        FROM tesoreria_operaciones op
-        LEFT JOIN tesoreria_cuentas tc
-               ON tc.id = op.cuenta_tesoreria_id
-              AND COALESCE(tc.empresa_id, 1) = COALESCE(op.empresa_id, 1)
-        WHERE op.id = ?
-          AND COALESCE(op.empresa_id, 1) = ?
-        LIMIT 1
-    """
-    cur = conn.execute(sql, (int(operacion_id), int(empresa_id)))
-    fila = cur.fetchone()
-    if not fila:
-        return None
-    columnas = [col[0] for col in cur.description]
-    return dict(zip(columnas, fila))
-
-
-def _origen_real_usado_conn(conn, empresa_id: int, origen_modulo: str, origen_tabla: str, origen_id: int, excluir_integracion_id: Optional[int] = None) -> bool:
-    params = [int(empresa_id), _texto_upper(origen_modulo), _texto(origen_tabla), int(origen_id)]
-    filtro_exclusion = ""
-    if excluir_integracion_id:
-        filtro_exclusion = "AND id <> ?"
-        params.append(int(excluir_integracion_id))
-
-    fila = conn.execute(
-        f"""
-        SELECT id
-        FROM capital_integraciones
-        WHERE empresa_id = ?
-          AND origen_modulo = ?
-          AND origen_tabla = ?
-          AND origen_id = ?
-          AND COALESCE(es_integracion_real, 0) = 1
-          AND estado <> 'ANULADO'
-          {filtro_exclusion}
-        LIMIT 1
-        """,
-        tuple(params),
-    ).fetchone()
-    return fila is not None
-
-
-def _actualizar_totales_capital_conn(conn, capital_id: int) -> None:
-    fila = conn.execute(
-        """
-        SELECT
-            ROUND(COALESCE(SUM(importe_suscripto), 0), 2) AS total_suscripto,
-            ROUND(COALESCE(SUM(importe_integrado), 0), 2) AS total_integrado,
-            ROUND(COALESCE(SUM(importe_pendiente), 0), 2) AS total_pendiente
-        FROM capital_suscripciones
-        WHERE capital_id = ?
-          AND estado = 'ACTIVO'
-        """,
-        (int(capital_id),),
-    ).fetchone()
-    if not fila:
-        return
-    conn.execute(
-        """
-        UPDATE capital_social_empresa
-        SET total_suscripto = ?,
-            total_integrado = ?,
-            total_pendiente_integracion = ?,
-            fecha_actualizacion = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """,
-        (_numero(fila[0]), _numero(fila[1]), _numero(fila[2]), int(capital_id)),
-    )
-
-
-def _medio_desde_tipo_tesoreria(tipo_cuenta: str) -> str:
-    tipo = _texto_upper(tipo_cuenta)
-    if "CAJA" in tipo or tipo == "EFECTIVO":
-        return "CAJA"
-    if "BANCO" in tipo or "CBU" in tipo or "CUENTA" in tipo:
-        return "BANCO"
-    if "BILLETERA" in tipo:
-        return "BILLETERA"
-    if "TARJETA" in tipo:
-        return "TARJETA"
-    return "TESORERIA"
-
-
-def listar_pendientes_integracion_por_socio(empresa_id: int = 1, capital_id: Optional[int] = None) -> pd.DataFrame:
-    migrar_capital_social()
-    filtros = ["cs.empresa_id = ?", "cs.estado = 'ACTIVO'", "cse.estado <> 'ANULADO'"]
-    params: List[Any] = [int(empresa_id)]
-
-    if capital_id is not None:
-        filtros.append("cs.capital_id = ?")
-        params.append(int(capital_id))
-
-    return ejecutar_query(
-        f"""
-        SELECT
-            cs.id AS suscripcion_id,
-            cs.capital_id,
-            cs.empresa_id,
-            cs.socio_id,
-            se.nombre AS socio_nombre,
-            se.cuit AS socio_cuit,
-            cs.porcentaje,
-            cs.importe_suscripto,
-            cs.importe_integrado,
-            cs.importe_pendiente,
-            cse.fecha_instrumento,
-            cse.descripcion AS capital_descripcion,
-            cse.cuenta_socios_integracion_codigo,
-            cse.cuenta_socios_integracion_nombre,
-            cse.cuenta_capital_codigo,
-            cse.cuenta_capital_nombre
-        FROM capital_suscripciones cs
-        INNER JOIN capital_social_empresa cse ON cse.id = cs.capital_id
-        LEFT JOIN socios_empresa se ON se.id = cs.socio_id
-        WHERE {' AND '.join(filtros)}
-        ORDER BY cse.fecha_instrumento DESC, se.nombre
-        """,
-        tuple(params),
-        fetch=True,
-    )
-
-
-def listar_movimientos_tesoreria_disponibles_para_integracion(
-    empresa_id: int = 1,
-    cuenta_tesoreria_id: Optional[int] = None,
-    desde: Optional[Any] = None,
-    hasta: Optional[Any] = None,
-    limite: int = 100,
-) -> pd.DataFrame:
-    migrar_capital_social()
-    _asegurar_tesoreria_si_disponible()
-
-    conn = conectar()
-    try:
-        if not _tabla_existe(conn, "tesoreria_operaciones"):
-            return pd.DataFrame()
-
-        filtros = [
-            "COALESCE(op.empresa_id, 1) = ?",
-            "COALESCE(op.importe, 0) > 0",
-            "UPPER(COALESCE(op.estado, 'CONFIRMADA')) NOT IN ('ANULADA', 'ANULADO', 'CANCELADA')",
-            """
-            NOT EXISTS (
-                SELECT 1
-                FROM capital_integraciones ci
-                WHERE ci.empresa_id = COALESCE(op.empresa_id, 1)
-                  AND ci.origen_modulo = 'TESORERIA'
-                  AND ci.origen_tabla = 'tesoreria_operaciones'
-                  AND ci.origen_id = op.id
-                  AND COALESCE(ci.es_integracion_real, 0) = 1
-                  AND ci.estado <> 'ANULADO'
-            )
-            """,
-        ]
-        params: List[Any] = [int(empresa_id)]
-
-        if cuenta_tesoreria_id is not None:
-            filtros.append("op.cuenta_tesoreria_id = ?")
-            params.append(int(cuenta_tesoreria_id))
-
-        if desde is not None:
-            filtros.append("COALESCE(op.fecha_contable, op.fecha_operacion) >= ?")
-            params.append(_normalizar_fecha(desde, "desde"))
-
-        if hasta is not None:
-            filtros.append("COALESCE(op.fecha_contable, op.fecha_operacion) <= ?")
-            params.append(_normalizar_fecha(hasta, "hasta"))
-
-        params.append(max(1, int(limite or 100)))
-
-        return pd.read_sql_query(
-            f"""
-            SELECT
-                op.id AS tesoreria_operacion_id,
-                op.empresa_id,
-                op.tipo_operacion,
-                op.subtipo,
-                op.fecha_operacion,
-                op.fecha_contable,
-                COALESCE(op.fecha_contable, op.fecha_operacion) AS fecha,
-                op.cuenta_tesoreria_id,
-                tc.tipo_cuenta AS cuenta_tesoreria_tipo,
-                tc.nombre AS cuenta_tesoreria_nombre,
-                tc.cuenta_contable_codigo,
-                tc.cuenta_contable_nombre,
-                op.tercero_nombre,
-                op.tercero_cuit,
-                op.descripcion,
-                op.referencia_externa,
-                op.importe,
-                op.estado
-            FROM tesoreria_operaciones op
-            LEFT JOIN tesoreria_cuentas tc
-                   ON tc.id = op.cuenta_tesoreria_id
-                  AND COALESCE(tc.empresa_id, 1) = COALESCE(op.empresa_id, 1)
-            WHERE {' AND '.join(filtros)}
-            ORDER BY COALESCE(op.fecha_contable, op.fecha_operacion) DESC, op.id DESC
-            LIMIT ?
-            """,
-            conn,
-            params=tuple(params),
-        )
     finally:
         conn.close()
 
 
-def registrar_integracion_capital_desde_tesoreria(
+def actualizar_inicio_empresa(
     empresa_id: int,
-    capital_id: int,
-    socio_id: int,
-    tesoreria_operacion_id: int,
-    importe: float,
-    fecha_integracion: Optional[Any] = None,
-    referencia: Optional[str] = None,
-    observaciones: Optional[str] = None,
+    tipo_sujeto: Optional[str] = None,
+    tipo_societario: Optional[str] = None,
+    fecha_inicio_actividades: Optional[Any] = None,
+    fecha_inicio_contable: Optional[Any] = None,
+    condicion_iva: Optional[str] = None,
+    condicion_ganancias: Optional[str] = None,
+    condicion_iibb: Optional[str] = None,
+    jurisdiccion_sede: Optional[str] = None,
+    marco_contable: Optional[str] = None,
     usuario: Optional[str] = None,
-    generar_asiento: bool = True,
 ) -> Dict[str, Any]:
-    """
-    Registra una integración de capital vinculada a un movimiento real de Tesorería.
-
-    Esta función es el camino PRO para integrar capital por Caja/Banco/Tesorería:
-    - valida que el socio tenga saldo pendiente;
-    - valida que la operación de tesorería exista y no esté usada;
-    - toma la cuenta contable real de la cuenta de tesorería;
-    - genera asiento propuesto a Bandeja;
-    - no impacta directo en Libro Diario.
-    """
-    migrar_capital_social()
-    _asegurar_tesoreria_si_disponible()
-
-    importe_norm = _numero(importe)
-    if importe_norm <= 0:
-        return _resultado(False, "El importe de integración debe ser mayor a cero.")
+    asegurar_estructura_inicio_empresa()
 
     conn = conectar()
-    integracion_id = None
     try:
-        capital = _obtener_capital_conn(conn, capital_id)
-        if not capital:
-            return _resultado(False, "No se encontró la configuración de capital social.")
-        if int(capital.get("empresa_id") or 0) != int(empresa_id):
-            return _resultado(False, "El capital informado no pertenece a la empresa.")
-        if _texto_upper(capital.get("estado")) == "ANULADO":
-            return _resultado(False, "No se puede integrar capital sobre una configuración anulada.")
+        empresa = _obtener_empresa_conn(conn, int(empresa_id))
+        if not empresa:
+            return _resultado(False, "La empresa no existe.")
 
-        suscripcion = _obtener_suscripcion_conn(conn, capital_id, socio_id)
-        if not suscripcion:
-            return _resultado(False, "No se encontró suscripción activa para el socio informado.")
+        campos = {}
 
-        pendiente = _numero(suscripcion.get("importe_pendiente"))
-        if importe_norm - pendiente > TOLERANCIA:
-            return _resultado(
-                False,
-                "La integración no puede superar el saldo pendiente del socio.",
-                importe_solicitado=importe_norm,
-                importe_pendiente=pendiente,
+        if tipo_sujeto is not None:
+            campos["tipo_sujeto"] = normalizar_tipo_sujeto(tipo_sujeto)
+        if tipo_societario is not None:
+            campos["tipo_societario"] = _texto(tipo_societario)
+        if fecha_inicio_actividades is not None:
+            campos["fecha_inicio_actividades"] = _normalizar_fecha_opcional(fecha_inicio_actividades)
+        if fecha_inicio_contable is not None:
+            campos["fecha_inicio_contable"] = _normalizar_fecha_opcional(fecha_inicio_contable)
+        if condicion_iva is not None:
+            campos["condicion_iva"] = _texto(condicion_iva)
+        if condicion_ganancias is not None:
+            campos["condicion_ganancias"] = _texto(condicion_ganancias)
+        if condicion_iibb is not None:
+            campos["condicion_iibb"] = _texto(condicion_iibb)
+        if jurisdiccion_sede is not None:
+            campos["jurisdiccion_sede"] = _texto(jurisdiccion_sede)
+        if marco_contable is not None:
+            campos["marco_contable"] = _texto(marco_contable)
+
+        if campos:
+            campos["fecha_actualizacion"] = "CURRENT_TIMESTAMP"
+            set_partes = []
+            valores: List[Any] = []
+            for campo, valor in campos.items():
+                if campo == "fecha_actualizacion":
+                    set_partes.append("fecha_actualizacion = CURRENT_TIMESTAMP")
+                else:
+                    set_partes.append(f"{campo} = ?")
+                    valores.append(valor)
+            valores.append(int(empresa_id))
+            conn.execute(
+                f"""
+                UPDATE empresas
+                SET {', '.join(set_partes)}
+                WHERE id = ?
+                """,
+                tuple(valores),
             )
+            _registrar_evento_conn(
+                conn,
+                int(empresa_id),
+                "ACTUALIZACION_INICIO_EMPRESA",
+                "Actualización de datos de inicio de empresa.",
+                usuario,
+            )
+            conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        return _resultado(False, f"No se pudo actualizar el inicio de empresa: {exc}")
+    finally:
+        conn.close()
 
-        operacion = _obtener_operacion_tesoreria_conn(conn, empresa_id, tesoreria_operacion_id)
-        if not operacion:
-            return _resultado(False, "No se encontró la operación de Tesorería informada.")
+    estado = obtener_estado_onboarding_empresa(int(empresa_id))
+    _actualizar_estado_onboarding_persistido(int(empresa_id), estado.get("estado", ESTADO_ONBOARDING_PENDIENTE))
 
-        estado_operacion = _texto_upper(operacion.get("estado") or "CONFIRMADA")
-        if estado_operacion in {"ANULADA", "ANULADO", "CANCELADA"}:
-            return _resultado(False, "La operación de Tesorería está anulada o cancelada.")
+    return _resultado(
+        True,
+        "Inicio de empresa actualizado correctamente.",
+        empresa_id=int(empresa_id),
+        estado_onboarding=estado.get("estado"),
+        perfil=obtener_perfil_inicio_empresa(int(empresa_id)),
+        estado=estado,
+    )
 
-        importe_operacion = _numero(operacion.get("importe"))
-        if importe_operacion <= 0:
-            return _resultado(False, "Solo se pueden aplicar movimientos positivos de Tesorería como integración de capital.")
-        if importe_norm - importe_operacion > TOLERANCIA:
-            return _resultado(False, "La integración no puede superar el importe del movimiento de Tesorería.")
 
-        if _origen_real_usado_conn(
-            conn,
-            empresa_id=empresa_id,
-            origen_modulo=ORIGEN_TESORERIA,
-            origen_tabla=TABLA_TESORERIA_OPERACIONES,
-            origen_id=tesoreria_operacion_id,
-        ):
-            return _resultado(False, "La operación de Tesorería ya fue aplicada como integración de capital.")
+def documentacion_respaldo_listar(empresa_id: int, incluir_anulada: bool = False) -> pd.DataFrame:
+    asegurar_estructura_inicio_empresa()
+    where_estado = "" if incluir_anulada else "AND estado = 'ACTIVO'"
+    return ejecutar_query(
+        f"""
+        SELECT *
+        FROM {TABLA_DOCUMENTACION}
+        WHERE empresa_id = ?
+        {where_estado}
+        ORDER BY fecha_creacion DESC, id DESC
+        """,
+        (int(empresa_id),),
+        fetch=True,
+    )
 
-        cuenta_codigo = _texto(operacion.get("cuenta_tesoreria_codigo"))
-        cuenta_nombre = _texto(operacion.get("cuenta_tesoreria_cuenta_nombre")) or _texto(operacion.get("cuenta_tesoreria_nombre"))
-        if not cuenta_codigo or not cuenta_nombre:
-            return _resultado(False, "La cuenta de Tesorería no tiene cuenta contable vinculada al Plan de Cuentas.")
 
-        fecha_base = fecha_integracion or operacion.get("fecha_contable") or operacion.get("fecha_operacion") or date.today()
-        try:
-            fecha_norm = _normalizar_fecha(fecha_base, "fecha_integracion")
-        except ValueError as exc:
-            return _resultado(False, str(exc))
+def documentacion_respaldo_registrar(
+    empresa_id: int,
+    tipo_documento: str,
+    referencia: Optional[str] = None,
+    descripcion: Optional[str] = None,
+    archivo_nombre: Optional[str] = None,
+    archivo_ruta: Optional[str] = None,
+    obligatorio: bool = False,
+    usuario: Optional[str] = None,
+) -> Dict[str, Any]:
+    asegurar_estructura_inicio_empresa()
 
-        validacion_fecha = validar_fecha_operativa_contable(int(empresa_id), fecha_norm, permitir_periodo_cerrado=False)
-        if not validacion_fecha.get("ok"):
-            return validacion_fecha
+    tipo_limpio = _texto(tipo_documento)
+    if not tipo_limpio:
+        return _resultado(False, "Debe indicar el tipo de documentación o respaldo.")
 
-        nueva_integracion_socio = round(_numero(suscripcion.get("importe_integrado")) + importe_norm, 2)
-        nuevo_pendiente = round(_numero(suscripcion.get("importe_pendiente")) - importe_norm, 2)
-        if nuevo_pendiente < 0 and abs(nuevo_pendiente) <= TOLERANCIA:
-            nuevo_pendiente = 0.0
-
-        medio = _medio_desde_tipo_tesoreria(operacion.get("cuenta_tesoreria_tipo"))
-        referencia_final = _texto(referencia) or _texto(operacion.get("referencia_externa")) or f"Tesorería operación {tesoreria_operacion_id}"
-        observaciones_final = _texto(observaciones) or _texto(operacion.get("descripcion"))
+    conn = conectar()
+    try:
+        empresa = _obtener_empresa_conn(conn, int(empresa_id))
+        if not empresa:
+            return _resultado(False, "La empresa no existe.")
 
         cur = conn.cursor()
         cur.execute(
-            """
-            INSERT INTO capital_integraciones
-            (capital_id, suscripcion_id, empresa_id, socio_id, fecha, importe, medio_integracion,
-             cuenta_destino_codigo, cuenta_destino_nombre, referencia, observaciones,
-             origen_modulo, origen_tabla, origen_id, cuenta_tesoreria_id, tesoreria_operacion_id,
-             es_integracion_real, fecha_vinculacion, usuario_vinculacion,
-             estado, usuario_creacion)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, ?, 'PROPUESTO', ?)
+            f"""
+            INSERT INTO {TABLA_DOCUMENTACION}
+            (empresa_id, tipo_documento, referencia, descripcion, archivo_nombre, archivo_ruta,
+             obligatorio, estado, usuario_creacion)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVO', ?)
             """,
             (
-                int(capital_id),
-                int(suscripcion.get("id")),
                 int(empresa_id),
-                int(socio_id),
-                fecha_norm,
-                importe_norm,
-                medio,
-                cuenta_codigo,
-                cuenta_nombre,
-                referencia_final,
-                observaciones_final,
-                ORIGEN_TESORERIA,
-                TABLA_TESORERIA_OPERACIONES,
-                int(tesoreria_operacion_id),
-                operacion.get("cuenta_tesoreria_id"),
-                int(tesoreria_operacion_id),
-                usuario,
+                tipo_limpio,
+                _texto(referencia),
+                _texto(descripcion),
+                _texto(archivo_nombre),
+                _texto(archivo_ruta),
+                1 if obligatorio else 0,
                 usuario,
             ),
         )
-        integracion_id = int(cur.lastrowid)
-
-        cur.execute(
-            """
-            INSERT INTO capital_integraciones_origenes
-            (capital_integracion_id, capital_id, suscripcion_id, empresa_id, socio_id,
-             origen_modulo, origen_tabla, origen_id, cuenta_tesoreria_id, tesoreria_operacion_id,
-             estado, usuario_vinculacion)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVO', ?)
-            """,
-            (
-                integracion_id,
-                int(capital_id),
-                int(suscripcion.get("id")),
-                int(empresa_id),
-                int(socio_id),
-                ORIGEN_TESORERIA,
-                TABLA_TESORERIA_OPERACIONES,
-                int(tesoreria_operacion_id),
-                operacion.get("cuenta_tesoreria_id"),
-                int(tesoreria_operacion_id),
-                usuario,
-            ),
-        )
-
-        cur.execute(
-            """
-            UPDATE capital_suscripciones
-            SET importe_integrado = ?,
-                importe_pendiente = ?
-            WHERE id = ?
-            """,
-            (nueva_integracion_socio, nuevo_pendiente, int(suscripcion.get("id"))),
-        )
-        _actualizar_totales_capital_conn(conn, capital_id)
-        _registrar_evento(
-            capital_id,
-            socio_id,
-            empresa_id,
-            "INTEGRACION_REAL_TESORERIA",
-            f"Integración real por Tesorería operación {tesoreria_operacion_id} por {importe_norm:.2f}.",
-            usuario,
+        doc_id = int(cur.lastrowid)
+        _registrar_evento_conn(
             conn,
+            int(empresa_id),
+            "DOCUMENTACION_RESPALDO_REGISTRADA",
+            f"Documentación opcional registrada: {tipo_limpio}.",
+            usuario,
         )
         conn.commit()
     except Exception as exc:
         conn.rollback()
-        return _resultado(False, f"No se pudo registrar la integración real de capital: {exc}")
+        return _resultado(False, f"No se pudo registrar la documentación respaldatoria: {exc}")
     finally:
         conn.close()
 
-    asiento = None
-    if generar_asiento:
-        cuenta_socios_codigo = _texto(capital.get("cuenta_socios_integracion_codigo"))
-        cuenta_socios_nombre = _texto(capital.get("cuenta_socios_integracion_nombre")) or "Socios / Accionistas por integración"
-
-        asiento = crear_asiento_origen(
-            empresa_id=int(empresa_id),
-            fecha=fecha_norm,
-            tipo_origen="CAPITAL_SOCIAL",
-            descripcion=f"Integración real de capital - {_texto(suscripcion.get('socio_nombre')) or 'Socio'}",
-            lineas=[
-                {
-                    "cuenta_codigo": cuenta_codigo,
-                    "cuenta_nombre": cuenta_nombre,
-                    "debe": importe_norm,
-                    "haber": 0,
-                    "glosa": "Ingreso real por integración de capital",
-                },
-                {
-                    "cuenta_codigo": cuenta_socios_codigo,
-                    "cuenta_nombre": cuenta_socios_nombre,
-                    "debe": 0,
-                    "haber": importe_norm,
-                    "glosa": "Cancelación de capital pendiente de integración",
-                },
-            ],
-            ejercicio_id=capital.get("ejercicio_id"),
-            referencia=referencia_final,
-            observaciones=f"Generado desde Inicio societario PRO. Integración ID {integracion_id}. Tesorería operación {tesoreria_operacion_id}.",
-            usuario=usuario,
-            generar_propuesta=True,
-        )
-        if not asiento.get("ok"):
-            # Se revierte la integración para no dejar capital integrado sin propuesta contable.
-            anular_integracion_capital(
-                integracion_id=integracion_id,
-                motivo=f"No se pudo generar asiento propuesto: {asiento.get('mensaje')}",
-                usuario=usuario,
-                anular_asiento_vinculado=False,
-            )
-            return _resultado(
-                False,
-                f"No se pudo generar el asiento propuesto de integración: {asiento.get('mensaje')}",
-                integracion_id=integracion_id,
-            )
-
-        conn = conectar()
-        try:
-            conn.execute(
-                """
-                UPDATE capital_integraciones
-                SET asiento_origen_id = ?,
-                    asiento_propuesto_id = ?
-                WHERE id = ?
-                """,
-                (
-                    asiento.get("asiento_origen_id"),
-                    asiento.get("asiento_propuesto_id"),
-                    integracion_id,
-                ),
-            )
-            _registrar_evento(
-                capital_id,
-                socio_id,
-                empresa_id,
-                "ASIENTO_INTEGRACION_REAL_PROPUESTO",
-                f"Asiento propuesto {asiento.get('asiento_propuesto_id')} generado para integración real {integracion_id}.",
-                usuario,
-                conn,
-            )
-            conn.commit()
-        finally:
-            conn.close()
+    estado = obtener_estado_onboarding_empresa(int(empresa_id))
+    _actualizar_estado_onboarding_persistido(int(empresa_id), estado.get("estado", ESTADO_ONBOARDING_PENDIENTE))
 
     return _resultado(
         True,
-        "Integración real de capital registrada correctamente. El asiento quedó propuesto para revisión; no impactó directo en Libro Diario.",
-        integracion_id=integracion_id,
-        asiento_origen_id=asiento.get("asiento_origen_id") if asiento else None,
-        asiento_propuesto_id=asiento.get("asiento_propuesto_id") if asiento else None,
-        capital=obtener_capital_social(capital_id),
+        "Documentación respaldatoria registrada correctamente. Es opcional y no bloquea el inicio operativo básico.",
+        documentacion_id=doc_id,
+        estado=estado,
     )
 
 
-def anular_integracion_capital(
-    integracion_id: int,
+def documentacion_respaldo_anular(
+    documentacion_id: int,
     motivo: str,
     usuario: Optional[str] = None,
-    anular_asiento_vinculado: bool = True,
 ) -> Dict[str, Any]:
-    migrar_capital_social()
-
+    asegurar_estructura_inicio_empresa()
     motivo_limpio = _texto(motivo)
     if not motivo_limpio:
-        return _resultado(False, "Para anular la integración se requiere motivo.")
+        return _resultado(False, "Para anular documentación se requiere motivo.")
 
     conn = conectar()
     try:
-        integracion = _obtener_integracion_conn(conn, integracion_id)
-        if not integracion:
-            return _resultado(False, "No se encontró la integración de capital.")
-        if _texto_upper(integracion.get("estado")) == "ANULADO":
-            return _resultado(False, "La integración ya está anulada.")
-
-        asiento_propuesto_id = integracion.get("asiento_propuesto_id")
-        if asiento_propuesto_id:
-            fila_estado = conn.execute(
-                "SELECT estado FROM asientos_propuestos WHERE id = ? LIMIT 1",
-                (int(asiento_propuesto_id),),
-            ).fetchone()
-            estado_asiento = _texto_upper(fila_estado[0]) if fila_estado else ""
-            if estado_asiento == "CONTABILIZADO":
-                return _resultado(False, "No se puede anular la integración porque su asiento ya fue contabilizado. Use reverso controlado desde Bandeja.")
-
-        cur_sus = conn.execute(
-            """
-            SELECT *
-            FROM capital_suscripciones
-            WHERE id = ?
-              AND estado = 'ACTIVO'
-            LIMIT 1
-            """,
-            (int(integracion.get("suscripcion_id")) if integracion.get("suscripcion_id") else 0,),
+        cur = conn.execute(
+            f"SELECT * FROM {TABLA_DOCUMENTACION} WHERE id = ? LIMIT 1",
+            (int(documentacion_id),),
         )
-        suscripcion = cur_sus.fetchone()
-        if not suscripcion:
-            return _resultado(False, "No se encontró la suscripción activa asociada a la integración.")
-
-        columnas_sus = [col[0] for col in cur_sus.description]
-        suscripcion_dict = dict(zip(columnas_sus, suscripcion))
-
-        importe = _numero(integracion.get("importe"))
-        nuevo_integrado = round(_numero(suscripcion_dict.get("importe_integrado")) - importe, 2)
-        nuevo_pendiente = round(_numero(suscripcion_dict.get("importe_pendiente")) + importe, 2)
-        if nuevo_integrado < 0 and abs(nuevo_integrado) <= TOLERANCIA:
-            nuevo_integrado = 0.0
+        doc = _fila_a_dict(cur, cur.fetchone())
+        if not doc:
+            return _resultado(False, "No se encontró la documentación.")
+        if _texto_upper(doc.get("estado")) == "ANULADO":
+            return _resultado(False, "La documentación ya está anulada.")
 
         conn.execute(
-            """
-            UPDATE capital_integraciones
+            f"""
+            UPDATE {TABLA_DOCUMENTACION}
             SET estado = 'ANULADO',
                 usuario_anulacion = ?,
                 fecha_anulacion = CURRENT_TIMESTAMP,
                 motivo_anulacion = ?
             WHERE id = ?
             """,
-            (usuario, motivo_limpio, int(integracion_id)),
+            (usuario, motivo_limpio, int(documentacion_id)),
         )
-        conn.execute(
-            """
-            UPDATE capital_integraciones_origenes
-            SET estado = 'ANULADO',
-                usuario_anulacion = ?,
-                fecha_anulacion = CURRENT_TIMESTAMP,
-                motivo_anulacion = ?
-            WHERE capital_integracion_id = ?
-              AND estado = 'ACTIVO'
-            """,
-            (usuario, motivo_limpio, int(integracion_id)),
-        )
-        conn.execute(
-            """
-            UPDATE capital_suscripciones
-            SET importe_integrado = ?,
-                importe_pendiente = ?
-            WHERE id = ?
-            """,
-            (nuevo_integrado, nuevo_pendiente, int(integracion.get("suscripcion_id"))),
-        )
-        _actualizar_totales_capital_conn(conn, int(integracion.get("capital_id")))
-        _registrar_evento(
-            integracion.get("capital_id"),
-            integracion.get("socio_id"),
-            integracion.get("empresa_id"),
-            "ANULACION_INTEGRACION",
-            f"Integración {integracion_id} anulada. Motivo: {motivo_limpio}",
-            usuario,
+        _registrar_evento_conn(
             conn,
+            int(doc.get("empresa_id")),
+            "DOCUMENTACION_RESPALDO_ANULADA",
+            f"Documentación {documentacion_id} anulada. Motivo: {motivo_limpio}",
+            usuario,
         )
         conn.commit()
+        return _resultado(True, "Documentación anulada correctamente.", empresa_id=int(doc.get("empresa_id")))
     except Exception as exc:
         conn.rollback()
-        return _resultado(False, f"No se pudo anular la integración de capital: {exc}")
+        return _resultado(False, f"No se pudo anular la documentación: {exc}")
     finally:
         conn.close()
 
-    if anular_asiento_vinculado and integracion.get("asiento_origen_id"):
-        res_asiento = anular_asiento_origen(
-            asiento_origen_id=int(integracion.get("asiento_origen_id")),
-            motivo=f"Anulación de integración de capital {integracion_id}: {motivo_limpio}",
-            usuario=usuario,
-        )
-        if not res_asiento.get("ok"):
-            return _resultado(
-                False,
-                f"La integración fue anulada, pero no se pudo anular el asiento propuesto vinculado: {res_asiento.get('mensaje')}",
-                integracion_id=integracion_id,
-            )
 
-    return _resultado(
-        True,
-        "Integración de capital anulada correctamente. El saldo pendiente del socio fue restaurado.",
-        integracion_id=integracion_id,
-        capital=obtener_capital_social(int(integracion.get("capital_id"))),
-    )
-
-
-def obtener_resumen_capital_socios(empresa_id: int = 1, capital_id: Optional[int] = None) -> Dict[str, Any]:
-    migrar_capital_social()
-    filtros = ["empresa_id = ?", "estado <> 'ANULADO'"]
-    params: List[Any] = [int(empresa_id)]
-    if capital_id is not None:
-        filtros.append("id = ?")
-        params.append(int(capital_id))
-
-    capitales = ejecutar_query(
+def listar_eventos_inicio_empresa(empresa_id: int, limite: int = 100) -> pd.DataFrame:
+    asegurar_estructura_inicio_empresa()
+    return ejecutar_query(
         f"""
-        SELECT
-            COUNT(*) AS cantidad_capitales,
-            ROUND(COALESCE(SUM(capital_social_total), 0), 2) AS capital_social_total,
-            ROUND(COALESCE(SUM(total_suscripto), 0), 2) AS total_suscripto,
-            ROUND(COALESCE(SUM(total_integrado), 0), 2) AS total_integrado,
-            ROUND(COALESCE(SUM(total_pendiente_integracion), 0), 2) AS total_pendiente_integracion
-        FROM capital_social_empresa
-        WHERE {' AND '.join(filtros)}
+        SELECT *
+        FROM {TABLA_EVENTOS}
+        WHERE empresa_id = ?
+        ORDER BY fecha_evento DESC, id DESC
+        LIMIT ?
         """,
-        tuple(params),
+        (int(empresa_id), max(1, int(limite or 100))),
         fetch=True,
     )
-    fila_cap = _df_a_dict(capitales) or {}
-
-    socios = listar_socios_empresa(empresa_id=empresa_id, incluir_bajas=False)
-    pendientes = listar_pendientes_integracion_por_socio(empresa_id=empresa_id, capital_id=capital_id)
-
-    if pendientes.empty:
-        socios_con_pendiente = 0
-    else:
-        socios_con_pendiente = int((pendientes["importe_pendiente"].astype(float) > TOLERANCIA).sum())
-
-    return {
-        "empresa_id": int(empresa_id),
-        "capital_id": capital_id,
-        "cantidad_capitales": int(fila_cap.get("cantidad_capitales") or 0),
-        "cantidad_socios": int(len(socios)) if not socios.empty else 0,
-        "capital_social_total": _numero(fila_cap.get("capital_social_total")),
-        "total_suscripto": _numero(fila_cap.get("total_suscripto")),
-        "total_integrado": _numero(fila_cap.get("total_integrado")),
-        "total_pendiente_integracion": _numero(fila_cap.get("total_pendiente_integracion")),
-        "socios_con_pendiente": socios_con_pendiente,
-    }
 
 
-def obtener_estado_inicio_contable(empresa_id: int = 1) -> Dict[str, Any]:
-    migrar_capital_social()
-    ejercicios = ejecutar_query(
-        "SELECT COUNT(*) AS cantidad FROM ejercicios_contables WHERE empresa_id = ? AND estado <> 'ANULADO'",
-        (empresa_id,),
-        fetch=True,
-    )
-    capitales = listar_capital_social_empresa(empresa_id, incluir_anulados=False)
-    socios = listar_socios_empresa(empresa_id, incluir_bajas=False)
-    asientos_apertura = ejecutar_query(
-        """
-        SELECT COUNT(*) AS cantidad
-        FROM asientos_origen
-        WHERE empresa_id = ? AND tipo_origen = 'APERTURA' AND estado <> 'ANULADO'
-        """,
-        (empresa_id,),
-        fetch=True,
-    )
-    libro = ejecutar_query(
-        "SELECT COUNT(*) AS cantidad FROM libro_diario WHERE COALESCE(empresa_id, 1) = ?",
-        (empresa_id,),
-        fetch=True,
-    )
-    cant_ejercicios = int(ejercicios.iloc[0]["cantidad"] or 0) if not ejercicios.empty else 0
-    cant_apertura = int(asientos_apertura.iloc[0]["cantidad"] or 0) if not asientos_apertura.empty else 0
-    cant_libro = int(libro.iloc[0]["cantidad"] or 0) if not libro.empty else 0
-    resumen = obtener_resumen_capital_socios(empresa_id=empresa_id)
-    return {
-        "empresa_id": empresa_id,
-        "tiene_ejercicio": cant_ejercicios > 0,
-        "cantidad_ejercicios": cant_ejercicios,
-        "ejercicio_actual": obtener_ejercicio_actual(empresa_id),
-        "tiene_capital_social": not capitales.empty,
-        "cantidad_capitales": int(len(capitales)) if not capitales.empty else 0,
-        "tiene_socios": not socios.empty,
-        "cantidad_socios": int(len(socios)) if not socios.empty else 0,
-        "tiene_asiento_apertura": cant_apertura > 0,
-        "cantidad_asientos_apertura": cant_apertura,
-        "cantidad_movimientos_libro_diario": cant_libro,
-        "requiere_inicio_contable": cant_ejercicios == 0 or capitales.empty or cant_apertura == 0,
-        "capital_social_total": resumen.get("capital_social_total", 0),
-        "capital_total_integrado": resumen.get("total_integrado", 0),
-        "capital_pendiente_integracion": resumen.get("total_pendiente_integracion", 0),
-        "socios_con_pendiente_integracion": resumen.get("socios_con_pendiente", 0),
-    }
-
-
-def anular_capital_social(capital_id: int, motivo: str, usuario: Optional[str] = None) -> Dict[str, Any]:
-    migrar_capital_social()
-    motivo_limpio = _texto(motivo)
-    if not motivo_limpio:
-        return _resultado(False, "Para anular la configuración de capital se requiere motivo.")
-    capital = obtener_capital_social(capital_id)
-    if not capital:
-        return _resultado(False, "No se encontró la configuración de capital.")
-    if capital.get("estado") == "ANULADO":
-        return _resultado(False, "La configuración de capital ya está anulada.")
-    empresa_id = int(capital["empresa_id"])
-    conn = conectar()
-    try:
-        conn.execute(
-            """
-            UPDATE capital_social_empresa
-            SET estado = 'ANULADO', usuario_anulacion = ?, fecha_anulacion = CURRENT_TIMESTAMP,
-                motivo_anulacion = ?, fecha_actualizacion = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (usuario, motivo_limpio, capital_id),
-        )
-        conn.execute("UPDATE capital_suscripciones SET estado = 'ANULADO' WHERE capital_id = ?", (capital_id,))
-        conn.execute("UPDATE capital_integraciones SET estado = 'ANULADO' WHERE capital_id = ?", (capital_id,))
-        conn.execute(
-            """
-            UPDATE capital_integraciones_origenes
-            SET estado = 'ANULADO',
-                usuario_anulacion = ?,
-                fecha_anulacion = CURRENT_TIMESTAMP,
-                motivo_anulacion = ?
-            WHERE capital_id = ?
-              AND estado = 'ACTIVO'
-            """,
-            (usuario, motivo_limpio, capital_id),
-        )
-        _registrar_evento(capital_id, None, empresa_id, "ANULACION", f"Capital anulado. Motivo: {motivo_limpio}", usuario, conn)
-        conn.commit()
-    except Exception as exc:
-        conn.rollback()
-        return _resultado(False, f"No se pudo anular la configuración de capital: {exc}")
-    finally:
-        conn.close()
-    return _resultado(True, "Configuración de capital anulada correctamente.", capital=obtener_capital_social(capital_id))
+__all__ = [
+    "TIPO_SUJETO_NO_DEFINIDO",
+    "TIPO_SUJETO_PERSONA_HUMANA",
+    "TIPO_SUJETO_PERSONA_JURIDICA",
+    "TIPO_SUJETO_OTRO_ENTE",
+    "ESTADO_ONBOARDING_PENDIENTE",
+    "ESTADO_ONBOARDING_INCOMPLETO",
+    "ESTADO_ONBOARDING_OPERATIVA_BASE",
+    "asegurar_estructura_inicio_empresa",
+    "normalizar_tipo_sujeto",
+    "etiqueta_tipo_sujeto",
+    "opciones_tipo_sujeto",
+    "obtener_empresa_inicio",
+    "obtener_perfil_inicio_empresa",
+    "actualizar_inicio_empresa",
+    "obtener_requisitos_inicio_empresa",
+    "obtener_estado_onboarding_empresa",
+    "documentacion_respaldo_listar",
+    "documentacion_respaldo_registrar",
+    "documentacion_respaldo_anular",
+    "listar_eventos_inicio_empresa",
+]
