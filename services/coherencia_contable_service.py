@@ -354,6 +354,46 @@ def _comportamientos_desde_plan(row: dict[str, Any], col_comportamiento: str | N
     return {normalizar_codigo(parte) for parte in partes if normalizar_codigo(parte)}
 
 
+USOS_OPERATIVOS_TESORERIA_VALIDOS_POR_TIPO = {
+    "CAJA": {
+        "CAJA_GENERAL",
+        "FONDO_FIJO",
+        "RECAUDACIONES_A_DEPOSITAR",
+    },
+    "EFECTIVO": {
+        "CAJA_GENERAL",
+        "FONDO_FIJO",
+        "RECAUDACIONES_A_DEPOSITAR",
+    },
+    "BANCO": {
+        "BANCO_CUENTA_CORRIENTE",
+        "BANCO_CAJA_AHORRO",
+    },
+    "CUENTA_BANCARIA": {
+        "BANCO_CUENTA_CORRIENTE",
+        "BANCO_CAJA_AHORRO",
+    },
+    "CTA_CTE": {
+        "BANCO_CUENTA_CORRIENTE",
+    },
+    "CUENTA_CORRIENTE": {
+        "BANCO_CUENTA_CORRIENTE",
+    },
+}
+
+
+def _codigos_desde_valor_multivalor(valor: Any) -> set[str]:
+    if valor is None:
+        return set()
+    partes = str(valor).replace(";", ",").replace("|", ",").split(",")
+    return {normalizar_codigo(parte) for parte in partes if normalizar_codigo(parte)}
+
+
+def _usos_operativos_validos_para_tipo_tesoreria(tipo_cuenta: Any) -> set[str]:
+    tipo = normalizar_codigo(tipo_cuenta)
+    return set(USOS_OPERATIVOS_TESORERIA_VALIDOS_POR_TIPO.get(tipo, set()))
+
+
 def diagnosticar_plan_cuentas(
     empresa_id: int | None = None,
     conn: sqlite3.Connection | None = None,
@@ -812,8 +852,29 @@ def _mapa_comportamientos_configurados(
 
     por_cuenta: dict[str, set[str]] = defaultdict(set)
     por_comportamiento: dict[str, set[str]] = defaultdict(set)
+    usos_operativos_por_cuenta: dict[str, set[str]] = defaultdict(set)
+    catalogo_usos_operativos: dict[str, dict[str, Any]] = {}
     cuentas_plan: dict[str, dict[str, Any]] = {}
     cuentas_plan_por_nombre: dict[str, dict[str, Any]] = {}
+
+    if _table_exists(conn, "usos_operativos_contables"):
+        columnas_usos = _columns(conn, "usos_operativos_contables")
+        col_codigo_uso = _first_existing(columnas_usos, ("codigo", "uso_operativo", "codigo_uso"))
+        col_activo_uso = _first_existing(columnas_usos, ("activo", "vigente"))
+
+        if col_codigo_uso:
+            where_usos = []
+            if col_activo_uso:
+                where_usos.append(f"COALESCE({col_activo_uso}, 1) <> 0")
+
+            sql_usos = "SELECT * FROM usos_operativos_contables"
+            if where_usos:
+                sql_usos += " WHERE " + " AND ".join(where_usos)
+
+            for row in _fetch_dicts(conn, sql_usos):
+                codigo_uso = normalizar_codigo(row.get(col_codigo_uso))
+                if codigo_uso:
+                    catalogo_usos_operativos[codigo_uso] = row
 
     if _table_exists(conn, "plan_cuentas"):
         columnas_plan = _columns(conn, "plan_cuentas")
@@ -854,6 +915,77 @@ def _mapa_comportamientos_configurados(
                         por_cuenta[clave].add(comportamiento)
                     por_comportamiento[comportamiento].add(codigo)
 
+
+    if _table_exists(conn, "plan_cuentas_empresa"):
+        columnas_empresa = _columns(conn, "plan_cuentas_empresa")
+        col_empresa = _first_existing(columnas_empresa, ("empresa_id", "id_empresa"))
+        col_codigo = _first_existing(columnas_empresa, ("codigo", "codigo_cuenta", "cuenta_codigo", "cuenta"))
+        col_nombre = _first_existing(columnas_empresa, ("nombre", "nombre_cuenta", "descripcion", "detalle"))
+        col_uso = _first_existing(
+            columnas_empresa,
+            (
+                "uso_operativo_sistema",
+                "comportamiento_contable",
+                "comportamiento",
+                "tipo_operativo",
+            ),
+        )
+        col_activo = _first_existing(columnas_empresa, ("activo", "vigente"))
+        col_estado = _first_existing(columnas_empresa, ("estado", "estado_cuenta"))
+
+        if col_codigo:
+            where_empresa = []
+            params_empresa: list[Any] = []
+
+            if empresa_id is not None and col_empresa:
+                where_empresa.append(f"{col_empresa} = ?")
+                params_empresa.append(empresa_id)
+
+            if col_activo:
+                where_empresa.append(f"COALESCE({col_activo}, 1) <> 0")
+
+            if col_estado:
+                where_empresa.append(
+                    f"COALESCE({col_estado}, 'ACTIVA') NOT IN "
+                    "('ANULADO', 'ANULADA', 'INACTIVO', 'INACTIVA', 'BAJA', 'ELIMINADO', 'ELIMINADA')"
+                )
+
+            sql_empresa = "SELECT rowid AS __rowid__, * FROM plan_cuentas_empresa"
+            if where_empresa:
+                sql_empresa += " WHERE " + " AND ".join(where_empresa)
+
+            for row in _fetch_dicts(conn, sql_empresa, tuple(params_empresa)):
+                codigo = _clave_cuenta(row.get(col_codigo))
+                nombre = str(row.get(col_nombre, "") or "").strip() if col_nombre else ""
+
+                if not codigo:
+                    continue
+
+                cuenta = {
+                    "codigo": codigo,
+                    "nombre": nombre,
+                    "rowid": row.get("__rowid__"),
+                    "empresa_id": row.get(col_empresa) if col_empresa else empresa_id,
+                    "fuente": "plan_cuentas_empresa",
+                    "uso_operativo_sistema": row.get(col_uso) if col_uso else None,
+                }
+
+                for clave in _claves_busqueda_cuenta(codigo):
+                    cuentas_plan[clave] = cuenta
+
+                if nombre:
+                    cuentas_plan_por_nombre[normalizar_codigo(nombre)] = cuenta
+
+                for uso_operativo in _codigos_desde_valor_multivalor(row.get(col_uso) if col_uso else None):
+                    for clave in _claves_busqueda_cuenta(codigo):
+                        usos_operativos_por_cuenta[clave].add(uso_operativo)
+
+                for comportamiento in _comportamientos_desde_plan(row, col_uso):
+                    if comportamiento in COMPORTAMIENTOS_CONTABLES:
+                        for clave in _claves_busqueda_cuenta(codigo):
+                            por_cuenta[clave].add(comportamiento)
+                        por_comportamiento[comportamiento].add(codigo)
+
     # Compatibilidad: solo se consulta la tabla histórica si el Plan de Cuentas todavía no tiene comportamientos.
     # La fuente principal de verdad desde Plan de Cuentas PRO es plan_cuentas.comportamiento_contable.
     if not por_cuenta and _table_exists(conn, "contabilidad_cuentas_comportamiento"):
@@ -876,6 +1008,8 @@ def _mapa_comportamientos_configurados(
     return {
         "por_cuenta": por_cuenta,
         "por_comportamiento": por_comportamiento,
+        "usos_operativos_por_cuenta": usos_operativos_por_cuenta,
+        "catalogo_usos_operativos": catalogo_usos_operativos,
         "cuentas_plan": cuentas_plan,
         "cuentas_plan_por_nombre": cuentas_plan_por_nombre,
     }
@@ -903,6 +1037,52 @@ def _cuenta_tiene_comportamiento(
 ) -> bool:
     comportamiento_normalizado = normalizar_codigo(comportamiento)
     return comportamiento_normalizado in _comportamientos_de_cuenta(mapa, codigo_cuenta, nombre_cuenta)
+
+
+def _usos_operativos_de_cuenta(mapa: dict[str, Any], codigo_cuenta: Any, nombre_cuenta: Any = None) -> set[str]:
+    usos: set[str] = set()
+    por_cuenta: dict[str, set[str]] = mapa.get("usos_operativos_por_cuenta", {})
+
+    for clave in _claves_busqueda_cuenta(codigo_cuenta):
+        usos.update(por_cuenta.get(clave, set()))
+
+    if not usos and nombre_cuenta:
+        cuenta = mapa.get("cuentas_plan_por_nombre", {}).get(normalizar_codigo(nombre_cuenta))
+        if cuenta:
+            for clave in _claves_busqueda_cuenta(cuenta.get("codigo")):
+                usos.update(por_cuenta.get(clave, set()))
+
+    return usos
+
+
+def _cuenta_tesoreria_tiene_uso_valido(
+    mapa: dict[str, Any],
+    codigo_cuenta: Any,
+    tipo_cuenta_tesoreria: Any,
+    nombre_cuenta: Any = None,
+) -> bool:
+    """
+    Valida Tesorería contra la fuente nueva: plan_cuentas_empresa.uso_operativo_sistema.
+
+    La validación ya no depende de traducir usos PRO a comportamientos históricos.
+    Si una base antigua todavía trabaja con comportamiento_contable, se conserva
+    una compatibilidad explícita y secundaria para no romper datos anteriores.
+    """
+    tipo = normalizar_codigo(tipo_cuenta_tesoreria)
+    usos_validos = _usos_operativos_validos_para_tipo_tesoreria(tipo)
+
+    if usos_validos:
+        usos_cuenta = _usos_operativos_de_cuenta(mapa, codigo_cuenta, nombre_cuenta)
+        if usos_cuenta.intersection(usos_validos):
+            return True
+
+    if tipo in {"CAJA", "EFECTIVO"}:
+        return _cuenta_tiene_comportamiento(mapa, codigo_cuenta, "CAJA", nombre_cuenta)
+
+    if tipo in {"BANCO", "CUENTA_BANCARIA", "CTA_CTE", "CUENTA_CORRIENTE"}:
+        return _cuenta_tiene_comportamiento(mapa, codigo_cuenta, "BANCO", nombre_cuenta)
+
+    return bool(_usos_operativos_de_cuenta(mapa, codigo_cuenta, nombre_cuenta))
 
 
 def _cuenta_existe_en_plan(mapa: dict[str, Any], codigo_cuenta: Any) -> bool:
@@ -940,7 +1120,7 @@ def diagnosticar_comportamientos_configurados(
         aplicar_migracion_nucleo(conn)
         mapa = _mapa_comportamientos_configurados(conn, empresa_id=empresa_id)
 
-        if not mapa.get("por_cuenta"):
+        if not mapa.get("por_cuenta") and not mapa.get("usos_operativos_por_cuenta"):
             resultados.append(
                 diagnostico(
                     "Uso operativo del Plan de Cuentas",
@@ -950,7 +1130,6 @@ def diagnosticar_comportamientos_configurados(
                     "Configure al menos Caja, Banco, IVA crédito, IVA débito, Capital y cuentas vinculadas para que el diagnóstico pueda validar operaciones reales.",
                 )
             )
-            return [item.as_dict() for item in resultados]
 
         if _table_exists(conn, "contabilidad_cuentas_comportamiento"):
             columnas_map = _columns(conn, "contabilidad_cuentas_comportamiento")
@@ -1020,12 +1199,12 @@ def diagnosticar_comportamientos_configurados(
                     if tipo in {"CAJA", "EFECTIVO"}:
                         if not codigo:
                             cuentas_sin_codigo.append(f"Caja {nombre_operativo or row.get('__rowid__')}")
-                        elif not _cuenta_tiene_comportamiento(mapa, codigo, "CAJA", nombre_contable):
+                        elif not _cuenta_tesoreria_tiene_uso_valido(mapa, codigo, tipo, nombre_contable or nombre_operativo):
                             cajas_sin_mapeo.append(_descripcion_cuenta(codigo, nombre_contable or nombre_operativo))
                     if tipo in {"BANCO", "CUENTA_BANCARIA", "CTA_CTE", "CUENTA_CORRIENTE"}:
                         if not codigo:
                             cuentas_sin_codigo.append(f"Banco {nombre_operativo or row.get('__rowid__')}")
-                        elif not _cuenta_tiene_comportamiento(mapa, codigo, "BANCO", nombre_contable):
+                        elif not _cuenta_tesoreria_tiene_uso_valido(mapa, codigo, tipo, nombre_contable or nombre_operativo):
                             bancos_sin_mapeo.append(_descripcion_cuenta(codigo, nombre_contable or nombre_operativo))
                 if cuentas_sin_codigo:
                     resultados.append(
@@ -1043,7 +1222,7 @@ def diagnosticar_comportamientos_configurados(
                             "Tesorería",
                             SEVERIDAD_ADVERTENCIA,
                             "TESORERIA_CAJAS_SIN_COMPORTAMIENTO_CAJA",
-                            "Hay cajas operativas sin uso operativo Caja",
+                            "Hay cajas operativas sin uso operativo de Tesorería compatible",
                             "Cuentas afectadas: " + "; ".join(cajas_sin_mapeo[:15]) + ".",
                         )
                     )
@@ -1053,7 +1232,7 @@ def diagnosticar_comportamientos_configurados(
                             "Tesorería",
                             SEVERIDAD_ADVERTENCIA,
                             "TESORERIA_BANCOS_SIN_COMPORTAMIENTO_BANCO",
-                            "Hay bancos operativos sin uso operativo Banco",
+                            "Hay bancos operativos sin uso operativo de Tesorería compatible",
                             "Cuentas afectadas: " + "; ".join(bancos_sin_mapeo[:15]) + ".",
                         )
                     )

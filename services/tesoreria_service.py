@@ -293,6 +293,193 @@ def _obtener_operacion_dict(cur, empresa_id, operacion_id):
     return dict(zip(columnas, fila))
 
 
+def _tabla_existe(cur, tabla):
+    cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        (tabla,),
+    )
+    return cur.fetchone() is not None
+
+
+def _columnas_tabla(cur, tabla):
+    if not _tabla_existe(cur, tabla):
+        return set()
+
+    cur.execute(f"PRAGMA table_info({tabla})")
+    return {fila[1] for fila in cur.fetchall()}
+
+
+def _fila_a_dict(cur, fila):
+    if fila is None:
+        return None
+
+    columnas = [col[0] for col in cur.description]
+    return dict(zip(columnas, fila))
+
+
+def _valor_activo(valor, default=True):
+    if valor is None:
+        return default
+
+    if isinstance(valor, bool):
+        return valor
+
+    if isinstance(valor, (int, float)):
+        return bool(valor)
+
+    texto = _texto_upper(valor)
+
+    if texto in {"0", "NO", "N", "FALSE", "FALSO", "INACTIVO", "INACTIVA", "BAJA", "ANULADO", "ANULADA", "ELIMINADO", "ELIMINADA"}:
+        return False
+
+    if texto in {"1", "SI", "SÍ", "S", "TRUE", "VERDADERO", "ACTIVO", "ACTIVA", "VIGENTE", "ALTA"}:
+        return True
+
+    return default
+
+
+def _valor_imputable(valor, default=True):
+    if valor is None:
+        return default
+
+    if isinstance(valor, bool):
+        return valor
+
+    if isinstance(valor, (int, float)):
+        return int(valor) != 0
+
+    texto = _texto_upper(valor)
+
+    if texto in {"S", "SI", "SÍ", "1", "TRUE", "VERDADERO", "IMPUTABLE"}:
+        return True
+
+    if texto in {"N", "NO", "0", "FALSE", "FALSO", "NO_IMPUTABLE", "AGRUPADORA"}:
+        return False
+
+    return default
+
+
+def _normalizar_uso_operativo(valor):
+    texto = _texto_upper(valor)
+    return texto.replace(" ", "_").replace("-", "_")
+
+
+def _usos_esperados_tesoreria(tipo_cuenta):
+    tipo = normalizar_tipo_cuenta(tipo_cuenta)
+
+    if tipo == "CAJA":
+        return {"CAJA", "CAJA_GENERAL", "FONDO_FIJO", "RECAUDACIONES_A_DEPOSITAR"}
+
+    if tipo == "BANCO":
+        return {"BANCO", "BANCO_CUENTA_CORRIENTE", "BANCO_CAJA_AHORRO"}
+
+    if tipo == "BILLETERA":
+        return {"BILLETERA", "BILLETERA_VIRTUAL"}
+
+    if tipo == "TARJETA":
+        return {"TARJETA", "TARJETA_COBROS", "TARJETA_PUENTE"}
+
+    if tipo == "VALORES":
+        return {"VALORES", "VALORES_A_DEPOSITAR", "CHEQUES", "ECHEQ"}
+
+    return set()
+
+
+def _obtener_cuenta_tesoreria_dict(cur, empresa_id, cuenta_tesoreria_id):
+    cur.execute(
+        """
+        SELECT *
+        FROM tesoreria_cuentas
+        WHERE empresa_id = ?
+          AND id = ?
+        """,
+        (int(empresa_id or 1), int(cuenta_tesoreria_id)),
+    )
+
+    return _fila_a_dict(cur, cur.fetchone())
+
+
+def _obtener_cuenta_plan_empresa_dict(
+    cur,
+    empresa_id,
+    cuenta_empresa_id=None,
+    cuenta_codigo="",
+):
+    if not _tabla_existe(cur, "plan_cuentas_empresa"):
+        return None
+
+    columnas = _columnas_tabla(cur, "plan_cuentas_empresa")
+
+    where = []
+    params = []
+
+    if "empresa_id" in columnas:
+        where.append("empresa_id = ?")
+        params.append(int(empresa_id or 1))
+
+    if cuenta_empresa_id is not None:
+        where.append("id = ?")
+        params.append(int(cuenta_empresa_id))
+    else:
+        codigo = _texto(cuenta_codigo)
+        if not codigo:
+            return None
+        where.append("codigo = ?")
+        params.append(codigo)
+
+    sql = "SELECT * FROM plan_cuentas_empresa"
+
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+
+    sql += " LIMIT 1"
+
+    cur.execute(sql, tuple(params))
+    return _fila_a_dict(cur, cur.fetchone())
+
+
+def _validar_cuenta_plan_para_tesoreria(cuenta_plan, tipo_cuenta):
+    if not cuenta_plan:
+        return {
+            "ok": False,
+            "mensaje": "No se encontró la cuenta contable en el Plan de Cuentas empresa.",
+            "advertencias": [],
+        }
+
+    advertencias = []
+
+    estado = _texto_upper(cuenta_plan.get("estado") or "ACTIVA")
+    if estado in {"ANULADO", "ANULADA", "INACTIVO", "INACTIVA", "BAJA", "ELIMINADO", "ELIMINADA"}:
+        return {
+            "ok": False,
+            "mensaje": "La cuenta contable seleccionada no está activa en el Plan de Cuentas empresa.",
+            "advertencias": [],
+        }
+
+    if not _valor_imputable(cuenta_plan.get("imputable"), default=True):
+        return {
+            "ok": False,
+            "mensaje": "La cuenta contable seleccionada no es imputable. Tesorería debe vincularse a una cuenta imputable.",
+            "advertencias": [],
+        }
+
+    uso = _normalizar_uso_operativo(cuenta_plan.get("uso_operativo_sistema"))
+    usos_esperados = _usos_esperados_tesoreria(tipo_cuenta)
+
+    if uso and usos_esperados and uso not in usos_esperados:
+        advertencias.append(
+            "La cuenta elegida está activa e imputable, pero su uso operativo no coincide exactamente "
+            f"con el tipo de cuenta de Tesorería ({normalizar_tipo_cuenta(tipo_cuenta)}). "
+            "Revise si corresponde desde el Plan de Cuentas."
+        )
+
+    return {
+        "ok": True,
+        "mensaje": "Cuenta contable válida para vincular Tesorería.",
+        "advertencias": advertencias,
+    }
+
+
 # ======================================================
 # CUENTAS Y MEDIOS DE PAGO
 # ======================================================
@@ -434,6 +621,272 @@ def listar_cuentas_tesoreria(empresa_id=1, incluir_inactivas=False):
         (empresa_id,),
         fetch=True,
     )
+
+
+def obtener_cuenta_tesoreria(cuenta_tesoreria_id, empresa_id=1):
+    inicializar_tesoreria()
+
+    empresa_id = int(empresa_id or 1)
+    cuenta_tesoreria_id = int(cuenta_tesoreria_id)
+
+    conn = conectar()
+    cur = conn.cursor()
+
+    try:
+        return _obtener_cuenta_tesoreria_dict(cur, empresa_id, cuenta_tesoreria_id)
+
+    finally:
+        conn.close()
+
+
+def listar_cuentas_tesoreria_sin_cuenta_contable(empresa_id=1):
+    inicializar_tesoreria()
+
+    empresa_id = int(empresa_id or 1)
+
+    return ejecutar_query(
+        """
+        SELECT *
+        FROM tesoreria_cuentas
+        WHERE empresa_id = ?
+          AND activo = 1
+          AND COALESCE(TRIM(cuenta_contable_codigo), '') = ''
+        ORDER BY tipo_cuenta, nombre
+        """,
+        (empresa_id,),
+        fetch=True,
+    )
+
+
+def listar_cuentas_plan_empresa_para_tesoreria(
+    empresa_id=1,
+    tipo_cuenta=None,
+    solo_imputables=True,
+    solo_activas=True,
+):
+    empresa_id = int(empresa_id or 1)
+
+    conn = conectar()
+    cur = conn.cursor()
+
+    try:
+        if not _tabla_existe(cur, "plan_cuentas_empresa"):
+            return pd.DataFrame()
+
+        columnas = _columnas_tabla(cur, "plan_cuentas_empresa")
+
+        requeridas = {"id", "codigo", "nombre"}
+        if not requeridas.issubset(columnas):
+            return pd.DataFrame()
+
+        where = []
+        params = []
+
+        if "empresa_id" in columnas:
+            where.append("empresa_id = ?")
+            params.append(empresa_id)
+
+        if solo_activas and "estado" in columnas:
+            where.append("COALESCE(estado, 'ACTIVA') NOT IN ('ANULADO', 'ANULADA', 'INACTIVO', 'INACTIVA', 'BAJA', 'ELIMINADO', 'ELIMINADA')")
+
+        if solo_imputables and "imputable" in columnas:
+            where.append("COALESCE(imputable, 1) = 1")
+
+        if tipo_cuenta:
+            tipo = normalizar_tipo_cuenta(tipo_cuenta)
+            usos = sorted(_usos_esperados_tesoreria(tipo))
+            palabras = {
+                "CAJA": ["CAJA", "FONDO FIJO", "RECAUDACIONES"],
+                "BANCO": ["BANCO", "CUENTA CORRIENTE", "CAJA DE AHORRO"],
+                "BILLETERA": ["BILLETERA", "MERCADO PAGO", "WALLET"],
+                "TARJETA": ["TARJETA"],
+                "VALORES": ["VALORES", "CHEQUE", "ECHEQ", "DOCUMENTOS"],
+                "OTRO": [],
+            }.get(tipo, [])
+
+            filtros_tipo = []
+
+            if "uso_operativo_sistema" in columnas and usos:
+                placeholders = ", ".join("?" for _ in usos)
+                filtros_tipo.append(f"UPPER(COALESCE(uso_operativo_sistema, '')) IN ({placeholders})")
+                params.extend(usos)
+
+            for palabra in palabras:
+                filtros_tipo.append("UPPER(COALESCE(nombre, '')) LIKE ?")
+                params.append(f"%{palabra}%")
+
+            if filtros_tipo:
+                where.append("(" + " OR ".join(filtros_tipo) + ")")
+
+        columnas_select = [
+            "id",
+            "codigo",
+            "nombre",
+        ]
+
+        for columna in [
+            "imputable",
+            "estado",
+            "cuenta_maestro_id",
+            "uso_operativo_sistema",
+            "es_cuenta_modelo",
+            "es_cuenta_especifica_empresa",
+            "banco_nombre",
+            "numero_cuenta",
+            "moneda",
+            "alias",
+            "cbu",
+        ]:
+            if columna in columnas:
+                columnas_select.append(columna)
+
+        sql = "SELECT " + ", ".join(columnas_select) + " FROM plan_cuentas_empresa"
+
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+
+        sql += " ORDER BY codigo, nombre"
+
+        return pd.read_sql_query(sql, conn, params=tuple(params))
+
+    finally:
+        conn.close()
+
+
+def vincular_cuenta_tesoreria_a_plan_empresa(
+    cuenta_tesoreria_id,
+    empresa_id=1,
+    cuenta_empresa_id=None,
+    cuenta_codigo="",
+    usuario_id=None,
+    motivo="",
+):
+    """
+    Vincula una cuenta operativa de Tesorería con una cuenta imputable del
+    Plan de Cuentas empresa.
+
+    Esta función no crea asientos, no toca movimientos y no modifica módulos
+    operativos. Solo completa la relación contable de la cuenta operativa para
+    que Cobranzas, Pagos, Caja, Banco y Conciliación usen una cuenta real del
+    Plan Maestro FF / Plan empresa.
+    """
+
+    inicializar_tesoreria()
+
+    empresa_id = int(empresa_id or 1)
+    cuenta_tesoreria_id = int(cuenta_tesoreria_id)
+    motivo = _texto(motivo) or "Vinculación de cuenta de Tesorería al Plan de Cuentas empresa."
+
+    conn = conectar()
+    cur = conn.cursor()
+
+    try:
+        cuenta_tesoreria = _obtener_cuenta_tesoreria_dict(cur, empresa_id, cuenta_tesoreria_id)
+
+        if cuenta_tesoreria is None:
+            return {
+                "ok": False,
+                "mensaje": "No se encontró la cuenta de Tesorería.",
+            }
+
+        if not _valor_activo(cuenta_tesoreria.get("activo"), default=True):
+            return {
+                "ok": False,
+                "mensaje": "No se puede vincular una cuenta de Tesorería inactiva.",
+            }
+
+        cuenta_plan = _obtener_cuenta_plan_empresa_dict(
+            cur,
+            empresa_id=empresa_id,
+            cuenta_empresa_id=cuenta_empresa_id,
+            cuenta_codigo=cuenta_codigo,
+        )
+
+        validacion = _validar_cuenta_plan_para_tesoreria(
+            cuenta_plan,
+            cuenta_tesoreria.get("tipo_cuenta"),
+        )
+
+        if not validacion["ok"]:
+            return {
+                "ok": False,
+                "mensaje": validacion["mensaje"],
+            }
+
+        codigo = _texto(cuenta_plan.get("codigo"))
+        nombre = _texto(cuenta_plan.get("nombre"))
+
+        if not codigo or not nombre:
+            return {
+                "ok": False,
+                "mensaje": "La cuenta del Plan de Cuentas empresa debe tener código y nombre.",
+            }
+
+        if (
+            _texto(cuenta_tesoreria.get("cuenta_contable_codigo")) == codigo
+            and _texto(cuenta_tesoreria.get("cuenta_contable_nombre")) == nombre
+        ):
+            return {
+                "ok": True,
+                "actualizada": False,
+                "cuenta_tesoreria_id": cuenta_tesoreria_id,
+                "cuenta_contable_codigo": codigo,
+                "cuenta_contable_nombre": nombre,
+                "advertencias": validacion.get("advertencias", []),
+                "mensaje": "La cuenta de Tesorería ya estaba vinculada a esa cuenta contable.",
+            }
+
+        cur.execute(
+            """
+            UPDATE tesoreria_cuentas
+            SET cuenta_contable_codigo = ?,
+                cuenta_contable_nombre = ?,
+                fecha_actualizacion = CURRENT_TIMESTAMP
+            WHERE empresa_id = ?
+              AND id = ?
+            """,
+            (
+                codigo,
+                nombre,
+                empresa_id,
+                cuenta_tesoreria_id,
+            ),
+        )
+
+        cuenta_actualizada = dict(cuenta_tesoreria)
+        cuenta_actualizada["cuenta_contable_codigo"] = codigo
+        cuenta_actualizada["cuenta_contable_nombre"] = nombre
+
+        _registrar_auditoria(
+            cur,
+            empresa_id=empresa_id,
+            usuario_id=usuario_id,
+            accion="VINCULAR_CUENTA_CONTABLE",
+            entidad="tesoreria_cuentas",
+            entidad_id=cuenta_tesoreria_id,
+            valor_anterior=cuenta_tesoreria,
+            valor_nuevo=cuenta_actualizada,
+            motivo=motivo,
+        )
+
+        conn.commit()
+
+        return {
+            "ok": True,
+            "actualizada": True,
+            "cuenta_tesoreria_id": cuenta_tesoreria_id,
+            "cuenta_contable_codigo": codigo,
+            "cuenta_contable_nombre": nombre,
+            "advertencias": validacion.get("advertencias", []),
+            "mensaje": "Cuenta de Tesorería vinculada al Plan de Cuentas empresa.",
+        }
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
 
 
 def asegurar_medios_pago_basicos(empresa_id=1):
