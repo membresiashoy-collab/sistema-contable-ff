@@ -17,7 +17,7 @@ from services.coherencia_contable_service import (
 
 
 # ======================================================
-# CONTABILIDAD PRO - DIAGNÓSTICO DE COHERENCIA CONTABLE
+# CONTABILIDAD PRO - CONTROL DE CONSISTENCIA CONTABLE
 # ======================================================
 
 
@@ -84,7 +84,7 @@ def _vista_diagnosticos(df: pd.DataFrame) -> pd.DataFrame:
             "area": "Área",
             "severidad": "Severidad",
             "codigo": "Código",
-            "titulo": "Diagnóstico",
+            "titulo": "Alerta / control",
             "detalle": "Detalle",
             "referencia_tipo": "Referencia",
             "referencia_id": "ID ref.",
@@ -115,16 +115,16 @@ def _mostrar_metricas_resumen(resumen: dict[str, int]) -> None:
     c5.metric("Total", resumen.get("TOTAL", 0))
 
     if resumen.get("ERROR", 0) > 0:
-        st.error("Hay incoherencias críticas para revisar antes de cerrar etapas contables o automatizar nuevos pases.")
+        st.error("Hay controles críticos para revisar antes de cerrar etapas contables o automatizar nuevos pases.")
     elif resumen.get("ADVERTENCIA", 0) > 0:
         st.warning("No hay errores críticos, pero existen advertencias que conviene revisar.")
     else:
-        st.success("No se detectaron incoherencias críticas en el diagnóstico actual.")
+        st.success("No se detectaron controles críticos en la revisión actual.")
 
 
 def _mostrar_tabla_diagnosticos(df: pd.DataFrame) -> None:
     if df.empty:
-        st.info("No hay diagnósticos para mostrar con los filtros actuales.")
+        st.info("No hay alertas ni controles para mostrar con los filtros actuales.")
         return
 
     vista = _vista_diagnosticos(df)
@@ -139,7 +139,7 @@ def _mostrar_detalle_por_area(df: pd.DataFrame) -> None:
         bloque = df[df["area"] == area].copy()
         errores = int((bloque["severidad"] == "ERROR").sum())
         advertencias = int((bloque["severidad"] == "ADVERTENCIA").sum())
-        etiqueta = f"{area} · {len(bloque)} diagnóstico(s)"
+        etiqueta = f"{area} · {len(bloque)} control(es)"
         if errores:
             etiqueta += f" · {errores} error(es)"
         elif advertencias:
@@ -166,7 +166,7 @@ def _mostrar_detalle_por_area(df: pd.DataFrame) -> None:
 def _mostrar_comportamientos_contables() -> None:
     comportamientos = pd.DataFrame(listar_comportamientos_contables())
     if comportamientos.empty:
-        st.info("No hay comportamientos contables configurados.")
+        st.info("No hay usos operativos configurados.")
         return
 
     vista = comportamientos.rename(
@@ -183,7 +183,7 @@ def _mostrar_comportamientos_contables() -> None:
 def _mostrar_origenes_economicos() -> None:
     origenes = pd.DataFrame(listar_origenes_economicos())
     if origenes.empty:
-        st.info("No hay orígenes económicos configurados.")
+        st.info("No hay tipos de origen operativo configurados.")
         return
 
     vista = origenes.rename(
@@ -203,16 +203,16 @@ def _descargar_excel_diagnostico(df: pd.DataFrame) -> None:
 
     excel = exportar_excel(
         {
-            "Diagnostico": _vista_diagnosticos(df),
-            "Comportamientos": comportamientos,
-            "Origenes economicos": origenes,
+            "Alertas y controles": _vista_diagnosticos(df),
+            "Usos operativos": comportamientos,
+            "Origenes": origenes,
         }
     )
 
     st.download_button(
-        "Descargar diagnóstico Excel",
+        "Descargar control de consistencia Excel",
         data=excel,
-        file_name="diagnostico_coherencia_contable.xlsx",
+        file_name="control_consistencia_contable.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
@@ -224,17 +224,17 @@ def mostrar_diagnostico_coherencia_contable_ui(
     key_prefix: str = "coherencia_contable",
 ) -> None:
     """
-    Vista operativa de diagnóstico.
+    Vista operativa de control.
 
     Esta pantalla es deliberadamente de solo lectura: no corrige ni contabiliza.
-    Sirve para detectar incoherencias antes de avanzar con automatizaciones
+    Sirve para detectar alertas antes de avanzar con automatizaciones
     de Banco, Caja, Capital, Sueldos u otros módulos.
     """
 
-    st.subheader("🧩 Diagnóstico de coherencia contable")
+    st.subheader("🧩 Control de consistencia contable")
     st.caption(
         "Control central de consistencia. Esta vista no modifica asientos ni datos operativos; "
-        "solo diagnostica ejercicios, plan de cuentas, inicio contable/capital y Libro Diario."
+        "revisa ejercicios, plan de cuentas, inicio contable/capital y Libro Diario."
     )
 
     aplicar_migracion_nucleo()
@@ -242,14 +242,14 @@ def mostrar_diagnostico_coherencia_contable_ui(
     col1, col2 = st.columns([2, 1])
     with col1:
         guardar_historial = st.checkbox(
-            "Guardar esta corrida en historial de diagnósticos",
+            "Guardar este control en historial",
             value=False,
             key=f"{key_prefix}_guardar_historial",
-            help="Guarda el resultado en contabilidad_diagnosticos_coherencia para auditoría interna.",
+            help="Guarda el resultado del control en contabilidad_diagnosticos_coherencia para auditoría interna.",
         )
     with col2:
         ejecutar = st.button(
-            "Actualizar diagnóstico",
+            "Actualizar control",
             type="primary",
             use_container_width=True,
             key=f"{key_prefix}_actualizar",
@@ -261,9 +261,9 @@ def mostrar_diagnostico_coherencia_contable_ui(
             guardar=guardar_historial,
         )
         if guardar_historial:
-            st.success("Diagnóstico actualizado y guardado en historial.")
+            st.success("Control actualizado y guardado en historial.")
         else:
-            st.success("Diagnóstico actualizado.")
+            st.success("Control actualizado.")
 
     if f"{key_prefix}_diagnosticos" not in st.session_state:
         st.session_state[f"{key_prefix}_diagnosticos"] = diagnosticar_nucleo_coherencia(
@@ -278,7 +278,7 @@ def mostrar_diagnostico_coherencia_contable_ui(
     _mostrar_metricas_resumen(resumen)
 
     st.divider()
-    st.markdown("### Diagnósticos detectados")
+    st.markdown("### Alertas y controles detectados")
 
     opciones_severidad = ["ERROR", "ADVERTENCIA", "INFO", "OK"]
     seleccion_severidad = st.multiselect(
@@ -304,15 +304,26 @@ def mostrar_diagnostico_coherencia_contable_ui(
         _mostrar_detalle_por_area(filtrado)
 
     st.divider()
-    st.markdown("### Reglas centrales disponibles")
+    with st.expander("Catálogos técnicos usados por el control", expanded=False):
+        st.caption(
+            "Estos catálogos son referencias internas del sistema. No son una pantalla de carga: "
+            "las correcciones deben hacerse desde Configuración → Plan de Cuentas → Avanzado "
+            "o desde el módulo dueño del dato."
+        )
 
-    tab1, tab2 = st.tabs(["Comportamientos contables", "Orígenes económicos"])
-    with tab1:
-        st.caption("Clasificaciones comunes que más adelante permitirán validar Caja, Banco, Capital, Sueldos e IVA sin duplicar reglas.")
-        _mostrar_comportamientos_contables()
-    with tab2:
-        st.caption("Tipos de hechos económicos que evitan confundir cobros, aportes, préstamos, pagos fiscales y transferencias internas.")
-        _mostrar_origenes_economicos()
+        tab1, tab2 = st.tabs(["Usos operativos del sistema", "Tipos de origen operativo"])
+        with tab1:
+            st.caption(
+                "Clasificaciones técnicas usadas para validar Caja, Banco, Capital, Sueldos e IVA "
+                "sin duplicar reglas contables en cada módulo."
+            )
+            _mostrar_comportamientos_contables()
+        with tab2:
+            st.caption(
+                "Tipos de hechos económicos usados para distinguir cobros, aportes, préstamos, "
+                "pagos fiscales y transferencias internas."
+            )
+            _mostrar_origenes_economicos()
 
     st.divider()
     _descargar_excel_diagnostico(filtrado)
