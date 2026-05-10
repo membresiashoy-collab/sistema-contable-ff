@@ -83,6 +83,7 @@ def _crear_plan_actual_minimo(conn):
         ("2.1.02", "ANTICIPOS DE CLIENTES", 1, "CLIENTES", 0, 1, "VENTAS", "S", "N", "P", "2.1", 3, 330),
         ("2.2.01", "IVA DEBITO FISCAL", 1, "IVA_DEBITO", 0, 1, "IVA", "S", "N", "P", "2.2", 3, 340),
         ("2.2.02", "IVA A PAGAR", 1, "IVA_DEBITO", 0, 1, "IVA", "S", "N", "P", "2.2", 3, 350),
+        ("2.3.02", "CARGAS SOCIALES A PAGAR", 1, "CARGAS_SOCIALES_A_PAGAR", 0, 1, "SUELDOS", "S", "N", "P", "2.3", 3, 410),
         ("6.1.15", "IMPUESTOS, TASAS Y CONTRIBUCIONES", 1, "CARGAS_SOCIALES_GASTO", 0, 1, "COMPRAS", "S", "N", "R", "6.1", 3, 850),
         ("6.1.18", "CARGAS SOCIALES", 1, "CARGAS_SOCIALES_GASTO", 0, 1, "SUELDOS", "S", "N", "R", "6.1", 3, 880),
         ("3.1.01", "CAPITAL SOCIAL", 1, "CAPITAL_SOCIAL", 0, 1, "CONTABILIDAD", "S", "N", "PN", "3.1", 3, 500),
@@ -185,6 +186,7 @@ def test_migrar_plan_actual_a_plan_empresa_sin_borrar_plan_viejo():
     anticipo_proveedor = next(item for item in plan_empresa if item["codigo"] == "1.6.01")
     anticipo_cliente = next(item for item in plan_empresa if item["codigo"] == "2.1.02")
     iva_pagar = next(item for item in plan_empresa if item["codigo"] == "2.2.02")
+    cargas_a_pagar = next(item for item in plan_empresa if item["codigo"] == "2.3.02")
     impuestos = next(item for item in plan_empresa if item["codigo"] == "6.1.15")
     cargas = next(item for item in plan_empresa if item["codigo"] == "6.1.18")
 
@@ -195,6 +197,7 @@ def test_migrar_plan_actual_a_plan_empresa_sin_borrar_plan_viejo():
     assert anticipo_proveedor["uso_operativo_sistema"] == "ANTICIPOS_PROVEEDORES"
     assert anticipo_cliente["uso_operativo_sistema"] == "ANTICIPOS_CLIENTES"
     assert iva_pagar["uso_operativo_sistema"] == "IVA_SALDO_A_PAGAR"
+    assert cargas_a_pagar["uso_operativo_sistema"] == "CARGAS_SOCIALES_A_PAGAR"
     assert impuestos["uso_operativo_sistema"] == "IMPUESTOS_TASAS_CONTRIBUCIONES"
     assert cargas["uso_operativo_sistema"] == "CARGAS_SOCIALES_GASTO"
 
@@ -357,7 +360,21 @@ def test_migracion_logica_es_idempotente_y_no_duplica_configuraciones():
     assert "ANTICIPOS_CLIENTES" in usos_mapeados
     assert "ANTICIPOS_PROVEEDORES" in usos_mapeados
     assert "IVA_SALDO_A_PAGAR" in usos_mapeados
+    assert "CARGAS_SOCIALES_A_PAGAR" in usos_mapeados
     assert "IMPUESTOS_TASAS_CONTRIBUCIONES" in usos_mapeados
+
+    duplicados = conn.execute(
+        """
+        SELECT u.codigo, COUNT(*) AS cantidad
+        FROM mapeos_contables_empresa m
+        JOIN usos_operativos_contables u ON u.id = m.uso_operativo_id
+        WHERE m.empresa_id = 1
+          AND m.estado = 'ACTIVO'
+        GROUP BY u.codigo
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    assert [dict(row) for row in duplicados] == []
 
 
 
