@@ -10,13 +10,17 @@ def test_uso_operativo_queda_como_tablero_no_fuente_de_verdad():
     assert "Uso operativo" in contenido
 
 
-def test_configuracion_integra_plan_cuentas_pro():
+
+def test_configuracion_integra_plan_cuentas_unificado():
     contenido = Path("modulos/configuracion.py").read_text(encoding="utf-8")
 
-    assert "Plan de Cuentas PRO" in contenido
-    assert "comportamiento_contable" in contenido
-    assert "permite_imputacion_operativa" in contenido
-    assert "requiere_auxiliar" in contenido
+    assert "Plan de Cuentas" in contenido
+    assert "Plan Maestro FF actúa como base contable madre" in contenido
+    assert "cuentas de empresa son su adaptación operativa" in contenido
+    assert "Heredadas / revisar" in contenido
+    assert "CREADA_DESDE_MODELO" in contenido
+    assert "HEREDADA_SIN_VINCULO" in contenido
+    assert "Plan de Cuentas PRO" not in contenido
 
 
 def test_no_reintroduce_asignacion_manual_paralela_en_comportamientos():

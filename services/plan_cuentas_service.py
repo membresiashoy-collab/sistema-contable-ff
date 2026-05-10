@@ -1206,3 +1206,755 @@ def diagnosticar_plan_cuentas_pro(
         "advertencias": advertencias,
         "criticos_faltantes": criticos_faltantes,
     }
+
+# ======================================================
+# Plan de Cuentas unificado sobre Plan Maestro FF
+# ======================================================
+
+VERSION_PLAN_MAESTRO_DEFAULT = "FF-PDF-2026-01"
+
+
+def _asegurar_estructura_maestra_unificada(conn: sqlite3.Connection) -> None:
+    from services.plan_cuentas_maestro_service import asegurar_estructura_maestro
+
+    asegurar_estructura_maestro(conn)
+
+
+def _version_plan_maestro_id(
+    conn: sqlite3.Connection,
+    version: str | None = VERSION_PLAN_MAESTRO_DEFAULT,
+) -> int | None:
+    version_txt = limpiar_texto(version)
+
+    if version_txt:
+        fila = conn.execute(
+            """
+            SELECT id
+            FROM versiones_plan_cuentas
+            WHERE version = ?
+            LIMIT 1
+            """,
+            (version_txt,),
+        ).fetchone()
+        if fila:
+            return int(fila["id"] if isinstance(fila, sqlite3.Row) else fila[0])
+
+    fila = conn.execute(
+        """
+        SELECT v.id
+        FROM versiones_plan_cuentas v
+        JOIN plan_cuentas_maestro p ON p.version_plan_id = v.id
+        GROUP BY v.id
+        ORDER BY v.id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+
+    if fila:
+        return int(fila["id"] if isinstance(fila, sqlite3.Row) else fila[0])
+
+    return None
+
+
+def _version_plan_maestro_codigo(conn: sqlite3.Connection, version_plan_id: int) -> str:
+    fila = conn.execute(
+        """
+        SELECT version
+        FROM versiones_plan_cuentas
+        WHERE id = ?
+        LIMIT 1
+        """,
+        (int(version_plan_id),),
+    ).fetchone()
+
+    if not fila:
+        return ""
+
+    return str(fila["version"] if isinstance(fila, sqlite3.Row) else fila[0])
+
+
+def listar_versiones_plan_unificado(
+    conn: sqlite3.Connection | None = None,
+) -> list[dict[str, Any]]:
+    propia = conn is None
+    conn = conn or _conectar_default()
+    _asegurar_row_factory(conn)
+
+    try:
+        _asegurar_estructura_maestra_unificada(conn)
+        return _fetch_dicts(
+            conn,
+            """
+            SELECT
+                v.id,
+                v.version,
+                v.descripcion,
+                v.estado,
+                v.vigencia_desde,
+                v.vigencia_hasta,
+                COUNT(p.id) AS cuentas
+            FROM versiones_plan_cuentas v
+            LEFT JOIN plan_cuentas_maestro p ON p.version_plan_id = v.id
+            GROUP BY
+                v.id,
+                v.version,
+                v.descripcion,
+                v.estado,
+                v.vigencia_desde,
+                v.vigencia_hasta
+            ORDER BY v.id DESC
+            """,
+        )
+    finally:
+        if propia:
+            conn.close()
+
+
+def listar_estructura_maestra_plan_cuentas(
+    *,
+    version: str | None = VERSION_PLAN_MAESTRO_DEFAULT,
+    texto: str = "",
+    elemento: str = "",
+    rubro: str = "",
+    imputable: str = "",
+    estado: str = "",
+    regularizadora: str = "",
+    solo_modelos: bool = False,
+    conn: sqlite3.Connection | None = None,
+) -> list[dict[str, Any]]:
+    propia = conn is None
+    conn = conn or _conectar_default()
+    _asegurar_row_factory(conn)
+
+    try:
+        _asegurar_estructura_maestra_unificada(conn)
+        version_id = _version_plan_maestro_id(conn, version)
+        if version_id is None:
+            return []
+
+        condiciones = ["p.version_plan_id = ?"]
+        params: list[Any] = [version_id]
+
+        texto = limpiar_texto(texto)
+        if texto:
+            condiciones.append(
+                """
+                (
+                    LOWER(p.codigo) LIKE ?
+                    OR LOWER(p.nombre) LIKE ?
+                    OR LOWER(COALESCE(p.elemento, '')) LIKE ?
+                    OR LOWER(COALESCE(p.rubro, '')) LIKE ?
+                    OR LOWER(COALESCE(p.cuenta, '')) LIKE ?
+                    OR LOWER(COALESCE(p.subcuenta, '')) LIKE ?
+                )
+                """
+            )
+            patron = f"%{texto.lower()}%"
+            params.extend([patron, patron, patron, patron, patron, patron])
+
+        if limpiar_texto(elemento):
+            condiciones.append("p.elemento = ?")
+            params.append(limpiar_texto(elemento))
+
+        if limpiar_texto(rubro):
+            condiciones.append("p.rubro = ?")
+            params.append(limpiar_texto(rubro))
+
+        if limpiar_texto(imputable):
+            condiciones.append("p.imputable = ?")
+            params.append(1 if limpiar_texto(imputable).upper() in {"S", "SI", "SÍ", "1", "IMPUTABLE"} else 0)
+
+        if limpiar_texto(estado):
+            condiciones.append("p.estado = ?")
+            params.append(limpiar_texto(estado).upper())
+
+        if limpiar_texto(regularizadora):
+            condiciones.append("p.es_regularizadora = ?")
+            params.append(1 if limpiar_texto(regularizadora).upper() in {"S", "SI", "SÍ", "1"} else 0)
+
+        if solo_modelos:
+            condiciones.append("p.es_cuenta_modelo = 1")
+
+        where = " AND ".join(condiciones)
+
+        return _fetch_dicts(
+            conn,
+            f"""
+            SELECT
+                p.id,
+                v.version,
+                p.codigo,
+                p.nombre,
+                p.elemento,
+                p.clasificacion_corriente_no_corriente,
+                p.rubro,
+                p.cuenta,
+                p.subcuenta,
+                p.codigo_madre,
+                p.nivel,
+                p.orden,
+                p.imputable,
+                p.requiere_auxiliar,
+                p.tipo_auxiliar,
+                p.es_regularizadora,
+                p.cuenta_regularizada_codigo,
+                p.tipo_regularizadora,
+                p.saldo_normal,
+                p.significado_saldo_normal,
+                p.permite_saldo_deudor,
+                p.significado_saldo_deudor,
+                p.permite_saldo_acreedor,
+                p.significado_saldo_acreedor,
+                p.alertar_saldo_invertido,
+                p.tratamiento_saldo_invertido,
+                p.requiere_reclasificacion_saldo_invertido,
+                p.monetaria_no_monetaria,
+                p.criterio_medicion,
+                p.ajustable,
+                p.participa_recpam,
+                p.admite_moneda_extranjera,
+                p.requiere_tipo_cambio,
+                p.genera_diferencia_cambio,
+                p.es_cuenta_modelo,
+                p.permite_copiar_modelo,
+                p.uso_operativo_sistema,
+                p.modulo_sugerido,
+                p.presentacion_estado_contable,
+                p.orden_presentacion,
+                p.cuando_debitar,
+                p.cuando_acreditar,
+                p.errores_frecuentes,
+                p.observaciones,
+                p.estado,
+                p.vigencia_desde,
+                p.vigencia_hasta
+            FROM plan_cuentas_maestro p
+            JOIN versiones_plan_cuentas v ON v.id = p.version_plan_id
+            WHERE {where}
+            ORDER BY p.orden, p.codigo
+            """,
+            tuple(params),
+        )
+    finally:
+        if propia:
+            conn.close()
+
+
+def obtener_detalle_cuenta_maestra(
+    *,
+    codigo: str,
+    version: str | None = VERSION_PLAN_MAESTRO_DEFAULT,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any] | None:
+    codigo = limpiar_texto(codigo)
+    if not codigo:
+        return None
+
+    propia = conn is None
+    conn = conn or _conectar_default()
+    _asegurar_row_factory(conn)
+
+    try:
+        _asegurar_estructura_maestra_unificada(conn)
+        version_id = _version_plan_maestro_id(conn, version)
+        if version_id is None:
+            return None
+
+        filas = _fetch_dicts(
+            conn,
+            """
+            SELECT p.*, v.version
+            FROM plan_cuentas_maestro p
+            JOIN versiones_plan_cuentas v ON v.id = p.version_plan_id
+            WHERE p.version_plan_id = ?
+              AND p.codigo = ?
+            LIMIT 1
+            """,
+            (version_id, codigo),
+        )
+        return filas[0] if filas else None
+    finally:
+        if propia:
+            conn.close()
+
+
+def listar_cuentas_empresa_unificadas(
+    *,
+    empresa_id: int = 1,
+    version: str | None = VERSION_PLAN_MAESTRO_DEFAULT,
+    solo_activas: bool = True,
+    conn: sqlite3.Connection | None = None,
+) -> list[dict[str, Any]]:
+    propia = conn is None
+    conn = conn or _conectar_default()
+    _asegurar_row_factory(conn)
+
+    try:
+        _asegurar_estructura_maestra_unificada(conn)
+        version_id = _version_plan_maestro_id(conn, version)
+        if version_id is None:
+            return []
+
+        filtro_estado = "AND e.estado = 'ACTIVA'" if solo_activas else ""
+
+        return _fetch_dicts(
+            conn,
+            f"""
+            SELECT
+                e.id,
+                e.empresa_id,
+                e.cuenta_maestro_id,
+                e.codigo,
+                e.nombre,
+                e.codigo_madre,
+                e.nivel,
+                e.orden,
+                e.imputable,
+                e.requiere_auxiliar,
+                e.tipo_auxiliar,
+                e.ajustable,
+                e.estado,
+                e.es_cuenta_modelo,
+                e.es_cuenta_especifica_empresa,
+                e.cuenta_modelo_origen_id,
+                e.banco_nombre,
+                e.numero_cuenta,
+                e.moneda,
+                e.alias,
+                e.cbu,
+                e.uso_operativo_sistema,
+                e.motivo_estado,
+                m_id.codigo AS codigo_maestro_vinculado,
+                m_id.nombre AS cuenta_maestro_vinculada,
+                m_id.elemento,
+                m_id.rubro,
+                m_id.cuenta,
+                m_id.subcuenta,
+                m_id.saldo_normal,
+                m_id.significado_saldo_normal,
+                m_codigo.id AS cuenta_maestro_por_codigo_id,
+                m_codigo.nombre AS cuenta_maestro_por_codigo,
+                CASE
+                    WHEN COALESCE(e.es_cuenta_especifica_empresa, 0) = 1
+                         AND e.cuenta_maestro_id IS NOT NULL
+                         AND m_id.id IS NOT NULL
+                         AND m_id.version_plan_id = ? THEN 'CREADA_DESDE_MODELO'
+                    WHEN e.cuenta_maestro_id IS NOT NULL
+                         AND m_id.id IS NOT NULL
+                         AND m_id.version_plan_id = ? THEN 'VINCULADA_AL_MAESTRO'
+                    WHEN e.cuenta_maestro_id IS NOT NULL
+                         AND m_id.id IS NULL THEN 'VINCULO_INCONSISTENTE'
+                    WHEN e.cuenta_maestro_id IS NULL
+                         AND m_codigo.id IS NOT NULL THEN 'HEREDADA_MISMO_CODIGO_PENDIENTE'
+                    ELSE 'HEREDADA_SIN_VINCULO'
+                END AS estado_origen_plan,
+                CASE
+                    WHEN e.cuenta_maestro_id IS NOT NULL
+                         AND m_id.id IS NOT NULL
+                         AND m_id.version_plan_id = ? THEN 'VINCULADA'
+                    WHEN e.cuenta_maestro_id IS NULL
+                         AND m_codigo.id IS NOT NULL THEN 'MISMO_CODIGO_PENDIENTE_VINCULO'
+                    ELSE 'PENDIENTE_REVISION'
+                END AS estado_vinculacion
+            FROM plan_cuentas_empresa e
+            LEFT JOIN plan_cuentas_maestro m_id
+              ON m_id.id = e.cuenta_maestro_id
+            LEFT JOIN plan_cuentas_maestro m_codigo
+              ON m_codigo.codigo = e.codigo
+             AND m_codigo.version_plan_id = ?
+            WHERE e.empresa_id = ?
+              {filtro_estado}
+            ORDER BY e.orden, e.codigo
+            """,
+            (version_id, version_id, version_id, version_id, empresa_id),
+        )
+    finally:
+        if propia:
+            conn.close()
+
+def listar_modelos_copiables_plan_cuentas(
+    *,
+    version: str | None = VERSION_PLAN_MAESTRO_DEFAULT,
+    conn: sqlite3.Connection | None = None,
+) -> list[dict[str, Any]]:
+    return listar_estructura_maestra_plan_cuentas(
+        version=version,
+        solo_modelos=True,
+        estado="ACTIVA",
+        conn=conn,
+    )
+
+
+def diagnosticar_plan_cuentas_unificado(
+    *,
+    empresa_id: int = 1,
+    version: str | None = VERSION_PLAN_MAESTRO_DEFAULT,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    propia = conn is None
+    conn = conn or _conectar_default()
+    _asegurar_row_factory(conn)
+
+    try:
+        _asegurar_estructura_maestra_unificada(conn)
+        version_id = _version_plan_maestro_id(conn, version)
+        if version_id is None:
+            return {
+                "ok": False,
+                "error": "No hay una versión del Plan Maestro FF cargada.",
+            }
+
+        version_codigo = _version_plan_maestro_codigo(conn, version_id)
+
+        total_maestro = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM plan_cuentas_maestro
+            WHERE version_plan_id = ?
+            """,
+            (version_id,),
+        ).fetchone()[0]
+
+        cuentas_empresa = listar_cuentas_empresa_unificadas(
+            empresa_id=empresa_id,
+            version=version,
+            solo_activas=False,
+            conn=conn,
+        )
+
+        total_empresa = len([c for c in cuentas_empresa if str(c.get("estado", "")).upper() != "ANULADA"])
+
+        creadas_desde_modelo = [
+            c for c in cuentas_empresa
+            if c.get("estado_origen_plan") == "CREADA_DESDE_MODELO"
+            and str(c.get("estado", "")).upper() != "ANULADA"
+        ]
+
+        vinculadas_al_maestro = [
+            c for c in cuentas_empresa
+            if c.get("estado_origen_plan") in {"CREADA_DESDE_MODELO", "VINCULADA_AL_MAESTRO"}
+            and str(c.get("estado", "")).upper() != "ANULADA"
+        ]
+
+        heredadas_mismo_codigo = [
+            c for c in cuentas_empresa
+            if c.get("estado_origen_plan") == "HEREDADA_MISMO_CODIGO_PENDIENTE"
+            and str(c.get("estado", "")).upper() != "ANULADA"
+        ]
+
+        heredadas_sin_vinculo = [
+            c for c in cuentas_empresa
+            if c.get("estado_origen_plan") == "HEREDADA_SIN_VINCULO"
+            and str(c.get("estado", "")).upper() != "ANULADA"
+        ]
+
+        vinculos_inconsistentes = [
+            c for c in cuentas_empresa
+            if c.get("estado_origen_plan") == "VINCULO_INCONSISTENTE"
+            and str(c.get("estado", "")).upper() != "ANULADA"
+        ]
+
+        heredadas_pendientes = heredadas_mismo_codigo + heredadas_sin_vinculo
+
+        modelos = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM plan_cuentas_maestro
+            WHERE version_plan_id = ?
+              AND estado = 'ACTIVA'
+              AND es_cuenta_modelo = 1
+            """,
+            (version_id,),
+        ).fetchone()[0]
+
+        regularizadoras = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM plan_cuentas_maestro
+            WHERE version_plan_id = ?
+              AND es_regularizadora = 1
+            """,
+            (version_id,),
+        ).fetchone()[0]
+
+        return {
+            "ok": True,
+            "empresa_id": int(empresa_id),
+            "version": version_codigo,
+            "version_plan_id": version_id,
+            "total_maestro": int(total_maestro or 0),
+            "total_empresa": int(total_empresa or 0),
+            "vinculadas": len(vinculadas_al_maestro),
+            "creadas_desde_modelo": creadas_desde_modelo,
+            "creadas_desde_modelo_count": len(creadas_desde_modelo),
+            "pendientes_vincular": heredadas_mismo_codigo,
+            "pendientes_vincular_count": len(heredadas_mismo_codigo),
+            "propias_empresa": heredadas_sin_vinculo,
+            "propias_empresa_count": len(heredadas_sin_vinculo),
+            "heredadas_pendientes": heredadas_pendientes,
+            "heredadas_pendientes_count": len(heredadas_pendientes),
+            "vinculos_inconsistentes": vinculos_inconsistentes,
+            "vinculos_inconsistentes_count": len(vinculos_inconsistentes),
+            "modelos_copiables": int(modelos or 0),
+            "regularizadoras": int(regularizadoras or 0),
+            "no_vinculadas_count": max(int(total_empresa or 0) - len(vinculadas_al_maestro), 0),
+        }
+    finally:
+        if propia:
+            conn.close()
+
+def vincular_plan_empresa_con_maestro_seguro(
+    *,
+    empresa_id: int = 1,
+    version: str | None = VERSION_PLAN_MAESTRO_DEFAULT,
+    usuario: str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    from services.plan_cuentas_maestro_seed_service import vincular_plan_empresa_con_maestro
+
+    return vincular_plan_empresa_con_maestro(
+        empresa_id=empresa_id,
+        version=version or VERSION_PLAN_MAESTRO_DEFAULT,
+        usuario=usuario,
+        conn=conn,
+    )
+
+def crear_cuenta_empresa_desde_modelo(
+    *,
+    empresa_id: int = 1,
+    codigo_modelo: str = "",
+    cuenta_maestro_id: int | None = None,
+    codigo_nuevo: str,
+    nombre_nuevo: str,
+    banco_nombre: str = "",
+    numero_cuenta: str = "",
+    moneda: str = "ARS",
+    alias: str = "",
+    cbu: str = "",
+    motivo: str,
+    usuario: str | None = None,
+    version: str | None = VERSION_PLAN_MAESTRO_DEFAULT,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """
+    Crea una cuenta específica de empresa desde una cuenta modelo del Plan Maestro.
+
+    No modifica el Plan Maestro.
+    No borra ni renombra cuentas existentes.
+    No toca movimientos, asientos ni módulos operativos.
+    """
+    if not limpiar_texto(motivo):
+        return {"ok": False, "errores": ["Debe indicar un motivo para crear la cuenta desde modelo."]}
+
+    codigo_nuevo = limpiar_texto(codigo_nuevo)
+    nombre_nuevo = limpiar_texto(nombre_nuevo)
+
+    if not codigo_nuevo:
+        return {"ok": False, "errores": ["Debe indicar el código de la nueva cuenta de empresa."]}
+
+    if not nombre_nuevo:
+        return {"ok": False, "errores": ["Debe indicar el nombre de la nueva cuenta de empresa."]}
+
+    propia = conn is None
+    conn = conn or _conectar_default()
+    _asegurar_row_factory(conn)
+
+    try:
+        _asegurar_estructura_maestra_unificada(conn)
+        version_id = _version_plan_maestro_id(conn, version)
+
+        if version_id is None:
+            return {"ok": False, "errores": ["No hay versión estructural del Plan Maestro cargada."]}
+
+        if cuenta_maestro_id is not None:
+            modelo = conn.execute(
+                """
+                SELECT *
+                FROM plan_cuentas_maestro
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (int(cuenta_maestro_id),),
+            ).fetchone()
+        else:
+            modelo = conn.execute(
+                """
+                SELECT *
+                FROM plan_cuentas_maestro
+                WHERE version_plan_id = ?
+                  AND codigo = ?
+                LIMIT 1
+                """,
+                (version_id, limpiar_texto(codigo_modelo)),
+            ).fetchone()
+
+        if not modelo:
+            return {"ok": False, "errores": ["No se encontró la cuenta modelo indicada."]}
+
+        modelo_dict = dict(modelo)
+
+        if str(modelo_dict.get("estado") or "").upper() != "ACTIVA":
+            return {"ok": False, "errores": ["La cuenta modelo no está activa."]}
+
+        if int(modelo_dict.get("es_cuenta_modelo") or 0) != 1:
+            return {"ok": False, "errores": ["La cuenta seleccionada no está marcada como modelo."]}
+
+        if int(modelo_dict.get("permite_copiar_modelo") or 0) != 1:
+            return {"ok": False, "errores": ["La cuenta modelo no permite copia a cuentas específicas."]}
+
+        existente = conn.execute(
+            """
+            SELECT id, codigo, nombre, estado
+            FROM plan_cuentas_empresa
+            WHERE empresa_id = ?
+              AND codigo = ?
+            LIMIT 1
+            """,
+            (int(empresa_id), codigo_nuevo),
+        ).fetchone()
+
+        if existente:
+            return {
+                "ok": False,
+                "errores": [
+                    "Ya existe una cuenta con ese código para la empresa. "
+                    "Si fue creada por error, debe anularse o deshabilitarse con auditoría antes de reutilizar el código."
+                ],
+            }
+
+        nivel_modelo = _to_int(modelo_dict.get("nivel"), 1)
+        nivel_nuevo = max(nivel_modelo + 1, codigo_nuevo.count(".") + 1)
+        moneda = limpiar_texto(moneda).upper() or "ARS"
+
+        orden_actual = conn.execute(
+            """
+            SELECT COALESCE(MAX(orden), 0)
+            FROM plan_cuentas_empresa
+            WHERE empresa_id = ?
+            """,
+            (int(empresa_id),),
+        ).fetchone()[0]
+
+        orden_nuevo = int(orden_actual or 0) + 10
+
+        conn.execute(
+            """
+            INSERT INTO plan_cuentas_empresa
+            (
+                empresa_id,
+                cuenta_maestro_id,
+                codigo,
+                nombre,
+                codigo_madre,
+                nivel,
+                orden,
+                imputable,
+                requiere_auxiliar,
+                tipo_auxiliar,
+                ajustable,
+                estado,
+                es_cuenta_modelo,
+                es_cuenta_especifica_empresa,
+                cuenta_modelo_origen_id,
+                banco_nombre,
+                numero_cuenta,
+                moneda,
+                alias,
+                cbu,
+                uso_operativo_sistema,
+                motivo_estado,
+                usuario_ultima_modificacion,
+                fecha_ultima_modificacion,
+                creado_en,
+                actualizado_en
+            )
+            VALUES
+            (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 'ACTIVA', 0, 1, NULL, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (
+                int(empresa_id),
+                int(modelo_dict["id"]),
+                codigo_nuevo,
+                nombre_nuevo,
+                limpiar_texto(modelo_dict.get("codigo")),
+                nivel_nuevo,
+                orden_nuevo,
+                int(modelo_dict.get("requiere_auxiliar") or 0),
+                limpiar_texto(modelo_dict.get("tipo_auxiliar")),
+                int(modelo_dict.get("ajustable") or 0),
+                limpiar_texto(banco_nombre),
+                limpiar_texto(numero_cuenta),
+                moneda,
+                limpiar_texto(alias),
+                limpiar_texto(cbu),
+                limpiar_texto(modelo_dict.get("uso_operativo_sistema")),
+                motivo,
+                usuario,
+            ),
+        )
+
+        cuenta_empresa_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+        registrar_evento_plan(
+            int(empresa_id),
+            codigo_nuevo,
+            "CUENTA_EMPRESA_CREADA_DESDE_MODELO",
+            "Se creó una cuenta específica de empresa desde una cuenta modelo del Plan Maestro.",
+            valor_anterior="",
+            valor_nuevo={
+                "cuenta_empresa_id": cuenta_empresa_id,
+                "codigo": codigo_nuevo,
+                "nombre": nombre_nuevo,
+                "codigo_modelo": modelo_dict.get("codigo"),
+                "nombre_modelo": modelo_dict.get("nombre"),
+                "uso_operativo_sistema": modelo_dict.get("uso_operativo_sistema"),
+            },
+            usuario=usuario,
+            motivo=motivo,
+            conn=conn,
+        )
+
+        if _table_exists(conn, "auditoria_plan_cuentas"):
+            conn.execute(
+                """
+                INSERT INTO auditoria_plan_cuentas
+                (empresa_id, cuenta_empresa_id, cuenta_maestro_id, evento,
+                 valor_anterior, valor_nuevo, motivo, usuario)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(empresa_id),
+                    cuenta_empresa_id,
+                    int(modelo_dict["id"]),
+                    "CUENTA_EMPRESA_CREADA_DESDE_MODELO",
+                    "",
+                    str(
+                        {
+                            "codigo": codigo_nuevo,
+                            "nombre": nombre_nuevo,
+                            "modelo": modelo_dict.get("codigo"),
+                            "uso_operativo_sistema": modelo_dict.get("uso_operativo_sistema"),
+                        }
+                    ),
+                    motivo,
+                    usuario,
+                ),
+            )
+
+        if propia:
+            conn.commit()
+
+        return {
+            "ok": True,
+            "cuenta_empresa_id": cuenta_empresa_id,
+            "codigo": codigo_nuevo,
+            "nombre": nombre_nuevo,
+            "cuenta_maestro_id": int(modelo_dict["id"]),
+        }
+    except Exception as exc:
+        if propia:
+            conn.rollback()
+        return {"ok": False, "errores": [str(exc)]}
+    finally:
+        if propia:
+            conn.close()
