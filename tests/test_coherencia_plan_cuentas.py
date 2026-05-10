@@ -95,14 +95,17 @@ def test_diagnostico_detecta_cuentas_empresa_heredadas_y_vinculos_maestro():
 
         INSERT INTO plan_cuentas_maestro (id, codigo, nombre, estado) VALUES
         (1, '1.1.01', 'Caja', 'ACTIVA'),
-        (2, '1.1.02', 'Banco cuenta corriente', 'ACTIVA');
+        (2, '1.1.02', 'Banco cuenta corriente', 'ACTIVA'),
+        (3, '1', 'Activo', 'ACTIVA');
 
         INSERT INTO plan_cuentas_empresa
         (empresa_id, cuenta_maestro_id, codigo, nombre, imputable, estado)
         VALUES
         (1, 1, '1.1.01', 'Caja', 1, 'ACTIVA'),
         (1, NULL, '1.1.02', 'Banco cuenta corriente heredada', 1, 'ACTIVA'),
+        (1, NULL, '1', 'Activo heredado', 0, 'ACTIVA'),
         (1, NULL, '9.9.99', 'Cuenta heredada sin vínculo', 1, 'ACTIVA'),
+        (1, NULL, '9', 'Agrupadora heredada sin vínculo', 0, 'ACTIVA'),
         (1, 999, '1.1.03', 'Cuenta con vínculo roto', 1, 'ACTIVA');
         """
     )
@@ -110,9 +113,15 @@ def test_diagnostico_detecta_cuentas_empresa_heredadas_y_vinculos_maestro():
     diagnosticos = diagnosticar_vinculacion_plan_maestro(empresa_id=1, conn=conn)
     codigos = {item["codigo"] for item in diagnosticos}
 
-    assert "PLAN_CUENTAS_EMPRESA_HEREDADAS_PENDIENTES" in codigos
-    assert "PLAN_CUENTAS_EMPRESA_SIN_VINCULO_MAESTRO" in codigos
+    assert "PLAN_CUENTAS_EMPRESA_IMPUTABLES_HEREDADAS_PENDIENTES" in codigos
+    assert "PLAN_CUENTAS_EMPRESA_AGRUPADORAS_HEREDADAS_PENDIENTES" in codigos
+    assert "PLAN_CUENTAS_EMPRESA_IMPUTABLES_SIN_VINCULO_MAESTRO" in codigos
+    assert "PLAN_CUENTAS_EMPRESA_AGRUPADORAS_SIN_VINCULO_MAESTRO" in codigos
     assert "PLAN_CUENTAS_EMPRESA_VINCULO_INCONSISTENTE" in codigos
+
+    severidades = {item["codigo"]: item["severidad"] for item in diagnosticos}
+    assert severidades["PLAN_CUENTAS_EMPRESA_IMPUTABLES_SIN_VINCULO_MAESTRO"] == "ADVERTENCIA"
+    assert severidades["PLAN_CUENTAS_EMPRESA_AGRUPADORAS_SIN_VINCULO_MAESTRO"] == "INFO"
 
 
 def test_diagnostico_detecta_propuestas_con_cuentas_no_reconocidas_o_no_imputables():
@@ -280,6 +289,6 @@ def test_nucleo_incluye_controles_plan_maestro_y_bandeja_asientos():
     diagnosticos = diagnosticar_nucleo_coherencia(empresa_id=1, conn=conn)
     codigos = {item["codigo"] for item in diagnosticos}
 
-    assert "PLAN_CUENTAS_EMPRESA_SIN_VINCULO_MAESTRO" in codigos
+    assert "PLAN_CUENTAS_EMPRESA_IMPUTABLES_SIN_VINCULO_MAESTRO" in codigos
     assert "ASIENTOS_PROPUESTOS_CUENTA_NO_RECONOCIDA" in codigos
-    assert "LIBRO_ASIENTOS_TRAZABILIDAD_INCOMPLETA" in codigos
+    assert "LIBRO_ASIENTOS_TRAZABILIDAD_HISTORICA_INCOMPLETA" in codigos

@@ -445,8 +445,8 @@ def diagnosticar_plan_cuentas(
                         "Plan de cuentas",
                         SEVERIDAD_INFO,
                         "PLAN_CUENTAS_SIN_COMPORTAMIENTO",
-                        "Hay cuentas imputables sin uso operativo del sistema",
-                        f"Se detectaron {diagnostico_pro.get('pendientes', 0)} cuentas imputables sin uso operativo. Esto no bloquea, pero limita los diagnósticos automáticos.",
+                        "Hay cuentas imputables sin uso operativo opcional",
+                        f"Se detectaron {diagnostico_pro.get('pendientes', 0)} cuentas imputables sin uso operativo del sistema. No todas requieren automatización: revise solo las cuentas críticas u operativas antes de cerrar el saneamiento del Plan Maestro FF.",
                     )
                 )
             if not resultados:
@@ -627,9 +627,9 @@ def diagnosticar_libro_diario(
                 diagnostico(
                     "Libro Diario",
                     SEVERIDAD_INFO,
-                    "LIBRO_ASIENTOS_TRAZABILIDAD_INCOMPLETA",
-                    "Hay asientos con trazabilidad incompleta",
-                    f"Se detectaron {trazabilidad_incompleta} asientos con origen informado pero sin origen_tabla u origen_id completo. No bloquea, pero conviene normalizarlo para auditoría y reversos controlados.",
+                    "LIBRO_ASIENTOS_TRAZABILIDAD_HISTORICA_INCOMPLETA",
+                    "Hay asientos históricos con trazabilidad técnica incompleta",
+                    f"Se detectaron {trazabilidad_incompleta} asientos con origen informado pero sin origen_tabla u origen_id completo. No invalida la contabilidad histórica; queda como normalización técnica pendiente para auditoría y reversos controlados.",
                 )
             )
 
@@ -1338,8 +1338,10 @@ def diagnosticar_vinculacion_plan_maestro(
     """
     Controla que las cuentas operativas de la empresa apunten al Plan Maestro FF.
 
-    No modifica cuentas. Solo informa cuentas heredadas, sin vínculo o con vínculo
-    inconsistente para que se corrijan desde Configuración → Plan de Cuentas.
+    No modifica cuentas. Separa el diagnóstico para evitar ruido:
+    - cuentas imputables heredadas o sin vínculo, que requieren saneamiento real;
+    - cuentas agrupadoras heredadas, que son pendientes estructurales;
+    - vínculos rotos, que sí son errores técnicos a corregir.
     """
     propia = conn is None
     conn = conn or _conectar_default()
@@ -1369,14 +1371,18 @@ def diagnosticar_vinculacion_plan_maestro(
         if "estado" in columnas_empresa:
             where.append("COALESCE(e.estado, 'ACTIVA') NOT IN ('ANULADO', 'ANULADA', 'INACTIVO', 'INACTIVA', 'BAJA', 'ELIMINADO', 'ELIMINADA')")
 
-        sql = """
+        imputable_expr = "e.imputable AS imputable" if "imputable" in columnas_empresa else "1 AS imputable"
+        estado_expr = "e.estado AS estado" if "estado" in columnas_empresa else "'ACTIVA' AS estado"
+        estado_maestro_codigo = "AND COALESCE(m_codigo.estado, 'ACTIVA') = 'ACTIVA'" if "estado" in columnas_maestro else ""
+
+        sql = f"""
             SELECT
                 e.id AS cuenta_empresa_id,
                 e.codigo AS codigo_empresa,
                 e.nombre AS nombre_empresa,
                 e.cuenta_maestro_id,
-                e.imputable,
-                e.estado,
+                {imputable_expr},
+                {estado_expr},
                 m_id.id AS maestro_id_vinculado,
                 m_id.codigo AS codigo_maestro_vinculado,
                 m_id.nombre AS nombre_maestro_vinculado,
@@ -1387,7 +1393,7 @@ def diagnosticar_vinculacion_plan_maestro(
               ON m_id.id = e.cuenta_maestro_id
             LEFT JOIN plan_cuentas_maestro m_codigo
               ON m_codigo.codigo = e.codigo
-             AND COALESCE(m_codigo.estado, 'ACTIVA') = 'ACTIVA'
+             {estado_maestro_codigo}
         """
         if where:
             sql += " WHERE " + " AND ".join(where)
@@ -1395,21 +1401,35 @@ def diagnosticar_vinculacion_plan_maestro(
         filas = _fetch_dicts(conn, sql, tuple(params))
 
         vinculos_inconsistentes = []
-        heredadas_mismo_codigo = []
-        heredadas_sin_vinculo = []
+        heredadas_imputables_mismo_codigo = []
+        heredadas_agrupadoras_mismo_codigo = []
+        imputables_sin_vinculo = []
+        agrupadoras_sin_vinculo = []
 
         for row in filas:
             descripcion = _descripcion_cuenta(row.get("codigo_empresa"), row.get("nombre_empresa"))
             cuenta_maestro_id = row.get("cuenta_maestro_id")
+            es_imputable = _es_imputable_valor(row.get("imputable"), default=True)
 
             if cuenta_maestro_id and not row.get("maestro_id_vinculado"):
                 vinculos_inconsistentes.append(descripcion)
-            elif not cuenta_maestro_id and row.get("maestro_id_por_codigo"):
-                heredadas_mismo_codigo.append(
-                    f"{descripcion} coincide con {row.get('nombre_maestro_por_codigo')}"
-                )
-            elif not cuenta_maestro_id and not row.get("maestro_id_por_codigo"):
-                heredadas_sin_vinculo.append(descripcion)
+                continue
+
+            if cuenta_maestro_id:
+                continue
+
+            if row.get("maestro_id_por_codigo"):
+                detalle = f"{descripcion} coincide con {row.get('nombre_maestro_por_codigo')}"
+                if es_imputable:
+                    heredadas_imputables_mismo_codigo.append(detalle)
+                else:
+                    heredadas_agrupadoras_mismo_codigo.append(detalle)
+                continue
+
+            if es_imputable:
+                imputables_sin_vinculo.append(descripcion)
+            else:
+                agrupadoras_sin_vinculo.append(descripcion)
 
         if vinculos_inconsistentes:
             resultados.append(
@@ -1423,26 +1443,58 @@ def diagnosticar_vinculacion_plan_maestro(
                 )
             )
 
-        if heredadas_mismo_codigo:
+        if heredadas_imputables_mismo_codigo:
             resultados.append(
                 diagnostico(
                     "Plan de cuentas",
                     SEVERIDAD_ADVERTENCIA,
-                    "PLAN_CUENTAS_EMPRESA_HEREDADAS_PENDIENTES",
-                    "Hay cuentas heredadas pendientes de vincular al Plan Maestro",
-                    "Cuentas afectadas: " + _lista_resumida(heredadas_mismo_codigo) + ". Deben vincularse al Plan Maestro FF para dejar de operar como heredadas.",
+                    "PLAN_CUENTAS_EMPRESA_IMPUTABLES_HEREDADAS_PENDIENTES",
+                    "Hay cuentas imputables heredadas pendientes de vincular al Plan Maestro",
+                    "Cuentas afectadas: "
+                    + _lista_resumida(heredadas_imputables_mismo_codigo)
+                    + ". Deben vincularse al Plan Maestro FF para dejar de operar como heredadas.",
                     "plan_cuentas_empresa",
                 )
             )
 
-        if heredadas_sin_vinculo:
+        if heredadas_agrupadoras_mismo_codigo:
+            resultados.append(
+                diagnostico(
+                    "Plan de cuentas",
+                    SEVERIDAD_INFO,
+                    "PLAN_CUENTAS_EMPRESA_AGRUPADORAS_HEREDADAS_PENDIENTES",
+                    "Hay cuentas agrupadoras heredadas pendientes de ordenar",
+                    "Cuentas afectadas: "
+                    + _lista_resumida(heredadas_agrupadoras_mismo_codigo)
+                    + ". No deberían recibir movimientos; quedan como pendiente estructural para vincular, inactivar o reemplazar sin romper historia.",
+                    "plan_cuentas_empresa",
+                )
+            )
+
+        if imputables_sin_vinculo:
             resultados.append(
                 diagnostico(
                     "Plan de cuentas",
                     SEVERIDAD_ADVERTENCIA,
-                    "PLAN_CUENTAS_EMPRESA_SIN_VINCULO_MAESTRO",
-                    "Hay cuentas de empresa sin vínculo con el Plan Maestro",
-                    "Cuentas afectadas: " + _lista_resumida(heredadas_sin_vinculo) + ". Revise si corresponde vincularlas, reemplazarlas por una cuenta creada desde modelo o mantenerlas solo por compatibilidad.",
+                    "PLAN_CUENTAS_EMPRESA_IMPUTABLES_SIN_VINCULO_MAESTRO",
+                    "Hay cuentas imputables de empresa sin vínculo con el Plan Maestro",
+                    "Cuentas afectadas: "
+                    + _lista_resumida(imputables_sin_vinculo)
+                    + ". Defina si corresponde vincularlas al Plan Maestro FF, convertirlas en cuentas específicas creadas desde una cuenta modelo o inactivarlas lógicamente con auditoría.",
+                    "plan_cuentas_empresa",
+                )
+            )
+
+        if agrupadoras_sin_vinculo:
+            resultados.append(
+                diagnostico(
+                    "Plan de cuentas",
+                    SEVERIDAD_INFO,
+                    "PLAN_CUENTAS_EMPRESA_AGRUPADORAS_SIN_VINCULO_MAESTRO",
+                    "Hay cuentas agrupadoras heredadas sin vínculo con el Plan Maestro",
+                    "Cuentas afectadas: "
+                    + _lista_resumida(agrupadoras_sin_vinculo)
+                    + ". No son una urgencia operativa si no reciben movimientos, pero deben sanearse para cortar de raíz el ruido de cuentas heredadas.",
                     "plan_cuentas_empresa",
                 )
             )
@@ -1451,7 +1503,6 @@ def diagnosticar_vinculacion_plan_maestro(
     finally:
         if propia:
             conn.close()
-
 
 def diagnosticar_asientos_propuestos_plan_cuentas(
     empresa_id: int | None = None,
