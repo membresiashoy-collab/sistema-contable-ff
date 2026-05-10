@@ -358,6 +358,17 @@ def diagnosticar_plan_cuentas(
     empresa_id: int | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> list[dict[str, Any]]:
+    """
+    Diagnóstico del Plan de Cuentas como fuente de verdad.
+
+    Desde Plan de Cuentas PRO la clasificación vigente debe vivir en:
+    - plan_cuentas.comportamiento_contable
+    - plan_cuentas.permite_imputacion_operativa
+    - plan_cuentas_detallado.imputable
+
+    La tabla contabilidad_cuentas_comportamiento queda como compatibilidad/auditoría,
+    no como fuente principal para crear o editar cuentas.
+    """
     propia = conn is None
     conn = conn or _conectar_default()
     _asegurar_row_factory(conn)
@@ -370,110 +381,86 @@ def diagnosticar_plan_cuentas(
                     SEVERIDAD_ERROR,
                     "PLAN_CUENTAS_INEXISTENTE",
                     "No existe el plan de cuentas",
-                    "El núcleo de coherencia necesita un plan de cuentas para mapear comportamientos contables.",
+                    "El núcleo de coherencia necesita un plan de cuentas para mapear usos operativos del sistema.",
                 ).as_dict()
             ]
 
         aplicar_migracion_nucleo(conn)
 
-        columnas = _columns(conn, "plan_cuentas")
-        col_id = _first_existing(columnas, ("id", "cuenta_id")) or "rowid"
-        col_empresa = _first_existing(columnas, ("empresa_id", "id_empresa"))
-        col_codigo = _first_existing(columnas, ("codigo", "codigo_cuenta", "cuenta_codigo"))
-        col_nombre = _first_existing(columnas, ("nombre", "nombre_cuenta", "descripcion"))
-        col_comportamiento = _first_existing(columnas, ("comportamiento_contable", "comportamiento", "tipo_operativo"))
-        col_imputable = _first_existing(columnas, ("imputable", "recibe_movimientos", "permite_imputacion", "permite_imputacion_operativa"))
+        try:
+            from services.plan_cuentas_service import diagnosticar_plan_cuentas_pro
 
-        where = []
-        params: list[Any] = []
-        if empresa_id is not None and col_empresa:
-            where.append(f"{col_empresa} = ?")
-            params.append(empresa_id)
-        sql = "SELECT rowid AS __rowid__, * FROM plan_cuentas"
-        if where:
-            sql += " WHERE " + " AND ".join(where)
-        rows = _fetch_dicts(conn, sql, tuple(params))
-
-        comportamientos_detectados: set[str] = set()
-        cuentas_imputables_sin_comportamiento = 0
-        cuentas_con_comportamiento_invalido: list[str] = []
-
-        for row in rows:
-            row_id = row.get(col_id) if col_id != "rowid" else row.get("__rowid__")
-            codigo = row.get(col_codigo, row_id) if col_codigo else row_id
-            nombre = row.get(col_nombre, "") if col_nombre else ""
-            comportamientos = _comportamientos_desde_plan(row, col_comportamiento)
-            for comportamiento in comportamientos:
-                if comportamiento in COMPORTAMIENTOS_CONTABLES:
-                    comportamientos_detectados.add(comportamiento)
-                else:
-                    cuentas_con_comportamiento_invalido.append(f"{codigo} {nombre}".strip())
-
-            imputable = True
-            if col_imputable:
-                valor_imputable = row.get(col_imputable)
-                imputable = valor_imputable not in (0, "0", "NO", "No", "no", False)
-            if imputable and not comportamientos:
-                cuentas_imputables_sin_comportamiento += 1
-
-        if _table_exists(conn, "contabilidad_cuentas_comportamiento"):
-            columnas_map = _columns(conn, "contabilidad_cuentas_comportamiento")
-            where_map = ["activo = 1"]
-            params_map: list[Any] = []
-            if empresa_id is not None and "empresa_id" in columnas_map:
-                where_map.append("(empresa_id = ? OR empresa_id IS NULL)")
-                params_map.append(empresa_id)
-            sql_map = "SELECT comportamiento FROM contabilidad_cuentas_comportamiento WHERE " + " AND ".join(where_map)
-            for row in _fetch_dicts(conn, sql_map, tuple(params_map)):
-                comportamiento = normalizar_codigo(row.get("comportamiento"))
-                if comportamiento in COMPORTAMIENTOS_CONTABLES:
-                    comportamientos_detectados.add(comportamiento)
-
-        faltantes = [codigo for codigo in COMPORTAMIENTOS_CRITICOS if codigo not in comportamientos_detectados]
-        if faltantes:
+            diagnostico_pro = diagnosticar_plan_cuentas_pro(empresa_id=empresa_id or 1, conn=conn)
+        except Exception as exc:
             resultados.append(
                 diagnostico(
                     "Plan de cuentas",
                     SEVERIDAD_ADVERTENCIA,
-                    "PLAN_COMPORTAMIENTOS_CRITICOS_FALTANTES",
-                    "Faltan comportamientos contables críticos",
-                    "No se detectó mapeo para: " + ", ".join(faltantes) + ".",
+                    "PLAN_CUENTAS_PRO_NO_DISPONIBLE",
+                    "No se pudo ejecutar el diagnóstico PRO del plan de cuentas",
+                    f"Detalle técnico: {exc}",
                 )
             )
+            diagnostico_pro = None
 
-        if cuentas_imputables_sin_comportamiento:
-            resultados.append(
-                diagnostico(
-                    "Plan de cuentas",
-                    SEVERIDAD_INFO,
-                    "PLAN_CUENTAS_SIN_COMPORTAMIENTO",
-                    "Hay cuentas imputables sin comportamiento operativo",
-                    f"Se detectaron {cuentas_imputables_sin_comportamiento} cuentas imputables sin clasificación de comportamiento contable.",
+        if diagnostico_pro:
+            for item in diagnostico_pro.get("errores", []):
+                resultados.append(
+                    diagnostico(
+                        "Plan de cuentas",
+                        SEVERIDAD_ERROR,
+                        "PLAN_CUENTA_NO_IMPUTABLE_CON_COMPORTAMIENTO",
+                        "Hay cuentas no imputables con uso operativo asignado",
+                        f"{item.get('codigo')} - {item.get('nombre')}: {item.get('problema')}. Acción sugerida: {item.get('accion')}",
+                        "plan_cuentas",
+                        item.get("codigo"),
+                    )
                 )
-            )
+            for item in diagnostico_pro.get("advertencias", []):
+                resultados.append(
+                    diagnostico(
+                        "Plan de cuentas",
+                        SEVERIDAD_ADVERTENCIA,
+                        "PLAN_COMPORTAMIENTO_POSIBLEMENTE_INCORRECTO",
+                        "Hay usos operativos que conviene revisar desde el Plan de Cuentas",
+                        f"{item.get('codigo')} - {item.get('nombre')}: {item.get('problema')}. Acción sugerida: {item.get('accion')}",
+                        "plan_cuentas",
+                        item.get("codigo"),
+                    )
+                )
+            faltantes = diagnostico_pro.get("criticos_faltantes", [])
+            if faltantes:
+                resultados.append(
+                    diagnostico(
+                        "Plan de cuentas",
+                        SEVERIDAD_ADVERTENCIA,
+                        "PLAN_COMPORTAMIENTOS_CRITICOS_FALTANTES",
+                        "Faltan usos operativos críticos en el Plan de Cuentas",
+                        "No se detectó uso operativo en el Plan de Cuentas para: " + ", ".join(faltantes) + ".",
+                    )
+                )
+            if diagnostico_pro.get("pendientes", 0):
+                resultados.append(
+                    diagnostico(
+                        "Plan de cuentas",
+                        SEVERIDAD_INFO,
+                        "PLAN_CUENTAS_SIN_COMPORTAMIENTO",
+                        "Hay cuentas imputables sin uso operativo del sistema",
+                        f"Se detectaron {diagnostico_pro.get('pendientes', 0)} cuentas imputables sin uso operativo. Esto no bloquea, pero limita los diagnósticos automáticos.",
+                    )
+                )
+            if not resultados:
+                resultados.append(
+                    diagnostico(
+                        "Plan de cuentas",
+                        SEVERIDAD_OK,
+                        "PLAN_CUENTAS_PRO_OK",
+                        "Plan de Cuentas coherente como fuente de verdad",
+                        "No se detectaron cuentas no imputables con uso operativo ni usos operativos críticos faltantes.",
+                    )
+                )
+            return [item.as_dict() for item in resultados]
 
-        if cuentas_con_comportamiento_invalido:
-            ejemplos = "; ".join(cuentas_con_comportamiento_invalido[:10])
-            resultados.append(
-                diagnostico(
-                    "Plan de cuentas",
-                    SEVERIDAD_ERROR,
-                    "PLAN_COMPORTAMIENTO_INVALIDO",
-                    "Hay cuentas con comportamiento contable no reconocido",
-                    f"Ejemplos: {ejemplos}.",
-                )
-            )
-
-        if not resultados:
-            resultados.append(
-                diagnostico(
-                    "Plan de cuentas",
-                    SEVERIDAD_OK,
-                    "PLAN_CUENTAS_OK",
-                    "Plan de cuentas con comportamientos mínimos cubiertos",
-                    "Se detectaron los comportamientos críticos necesarios para la coherencia operativa.",
-                )
-            )
         return [item.as_dict() for item in resultados]
     finally:
         if propia:
@@ -848,7 +835,9 @@ def _mapa_comportamientos_configurados(
                         por_cuenta[clave].add(comportamiento)
                     por_comportamiento[comportamiento].add(codigo)
 
-    if _table_exists(conn, "contabilidad_cuentas_comportamiento"):
+    # Compatibilidad: solo se consulta la tabla histórica si el Plan de Cuentas todavía no tiene comportamientos.
+    # La fuente principal de verdad desde Plan de Cuentas PRO es plan_cuentas.comportamiento_contable.
+    if not por_cuenta and _table_exists(conn, "contabilidad_cuentas_comportamiento"):
         columnas_map = _columns(conn, "contabilidad_cuentas_comportamiento")
         where_map = ["COALESCE(activo, 1) = 1"]
         params_map: list[Any] = []
@@ -918,7 +907,7 @@ def diagnosticar_comportamientos_configurados(
     limite_revision: int = 5000,
 ) -> list[dict[str, Any]]:
     """
-    Diagnóstico inteligente basado en la configuración de comportamientos.
+    Diagnóstico inteligente basado en el uso operativo informado en el Plan de Cuentas.
 
     No modifica flujos operativos: solamente cruza el mapa contable configurado
     contra Tesorería, IVA, Capital e imputaciones recientes para detectar cuentas
@@ -935,10 +924,10 @@ def diagnosticar_comportamientos_configurados(
         if not mapa.get("por_cuenta"):
             resultados.append(
                 diagnostico(
-                    "Comportamientos contables",
+                    "Uso operativo del Plan de Cuentas",
                     SEVERIDAD_ADVERTENCIA,
                     "COMPORTAMIENTOS_SIN_CONFIGURACION",
-                    "No hay comportamientos contables configurados",
+                    "No hay usos operativos configurados",
                     "Configure al menos Caja, Banco, IVA crédito, IVA débito, Capital y cuentas vinculadas para que el diagnóstico pueda validar operaciones reales.",
                 )
             )
@@ -960,11 +949,11 @@ def diagnosticar_comportamientos_configurados(
                 if comportamiento not in COMPORTAMIENTOS_CONTABLES:
                     resultados.append(
                         diagnostico(
-                            "Comportamientos contables",
+                            "Uso operativo del Plan de Cuentas",
                             SEVERIDAD_ERROR,
                             "COMPORTAMIENTO_CONFIGURADO_INVALIDO",
-                            "Hay un comportamiento configurado no reconocido",
-                            f"La cuenta {_descripcion_cuenta(codigo, row.get('cuenta_nombre'))} tiene el comportamiento {row.get('comportamiento')} que no pertenece al catálogo vigente.",
+                            "Hay un uso operativo configurado no reconocido",
+                            f"La cuenta {_descripcion_cuenta(codigo, row.get('cuenta_nombre'))} tiene el uso operativo {row.get('comportamiento')} que no pertenece al catálogo vigente.",
                             "contabilidad_cuentas_comportamiento",
                             row.get("id"),
                         )
@@ -974,10 +963,10 @@ def diagnosticar_comportamientos_configurados(
             if mapeos_sin_cuenta:
                 resultados.append(
                     diagnostico(
-                        "Comportamientos contables",
+                        "Uso operativo del Plan de Cuentas",
                         SEVERIDAD_ADVERTENCIA,
                         "COMPORTAMIENTO_CUENTA_NO_EXISTE_EN_PLAN",
-                        "Hay comportamientos asignados a cuentas que no existen en el plan",
+                        "Hay usos operativos asignados a cuentas que no existen en el plan",
                         "Revise estos mapeos: " + "; ".join(mapeos_sin_cuenta[:15]) + ".",
                     )
                 )
@@ -1035,7 +1024,7 @@ def diagnosticar_comportamientos_configurados(
                             "Tesorería",
                             SEVERIDAD_ADVERTENCIA,
                             "TESORERIA_CAJAS_SIN_COMPORTAMIENTO_CAJA",
-                            "Hay cajas operativas sin comportamiento Caja",
+                            "Hay cajas operativas sin uso operativo Caja",
                             "Cuentas afectadas: " + "; ".join(cajas_sin_mapeo[:15]) + ".",
                         )
                     )
@@ -1045,7 +1034,7 @@ def diagnosticar_comportamientos_configurados(
                             "Tesorería",
                             SEVERIDAD_ADVERTENCIA,
                             "TESORERIA_BANCOS_SIN_COMPORTAMIENTO_BANCO",
-                            "Hay bancos operativos sin comportamiento Banco",
+                            "Hay bancos operativos sin uso operativo Banco",
                             "Cuentas afectadas: " + "; ".join(bancos_sin_mapeo[:15]) + ".",
                         )
                     )
@@ -1135,7 +1124,7 @@ def diagnosticar_comportamientos_configurados(
                             "IVA",
                             SEVERIDAD_ADVERTENCIA,
                             "IVA_CUENTA_CREDITO_SIN_COMPORTAMIENTO",
-                            "Hay cuentas de IVA crédito usadas sin comportamiento IVA crédito",
+                            "Hay cuentas de IVA crédito usadas sin uso operativo IVA crédito",
                             "Cuentas afectadas: " + "; ".join(sorted(set(iva_credito_sin_mapeo))[:15]) + ".",
                         )
                     )
@@ -1145,7 +1134,7 @@ def diagnosticar_comportamientos_configurados(
                             "IVA",
                             SEVERIDAD_ADVERTENCIA,
                             "IVA_CUENTA_DEBITO_SIN_COMPORTAMIENTO",
-                            "Hay cuentas de IVA débito o IVA a pagar usadas sin comportamiento IVA débito",
+                            "Hay cuentas de IVA débito o IVA a pagar usadas sin uso operativo IVA débito",
                             "Cuentas afectadas: " + "; ".join(sorted(set(iva_debito_sin_mapeo))[:15]) + ".",
                         )
                     )
@@ -1153,11 +1142,11 @@ def diagnosticar_comportamientos_configurados(
         if not resultados:
             resultados.append(
                 diagnostico(
-                    "Comportamientos contables",
+                    "Uso operativo del Plan de Cuentas",
                     SEVERIDAD_OK,
                     "COMPORTAMIENTOS_OPERATIVOS_OK",
-                    "Comportamientos contables coherentes con las áreas operativas revisadas",
-                    "Tesorería, IVA y Capital no presentan desvíos de comportamiento contable en la muestra analizada.",
+                    "Uso operativo del Plan de Cuentas coherentes con las áreas operativas revisadas",
+                    "Tesorería, IVA y Capital no presentan desvíos de uso operativo en la muestra analizada.",
                 )
             )
 

@@ -31,6 +31,25 @@ from services.actividades_service import (
     quitar_actividad_empresa
 )
 
+from core.contabilidad_coherencia import COMPORTAMIENTOS_CONTABLES
+from services.plan_cuentas_service import (
+    MODULOS_ORIGEN_PREFERIDO,
+    TIPOS_CUENTA,
+    asegurar_estructura_plan_cuentas,
+    borrar_plan_cuentas_completo,
+    diagnosticar_plan_cuentas_pro,
+    eliminar_cuenta_plan,
+    guardar_cuenta_plan,
+    limpiar_comportamiento_cuenta,
+    listar_eventos_plan_cuentas,
+    listar_plan_cuentas,
+    listar_sugerencias_plan_cuentas,
+    normalizar_metadata_plan_cuentas,
+    obtener_cuenta_plan,
+    reemplazar_plan_desde_dataframe,
+    sugerir_comportamiento_plan,
+)
+
 
 # ======================================================
 # FUNCIONES AUXILIARES
@@ -237,6 +256,7 @@ def init_tablas_configuracion():
         )
     """)
 
+    asegurar_estructura_plan_cuentas()
     asegurar_tablas_actividades()
 
 
@@ -244,105 +264,483 @@ def init_tablas_configuracion():
 # PLAN DE CUENTAS
 # ======================================================
 
+
+def _empresa_id_actual():
+    try:
+        return int(st.session_state.get("empresa_id") or st.session_state.get("empresa_actual_id") or 1)
+    except Exception:
+        return 1
+
+
+def _usuario_actual_nombre():
+    usuario = st.session_state.get("usuario") or st.session_state.get("usuario_nombre") or "Administrador"
+    if isinstance(usuario, dict):
+        return usuario.get("usuario") or usuario.get("nombre") or "Administrador"
+    return str(usuario or "Administrador")
+
+
+def _catalogo_comportamientos_opciones():
+    opciones = [""]
+    opciones.extend(sorted(COMPORTAMIENTOS_CONTABLES.keys()))
+    return opciones
+
+
+def _formatear_comportamiento(codigo):
+    codigo = str(codigo or "").strip()
+    if not codigo:
+        return "Sin uso operativo"
+    datos = COMPORTAMIENTOS_CONTABLES.get(codigo, {})
+    nombre = datos.get("nombre", codigo)
+    return f"{codigo} — {nombre}"
+
+
+def _codigo_desde_opcion_comportamiento(opcion):
+    texto = str(opcion or "").strip()
+    if not texto or texto == "Sin uso operativo":
+        return ""
+    return texto.split("—", 1)[0].strip()
+
+
+def _preparar_plan_dataframe(cuentas):
+    columnas = [
+        "codigo",
+        "nombre",
+        "imputable",
+        "tipo",
+        "madre",
+        "nivel",
+        "orden",
+        "comportamiento_contable",
+        "permite_imputacion_operativa",
+        "requiere_auxiliar",
+        "modulo_origen_preferido",
+        "estado_configuracion",
+    ]
+    df = pd.DataFrame(cuentas)
+    if df.empty:
+        return pd.DataFrame(columns=columnas)
+    for col in columnas:
+        if col not in df.columns:
+            df[col] = ""
+    return df[columnas]
+
+
 def obtener_plan_simple():
-    return ejecutar_query("""
-        SELECT codigo, nombre
-        FROM plan_cuentas
-        ORDER BY codigo
-    """, fetch=True)
+    cuentas = listar_plan_cuentas(empresa_id=_empresa_id_actual())
+    return pd.DataFrame([
+        {"codigo": item["codigo"], "nombre": item["nombre"]}
+        for item in cuentas
+    ])
 
 
 def obtener_plan_detallado():
-    return ejecutar_query("""
-        SELECT cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden
-        FROM plan_cuentas_detallado
-        ORDER BY cuenta
-    """, fetch=True)
+    cuentas = listar_plan_cuentas(empresa_id=_empresa_id_actual())
+    return pd.DataFrame([
+        {
+            "cuenta": item["codigo"],
+            "detalle": item["nombre"],
+            "imputable": item["imputable"],
+            "ajustable": item["ajustable"],
+            "tipo": item["tipo"],
+            "madre": item["madre"],
+            "nivel": item["nivel"],
+            "orden": item["orden"],
+        }
+        for item in cuentas
+    ])
 
 
 def borrar_plan_cuentas():
-    ejecutar_query("DELETE FROM plan_cuentas")
-    ejecutar_query("DELETE FROM plan_cuentas_detallado")
+    return borrar_plan_cuentas_completo(
+        empresa_id=_empresa_id_actual(),
+        usuario=_usuario_actual_nombre(),
+        motivo="Borrado completo desde Configuración → Plan de Cuentas",
+    )
 
 
 def reemplazar_plan_simple(df):
-    borrar_plan_cuentas()
-
-    for _, fila in df.iterrows():
-        codigo = limpiar_valor(fila.get("codigo", ""))
-        nombre = limpiar_valor(fila.get("nombre", ""))
-
-        if codigo and nombre:
-            ejecutar_query("""
-                INSERT INTO plan_cuentas (codigo, nombre)
-                VALUES (?, ?)
-            """, (codigo, nombre))
+    return reemplazar_plan_desde_dataframe(
+        df,
+        empresa_id=_empresa_id_actual(),
+        formato="simple",
+        usuario=_usuario_actual_nombre(),
+        motivo="Reemplazo de plan simple desde Configuración",
+    )
 
 
 def reemplazar_plan_detallado(df):
-    borrar_plan_cuentas()
-
-    for _, fila in df.iterrows():
-        cuenta = limpiar_valor(fila.get("cuenta", ""))
-        detalle = limpiar_valor(fila.get("detalle", ""))
-
-        imputable = limpiar_valor(fila.get("imputable", "S"))
-        ajustable = limpiar_valor(fila.get("ajustable", "N"))
-        tipo = limpiar_valor(fila.get("tipo", "D"))
-        madre = limpiar_valor(fila.get("madre", ""))
-
-        try:
-            nivel = int(float(limpiar_valor(fila.get("nivel", 1)) or 1))
-        except Exception:
-            nivel = 1
-
-        try:
-            orden = int(float(limpiar_valor(fila.get("orden", 0)) or 0))
-        except Exception:
-            orden = 0
-
-        if cuenta and detalle:
-            ejecutar_query("""
-                INSERT OR REPLACE INTO plan_cuentas_detallado
-                (cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden))
-
-            ejecutar_query("""
-                INSERT INTO plan_cuentas (codigo, nombre)
-                VALUES (?, ?)
-            """, (cuenta, detalle))
+    return reemplazar_plan_desde_dataframe(
+        df,
+        empresa_id=_empresa_id_actual(),
+        formato="detallado",
+        usuario=_usuario_actual_nombre(),
+        motivo="Reemplazo de plan estructurado desde Configuración",
+    )
 
 
 def guardar_cuenta_manual(cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden):
-    ejecutar_query("""
-        INSERT OR REPLACE INTO plan_cuentas_detallado
-        (cuenta, detalle, imputable, ajustable, tipo, madre, nivel, orden)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (cuenta, detalle, imputable, ajustable, tipo, madre, int(nivel), int(orden)))
-
-    ejecutar_query("""
-        DELETE FROM plan_cuentas
-        WHERE codigo = ?
-    """, (cuenta,))
-
-    ejecutar_query("""
-        INSERT INTO plan_cuentas (codigo, nombre)
-        VALUES (?, ?)
-    """, (cuenta, detalle))
+    return guardar_cuenta_plan(
+        empresa_id=_empresa_id_actual(),
+        codigo=cuenta,
+        nombre=detalle,
+        imputable=imputable,
+        ajustable=ajustable,
+        tipo=tipo,
+        madre=madre,
+        nivel=int(nivel),
+        orden=int(orden),
+        comportamiento_contable="",
+        permite_imputacion_operativa=1 if imputable == "S" else 0,
+        requiere_auxiliar=0,
+        modulo_origen_preferido="",
+        usuario=_usuario_actual_nombre(),
+        motivo="Alta/edición manual desde Configuración → Plan de Cuentas",
+    )
 
 
 def eliminar_cuenta(cuenta):
-    ejecutar_query("""
-        DELETE FROM plan_cuentas_detallado
-        WHERE cuenta = ?
-    """, (cuenta,))
+    return eliminar_cuenta_plan(
+        cuenta,
+        empresa_id=_empresa_id_actual(),
+        usuario=_usuario_actual_nombre(),
+        motivo="Eliminación desde Configuración → Plan de Cuentas",
+    )
 
-    ejecutar_query("""
-        DELETE FROM plan_cuentas
-        WHERE codigo = ?
-    """, (cuenta,))
 
+def _mostrar_alertas_plan_cuentas(empresa_id):
+    diagnostico = diagnosticar_plan_cuentas_pro(empresa_id=empresa_id)
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Cuentas", diagnostico["total_cuentas"])
+    col2.metric("Imputables", diagnostico["imputables"])
+    col3.metric("Con uso operativo", diagnostico["con_comportamiento"])
+    col4.metric("Pendientes", diagnostico["pendientes"])
+
+    errores = diagnostico.get("errores", [])
+    advertencias = diagnostico.get("advertencias", [])
+    faltantes = diagnostico.get("criticos_faltantes", [])
+
+    if errores:
+        st.error("Hay cuentas que no respetan la regla central del plan de cuentas.")
+        st.caption("Una cuenta no imputable no puede tener uso operativo del sistema ni permitir imputación operativa.")
+        st.dataframe(preparar_vista(pd.DataFrame(errores)), use_container_width=True)
+        col_a, col_b = st.columns([1, 2])
+        with col_a:
+            if st.button("Normalizar reglas seguras del plan", key="normalizar_plan_cuentas_seguro"):
+                resultado = normalizar_metadata_plan_cuentas(
+                    empresa_id=empresa_id,
+                    usuario=_usuario_actual_nombre(),
+                    motivo="Corrección de cuentas no imputables con uso operativo/imputación operativa",
+                )
+                if resultado.get("ok"):
+                    st.success(
+                        f"Plan normalizado. Cuentas no imputables corregidas: {resultado.get('corregidas_no_imputables', 0)}."
+                    )
+                    st.rerun()
+                else:
+                    st.error("No se pudo normalizar el plan: " + "; ".join(resultado.get("errores", [resultado.get("error", "Error desconocido")])) )
+    else:
+        st.success("Reglas estructurales del plan: OK. Las cuentas no imputables no tienen uso operativo del sistema.")
+
+    if advertencias:
+        st.warning("Hay asignaciones que conviene revisar.")
+        st.dataframe(preparar_vista(pd.DataFrame(advertencias)), use_container_width=True)
+
+    if faltantes:
+        st.info("Usos operativos críticos aún no cubiertos: " + ", ".join(faltantes))
+
+
+def mostrar_plan_cuentas():
+    st.subheader("Plan de Cuentas PRO")
+
+    st.info(
+        "El Plan de Cuentas es la fuente de verdad contable del sistema. "
+        "Desde acá se crean y editan las cuentas, se define si son imputables y se informa, si corresponde, su uso operativo opcional para automatización y diagnóstico. "
+        "Contabilidad → Uso operativo queda como tablero de control y diagnóstico, no como carga duplicada."
+    )
+
+    empresa_id = _empresa_id_actual()
+    asegurar_estructura_plan_cuentas()
+
+    _mostrar_alertas_plan_cuentas(empresa_id)
+
+    tabs = st.tabs([
+        "📘 Plan actual",
+        "✏️ Crear / editar cuenta",
+        "🧭 Sugerencias",
+        "📥 Importar / borrar",
+        "🕓 Auditoría",
+    ])
+
+    with tabs[0]:
+        cuentas = listar_plan_cuentas(empresa_id=empresa_id)
+        df = _preparar_plan_dataframe(cuentas)
+
+        st.markdown("#### Plan actual")
+        if df.empty:
+            st.info("No hay plan de cuentas cargado.")
+        else:
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                filtro_texto = st.text_input("Buscar cuenta", key="plan_buscar")
+            with col2:
+                filtro_imputable = st.selectbox("Imputable", ["Todas", "S", "N"], key="plan_filtro_imputable")
+            with col3:
+                comportamientos = ["Todos", "Sin comportamiento"] + sorted([c for c in df["comportamiento_contable"].dropna().unique() if str(c).strip()])
+                filtro_comp = st.selectbox("Uso operativo del sistema", comportamientos, key="plan_filtro_comportamiento")
+            with col4:
+                tipos = ["Todos"] + sorted([t for t in df["tipo"].dropna().unique() if str(t).strip()])
+                filtro_tipo = st.selectbox("Tipo", tipos, key="plan_filtro_tipo")
+
+            vista = df.copy()
+            if filtro_texto:
+                patron = filtro_texto.lower().strip()
+                vista = vista[
+                    vista["codigo"].astype(str).str.lower().str.contains(patron, na=False)
+                    | vista["nombre"].astype(str).str.lower().str.contains(patron, na=False)
+                ]
+            if filtro_imputable != "Todas":
+                vista = vista[vista["imputable"] == filtro_imputable]
+            if filtro_comp == "Sin comportamiento":
+                vista = vista[vista["comportamiento_contable"].fillna("").astype(str).str.strip() == ""]
+            elif filtro_comp != "Todos":
+                vista = vista[vista["comportamiento_contable"] == filtro_comp]
+            if filtro_tipo != "Todos":
+                vista = vista[vista["tipo"] == filtro_tipo]
+
+            columnas_vista = {
+                "codigo": "Código",
+                "nombre": "Cuenta",
+                "imputable": "Imputable",
+                "tipo": "Tipo",
+                "madre": "Madre",
+                "nivel": "Nivel",
+                "orden": "Orden",
+                "comportamiento_contable": "Uso operativo",
+                "permite_imputacion_operativa": "Imputación operativa",
+                "requiere_auxiliar": "Requiere auxiliar",
+                "modulo_origen_preferido": "Módulo sugerido",
+                "estado_configuracion": "Estado",
+            }
+            st.caption(f"Cuentas mostradas: {len(vista)} de {len(df)}")
+            st.dataframe(preparar_vista(vista.rename(columns=columnas_vista)), use_container_width=True)
+
+    with tabs[1]:
+        st.markdown("#### Crear / editar cuenta")
+        cuentas = listar_plan_cuentas(empresa_id=empresa_id)
+        opciones = ["➕ Nueva cuenta"] + [f"{item['codigo']} — {item['nombre']}" for item in cuentas]
+        seleccion = st.selectbox("Cuenta a editar", opciones, key="plan_editar_seleccion")
+        cuenta_actual = None
+        if not seleccion.startswith("➕"):
+            codigo_actual = seleccion.split("—", 1)[0].strip()
+            cuenta_actual = obtener_cuenta_plan(codigo_actual, empresa_id=empresa_id)
+
+        with st.form("form_plan_cuentas_pro"):
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                codigo = st.text_input("Código", value=(cuenta_actual or {}).get("codigo", ""))
+            with col2:
+                nombre = st.text_input("Nombre / detalle", value=(cuenta_actual or {}).get("nombre", ""))
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                imputable = st.selectbox(
+                    "Imputable",
+                    ["S", "N"],
+                    index=0 if (cuenta_actual or {}).get("imputable", "S") == "S" else 1,
+                    help="Solo las cuentas imputables pueden recibir movimientos y uso operativo del sistema.",
+                )
+            with col2:
+                ajustable = st.selectbox(
+                    "Ajustable",
+                    ["N", "S"],
+                    index=0 if (cuenta_actual or {}).get("ajustable", "N") == "N" else 1,
+                )
+            with col3:
+                tipos = list(TIPOS_CUENTA.keys())
+                tipo_actual = (cuenta_actual or {}).get("tipo", "D") or "D"
+                tipo = st.selectbox("Tipo", tipos, index=tipos.index(tipo_actual) if tipo_actual in tipos else tipos.index("D"))
+            with col4:
+                madre = st.text_input("Cuenta madre", value=(cuenta_actual or {}).get("madre", ""))
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                nivel = st.number_input("Nivel", min_value=1, max_value=20, value=int((cuenta_actual or {}).get("nivel", 1) or 1), step=1)
+            with col2:
+                orden = st.number_input("Orden", min_value=0, value=int((cuenta_actual or {}).get("orden", 0) or 0), step=1)
+            with col3:
+                permite_default = bool((cuenta_actual or {}).get("permite_imputacion_operativa", 1 if imputable == "S" else 0)) if imputable == "S" else False
+                permite = st.checkbox("Permite imputación operativa", value=permite_default, disabled=imputable != "S")
+            with col4:
+                requiere_default = bool((cuenta_actual or {}).get("requiere_auxiliar", 0)) if imputable == "S" else False
+                requiere_auxiliar = st.checkbox("Requiere auxiliar", value=requiere_default, disabled=imputable != "S")
+
+            if imputable != "S":
+                st.warning("Esta cuenta no es imputable: no puede tener uso operativo del sistema ni imputación operativa.")
+                comportamiento = ""
+                modulo = ""
+            else:
+                col1, col2 = st.columns(2)
+                with col1:
+                    comportamiento_actual = (cuenta_actual or {}).get("comportamiento_contable", "") or ""
+                    opciones_comp = [_formatear_comportamiento("")] + [_formatear_comportamiento(c) for c in sorted(COMPORTAMIENTOS_CONTABLES.keys())]
+                    valor_actual = _formatear_comportamiento(comportamiento_actual)
+                    idx = opciones_comp.index(valor_actual) if valor_actual in opciones_comp else 0
+                    comportamiento_opcion = st.selectbox("Uso operativo del sistema (opcional)", opciones_comp, index=idx, help="No define la estructura contable. Solo ayuda a automatizaciones, controles y diagnósticos.")
+                    comportamiento = _codigo_desde_opcion_comportamiento(comportamiento_opcion)
+                with col2:
+                    modulo_actual = (cuenta_actual or {}).get("modulo_origen_preferido", "") or ""
+                    modulo = st.selectbox(
+                        "Módulo de origen preferido",
+                        MODULOS_ORIGEN_PREFERIDO,
+                        index=MODULOS_ORIGEN_PREFERIDO.index(modulo_actual) if modulo_actual in MODULOS_ORIGEN_PREFERIDO else 0,
+                    )
+
+                sugerencia = sugerir_comportamiento_plan(codigo, nombre, imputable)
+                if sugerencia.get("comportamiento") and not comportamiento:
+                    st.info(
+                        f"Sugerencia: {sugerencia['comportamiento']} ({sugerencia['confianza']}). "
+                        f"Motivo: {sugerencia['motivo']}"
+                    )
+
+            motivo = st.text_area(
+                "Motivo / observación del cambio",
+                value="Edición desde Plan de Cuentas PRO",
+                help="Queda registrado en la auditoría del plan de cuentas.",
+            )
+            guardar = st.form_submit_button("Guardar cuenta en Plan de Cuentas")
+
+            if guardar:
+                resultado = guardar_cuenta_plan(
+                    empresa_id=empresa_id,
+                    codigo=codigo,
+                    nombre=nombre,
+                    imputable=imputable,
+                    ajustable=ajustable,
+                    tipo=tipo,
+                    madre=madre,
+                    nivel=int(nivel),
+                    orden=int(orden),
+                    comportamiento_contable=comportamiento,
+                    permite_imputacion_operativa=1 if permite else 0,
+                    requiere_auxiliar=1 if requiere_auxiliar else 0,
+                    modulo_origen_preferido=modulo,
+                    usuario=_usuario_actual_nombre(),
+                    motivo=motivo,
+                )
+                if resultado.get("ok"):
+                    st.success("Cuenta guardada correctamente en el Plan de Cuentas.")
+                    st.rerun()
+                else:
+                    st.error("No se pudo guardar la cuenta: " + "; ".join(resultado.get("errores", [])))
+
+        st.divider()
+        st.markdown("#### Limpiar uso operativo de una cuenta")
+        st.caption("Usar cuando una cuenta quedó con un uso operativo incorrecto. No borra la cuenta ni movimientos; solo limpia ese uso operativo y deja auditoría.")
+        cuentas_con_comp = [item for item in listar_plan_cuentas(empresa_id=empresa_id) if item.get("comportamiento_contable")]
+        if cuentas_con_comp:
+            opcion_limpiar = st.selectbox(
+                "Cuenta con uso operativo",
+                [f"{item['codigo']} — {item['nombre']} ({item['comportamiento_contable']})" for item in cuentas_con_comp],
+                key="plan_limpiar_comportamiento",
+            )
+            motivo_limpieza = st.text_input(
+                "Motivo de limpieza",
+                value="Corrección de uso operativo desde Plan de Cuentas PRO",
+            )
+            if st.button("Limpiar uso operativo seleccionado"):
+                codigo_limpieza = opcion_limpiar.split("—", 1)[0].strip()
+                resultado = limpiar_comportamiento_cuenta(
+                    codigo_limpieza,
+                    empresa_id=empresa_id,
+                    usuario=_usuario_actual_nombre(),
+                    motivo=motivo_limpieza,
+                )
+                if resultado.get("ok"):
+                    st.success("Uso operativo limpiado con auditoría.")
+                    st.rerun()
+                else:
+                    st.error("No se pudo limpiar: " + "; ".join(resultado.get("errores", [])))
+        else:
+            st.info("No hay cuentas con uso operativo asignado.")
+
+    with tabs[2]:
+        st.markdown("#### Sugerencias del Plan de Cuentas")
+        st.caption("Las sugerencias se calculan sobre cuentas imputables sin uso operativo. La aplicación se realiza editando la cuenta desde la pestaña Crear / editar cuenta.")
+        sugerencias = listar_sugerencias_plan_cuentas(empresa_id=empresa_id)
+        if not sugerencias:
+            st.success("No hay sugerencias pendientes sobre cuentas imputables sin uso operativo.")
+        else:
+            df_sug = pd.DataFrame(sugerencias)
+            columnas = {
+                "codigo": "Código",
+                "nombre": "Cuenta",
+                "comportamiento": "Sugerencia",
+                "confianza": "Confianza",
+                "motivo": "Motivo",
+            }
+            st.dataframe(preparar_vista(df_sug[["codigo", "nombre", "comportamiento", "confianza", "motivo"]].rename(columns=columnas)), use_container_width=True)
+            st.info("Para aplicar una sugerencia, elegí la cuenta en Crear / editar cuenta y guardá el uso operativo en el Plan de Cuentas.")
+
+    with tabs[3]:
+        st.markdown("#### Importar plan de cuentas")
+        st.info(
+            "Podés cargar un CSV estructurado con columnas cuenta/detalle/imputable/ajustable/tipo/madre/nivel/orden, "
+            "o uno simple con codigo/nombre. El reemplazo afecta solo al plan de cuentas, no borra movimientos operativos."
+        )
+        archivo = st.file_uploader("Cargar plan de cuentas CSV", type=["csv"], key="upload_plan_cuentas_pro")
+        if archivo:
+            df = leer_csv_configuracion(archivo)
+            df = normalizar_columnas(df)
+            st.write("Vista previa del archivo:")
+            st.dataframe(preparar_vista(df.head(20)), use_container_width=True)
+            columnas = set(df.columns)
+            if {"cuenta", "detalle"}.issubset(columnas):
+                tipo_plan = "detallado"
+                st.success("Formato detectado: plan estructurado.")
+            elif {"codigo", "nombre"}.issubset(columnas):
+                tipo_plan = "simple"
+                st.success("Formato detectado: plan simple.")
+            else:
+                tipo_plan = None
+                st.error("No se reconoció el formato. Debe tener cuenta/detalle o codigo/nombre.")
+            if tipo_plan and st.button("Reemplazar plan de cuentas con este archivo"):
+                resultado = reemplazar_plan_desde_dataframe(
+                    df,
+                    empresa_id=empresa_id,
+                    formato=tipo_plan,
+                    usuario=_usuario_actual_nombre(),
+                    motivo="Reemplazo desde Configuración → Plan de Cuentas PRO",
+                )
+                if resultado.get("ok"):
+                    st.success(f"Plan reemplazado. Cuentas procesadas: {resultado.get('procesadas', 0)}.")
+                    st.rerun()
+                else:
+                    st.error("No se pudo reemplazar el plan: " + "; ".join(resultado.get("errores", [])))
+
+        st.divider()
+        with st.expander("Borrar plan de cuentas actual", expanded=False):
+            st.warning("Esto no borra Libro Diario, comprobantes ni movimientos; solo borra el catálogo del plan de cuentas.")
+            confirmar = st.text_input("Para borrar escribí BORRAR PLAN", key="confirm_borrar_plan_pro")
+            if st.button("Borrar plan de cuentas", disabled=confirmar != "BORRAR PLAN"):
+                resultado = borrar_plan_cuentas_completo(
+                    empresa_id=empresa_id,
+                    usuario=_usuario_actual_nombre(),
+                    motivo="Borrado confirmado desde Configuración → Plan de Cuentas PRO",
+                )
+                if resultado.get("ok"):
+                    st.success("Plan de cuentas borrado.")
+                    st.rerun()
+                else:
+                    st.error("No se pudo borrar el plan: " + "; ".join(resultado.get("errores", [])))
+
+    with tabs[4]:
+        st.markdown("#### Auditoría del Plan de Cuentas")
+        eventos = listar_eventos_plan_cuentas(empresa_id=empresa_id, limite=300)
+        if not eventos:
+            st.info("Todavía no hay eventos registrados del Plan de Cuentas PRO.")
+        else:
+            st.dataframe(preparar_vista(pd.DataFrame(eventos)), use_container_width=True)
 
 # ======================================================
 # CATEGORÍAS DE COMPRA
@@ -771,168 +1169,7 @@ def mostrar_tipos_comprobantes():
 # ======================================================
 # TAB 2 - PLAN DE CUENTAS
 # ======================================================
-
-def mostrar_plan_cuentas():
-    st.subheader("Plan de Cuentas")
-
-    st.info(
-        "Cargá acá el archivo Plan_de_Cuenta_Mejorado_Estructurado.csv. "
-        "También podés borrar el plan actual y crear cuentas manualmente."
-    )
-
-    archivo = st.file_uploader(
-        "Cargar plan de cuentas CSV",
-        type=["csv"],
-        key="upload_plan_cuentas"
-    )
-
-    if archivo:
-        df = leer_csv_configuracion(archivo)
-        df = normalizar_columnas(df)
-
-        st.write("Vista previa del archivo:")
-        st.dataframe(preparar_vista(df.head(20)), use_container_width=True)
-
-        columnas = set(df.columns)
-
-        if {"cuenta", "detalle"}.issubset(columnas):
-            tipo_plan = "estructurado"
-            st.success("Formato detectado: plan de cuentas estructurado.")
-        elif {"codigo", "nombre"}.issubset(columnas):
-            tipo_plan = "simple"
-            st.success("Formato detectado: plan de cuentas simple.")
-        else:
-            tipo_plan = None
-            st.error(
-                "No se reconoció el formato. El archivo debe tener columnas "
-                "'cuenta' y 'detalle' o 'codigo' y 'nombre'."
-            )
-
-        if tipo_plan:
-            if st.button("Reemplazar plan de cuentas con este archivo"):
-                if tipo_plan == "estructurado":
-                    reemplazar_plan_detallado(df)
-                else:
-                    reemplazar_plan_simple(df)
-
-                st.success("Plan de cuentas cargado correctamente.")
-                st.rerun()
-
-    st.divider()
-
-    st.subheader("Plan actual")
-
-    df_detallado = obtener_plan_detallado()
-    df_simple = obtener_plan_simple()
-
-    if not df_detallado.empty:
-        st.caption(f"Cuentas cargadas: {len(df_detallado)}")
-        st.dataframe(preparar_vista(df_detallado), use_container_width=True)
-
-    elif not df_simple.empty:
-        st.caption(f"Cuentas cargadas: {len(df_simple)}")
-        st.dataframe(preparar_vista(df_simple), use_container_width=True)
-
-    else:
-        st.info("No hay plan de cuentas cargado.")
-
-    st.divider()
-
-    st.subheader("Borrar plan de cuentas actual")
-
-    if "confirmar_borrar_plan" not in st.session_state:
-        st.session_state["confirmar_borrar_plan"] = False
-
-    if st.button("🧹 Borrar plan de cuentas actual"):
-        st.session_state["confirmar_borrar_plan"] = True
-
-    if st.session_state["confirmar_borrar_plan"]:
-        st.warning(
-            "¿Confirmás borrar todo el plan de cuentas actual? "
-            "Esto no borra Libro Diario ni comprobantes cargados."
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            if st.button("Sí, borrar plan"):
-                borrar_plan_cuentas()
-                st.success("Plan de cuentas borrado.")
-                st.session_state["confirmar_borrar_plan"] = False
-                st.rerun()
-
-        with col2:
-            if st.button("Cancelar borrado"):
-                st.session_state["confirmar_borrar_plan"] = False
-                st.rerun()
-
-    st.divider()
-
-    st.subheader("Crear / Actualizar cuenta manualmente")
-
-    with st.form("form_cuenta_manual"):
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-            cuenta = st.text_input("Código cuenta")
-
-        with col2:
-            detalle = st.text_input("Nombre / detalle")
-
-        with col3:
-            imputable = st.selectbox("Imputable", ["S", "N"])
-
-        with col4:
-            tipo = st.selectbox("Tipo", ["D", "A", "N"])
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-            ajustable = st.selectbox("Ajustable", ["N", "S"])
-
-        with col2:
-            madre = st.text_input("Cuenta madre")
-
-        with col3:
-            nivel = st.number_input("Nivel", min_value=1, max_value=20, value=1, step=1)
-
-        with col4:
-            orden = st.number_input("Orden", min_value=0, value=0, step=1)
-
-        guardar = st.form_submit_button("Guardar cuenta")
-
-        if guardar:
-            if cuenta == "" or detalle == "":
-                st.warning("Completar código y nombre de cuenta.")
-            else:
-                guardar_cuenta_manual(
-                    cuenta.strip(),
-                    detalle.strip(),
-                    imputable,
-                    ajustable,
-                    tipo,
-                    madre.strip(),
-                    int(nivel),
-                    int(orden)
-                )
-
-                st.success("Cuenta guardada correctamente.")
-                st.rerun()
-
-    st.divider()
-
-    with st.form("form_eliminar_cuenta"):
-        cuenta_eliminar = st.text_input("Código de cuenta a eliminar")
-        eliminar = st.form_submit_button("Eliminar cuenta")
-
-        if eliminar:
-            if cuenta_eliminar == "":
-                st.warning("Indicá el código de cuenta.")
-            else:
-                eliminar_cuenta(cuenta_eliminar.strip())
-                st.success("Cuenta eliminada.")
-                st.rerun()
-
+# La función mostrar_plan_cuentas() queda definida en la sección de servicio/plan PRO.
 
 # ======================================================
 # TAB 3 - CATEGORÍAS DE COMPRA

@@ -1,23 +1,27 @@
 from pathlib import Path
 
 
-def test_comportamientos_integra_asistente_normalizacion():
+def test_uso_operativo_queda_como_tablero_no_fuente_de_verdad():
     contenido = Path("modulos/comportamientos_contables_componentes.py").read_text(encoding="utf-8")
 
-    assert "mostrar_asistente_normalizacion_contable_ui" in contenido
-    assert "Asistente de normalización" in contenido
-    assert "asistente_normalizacion" in contenido
+    assert "El Plan de Cuentas es la fuente de verdad" in contenido
+    assert "Configuración → Plan de Cuentas" in contenido
+    assert "no como carga duplicada" in contenido
+    assert "Uso operativo" in contenido
 
 
-def test_componente_normalizacion_no_usa_st_title():
-    contenido = Path("modulos/normalizacion_contable_componentes.py").read_text(encoding="utf-8")
+def test_configuracion_integra_plan_cuentas_pro():
+    contenido = Path("modulos/configuracion.py").read_text(encoding="utf-8")
 
-    assert "st.title" not in contenido
+    assert "Plan de Cuentas PRO" in contenido
+    assert "comportamiento_contable" in contenido
+    assert "permite_imputacion_operativa" in contenido
+    assert "requiere_auxiliar" in contenido
 
 
-def test_core_incluye_clientes_y_proveedores_no_criticos():
-    contenido = Path("core/contabilidad_coherencia.py").read_text(encoding="utf-8")
+def test_no_reintroduce_asignacion_manual_paralela_en_comportamientos():
+    contenido = Path("modulos/comportamientos_contables_componentes.py").read_text(encoding="utf-8")
 
-    assert '"CLIENTES"' in contenido
-    assert '"PROVEEDORES"' in contenido
-    assert 'if codigo not in {"CLIENTES", "PROVEEDORES"}' in contenido
+    assert "Asignar manualmente" not in contenido
+    assert "Guardar comportamiento" not in contenido
+    assert "actualizar_comportamiento_plan_cuentas" not in contenido
