@@ -123,6 +123,7 @@ def _resultado_base(accion):
         "backup": "",
         "filas_borradas": 0,
         "detalle": [],
+        "foreign_key_check": "",
     }
 
 
@@ -191,6 +192,162 @@ def _borrar_si_existe(cur, resultado, tabla, where_sql="1 = 1", params=None):
         tabla,
         _delete(cur, tabla, where_sql, params or []),
     )
+
+
+def _foreign_key_check(conn):
+    try:
+        errores = conn.execute("PRAGMA foreign_key_check").fetchall()
+    except Exception as e:
+        return [("ERROR", str(e))]
+
+    return errores or []
+
+
+def _validar_integridad_fk(conn):
+    errores = _foreign_key_check(conn)
+    if errores:
+        muestra = "; ".join(str(x) for x in errores[:10])
+        raise ValueError(f"PRAGMA foreign_key_check detectó inconsistencias: {muestra}")
+    return "OK"
+
+
+# ======================================================
+# LISTAS CONTROLADAS DE DIAGNÓSTICO / LIMPIEZA DEMO
+# ======================================================
+
+TABLAS_DIAGNOSTICO_DEMO_OPERATIVO = [
+    "historial_cargas",
+    "errores_carga",
+    "advertencias_carga",
+
+    "ventas_comprobantes",
+    "compras_comprobantes",
+    "comprobantes_procesados",
+
+    "cuenta_corriente_clientes",
+    "cuenta_corriente_proveedores",
+
+    "cobranzas",
+    "cobranzas_imputaciones",
+    "cobranzas_retenciones",
+    "cobranzas_auditoria",
+
+    "pagos",
+    "pagos_imputaciones",
+    "pagos_retenciones",
+    "pagos_auditoria",
+
+    "documentos_tesoreria",
+    "tesoreria_documentos",
+    "documentos_emitidos",
+
+    "tesoreria_operaciones",
+    "tesoreria_operaciones_componentes",
+    "tesoreria_operaciones_vinculos",
+    "tesoreria_auditoria",
+
+    "bancos_importaciones",
+    "bancos_movimientos",
+    "bancos_grupos_fiscales",
+    "bancos_asientos_propuestos",
+    "bancos_conciliaciones",
+    "bancos_conciliaciones_detalle",
+
+    "caja_movimientos",
+    "caja_asientos",
+    "caja_arqueos",
+    "caja_auditoria",
+
+    "iva_movimientos_fiscales",
+    "iva_movimientos_fiscales_eventos",
+    "iva_cierres_periodos",
+    "iva_cierres_periodos_eventos",
+    "iva_cierres_pagos",
+    "iva_cierres_asientos_propuestos",
+
+    "asientos_propuestos",
+    "asientos_propuestos_detalle",
+    "asientos_propuestos_eventos",
+    "asientos_bandeja_eventos",
+    "asientos_bandeja_lotes",
+
+    "libro_diario",
+]
+
+
+TABLAS_LIMPIEZA_DEMO_OPERATIVA = [
+    # Conciliación bancaria y propuestas bancarias.
+    "bancos_conciliaciones_detalle",
+    "bancos_conciliaciones",
+    "bancos_asientos_propuestos",
+
+    # Bandeja contable general.
+    "asientos_bandeja_eventos",
+    "asientos_bandeja_lotes",
+
+    # Propuestas contables generales.
+    "asientos_propuestos_eventos",
+    "asientos_propuestos_detalle",
+    "asientos_propuestos",
+
+    # IVA cierres y pagos del período.
+    "iva_cierres_asientos_propuestos",
+    "iva_cierres_pagos",
+    "iva_cierres_periodos_eventos",
+    "iva_cierres_periodos",
+
+    # IVA movimientos fiscales adicionales y eventos.
+    "iva_movimientos_fiscales_eventos",
+    "iva_movimientos_fiscales",
+
+    # Control fiscal bancario y banco.
+    "bancos_grupos_fiscales",
+    "bancos_movimientos",
+    "bancos_importaciones",
+
+    # Caja.
+    "caja_asientos",
+    "caja_arqueos",
+    "caja_auditoria",
+    "caja_movimientos",
+
+    # Documentos emitidos por circuitos de tesorería.
+    "documentos_tesoreria",
+    "tesoreria_documentos",
+    "documentos_emitidos",
+
+    # Cobranzas / pagos.
+    "cobranzas_imputaciones",
+    "cobranzas_retenciones",
+    "cobranzas_auditoria",
+
+    "pagos_imputaciones",
+    "pagos_retenciones",
+    "pagos_auditoria",
+
+    # Tesorería.
+    "tesoreria_operaciones_componentes",
+    "tesoreria_operaciones_vinculos",
+    "tesoreria_auditoria",
+    "tesoreria_operaciones",
+
+    # Cuentas corrientes y contabilidad.
+    "cuenta_corriente_clientes",
+    "cuenta_corriente_proveedores",
+    "libro_diario",
+
+    # Cabeceras de cobranzas / pagos.
+    "cobranzas",
+    "pagos",
+
+    # Compras / ventas e historial de importación.
+    "ventas_comprobantes",
+    "compras_comprobantes",
+    "comprobantes_procesados",
+    "errores_carga",
+    "advertencias_carga",
+    "historial_cargas",
+]
 
 
 # ======================================================
@@ -468,40 +625,12 @@ def _borrar_documentos_tesoreria(cur, resultado, origen_tabla, origen_ids, numer
 def diagnosticar_datos_demo(empresa_id=1):
     empresa_id = int(empresa_id or 1)
 
-    tablas = [
-        "historial_cargas",
-        "ventas_comprobantes",
-        "compras_comprobantes",
-        "cuenta_corriente_clientes",
-        "cuenta_corriente_proveedores",
-        "cobranzas",
-        "cobranzas_imputaciones",
-        "cobranzas_retenciones",
-        "pagos",
-        "pagos_imputaciones",
-        "pagos_retenciones",
-        "tesoreria_operaciones",
-        "tesoreria_operaciones_componentes",
-        "tesoreria_operaciones_vinculos",
-        "libro_diario",
-        "bancos_movimientos",
-        "bancos_conciliaciones",
-        "bancos_conciliaciones_detalle",
-        "caja_movimientos",
-        "caja_asientos",
-        "caja_arqueos",
-        "caja_auditoria",
-        "documentos_tesoreria",
-        "tesoreria_documentos",
-        "documentos_emitidos",
-    ]
-
     conn = conectar()
 
     try:
         filas = []
 
-        for tabla in tablas:
+        for tabla in TABLAS_DIAGNOSTICO_DEMO_OPERATIVO:
             existe = _tabla_existe(conn, tabla)
 
             if not existe:
@@ -563,6 +692,7 @@ def limpiar_libro_diario_admin(empresa_id=1, confirmar_texto=""):
             params,
         )
 
+        resultado["foreign_key_check"] = _validar_integridad_fk(conn)
         conn.commit()
 
         resultado["mensaje"] = (
@@ -579,6 +709,7 @@ def limpiar_libro_diario_admin(empresa_id=1, confirmar_texto=""):
             "backup": resultado["backup"],
             "filas_borradas": 0,
             "detalle": resultado["detalle"],
+            "foreign_key_check": resultado.get("foreign_key_check", ""),
         }
 
     finally:
@@ -684,6 +815,7 @@ def limpiar_cobranzas_recibos_admin(empresa_id=1, confirmar_texto=""):
                 in_params,
             )
 
+        resultado["foreign_key_check"] = _validar_integridad_fk(conn)
         conn.commit()
 
         resultado["mensaje"] = (
@@ -700,6 +832,7 @@ def limpiar_cobranzas_recibos_admin(empresa_id=1, confirmar_texto=""):
             "backup": resultado["backup"],
             "filas_borradas": 0,
             "detalle": resultado["detalle"],
+            "foreign_key_check": resultado.get("foreign_key_check", ""),
         }
 
     finally:
@@ -805,6 +938,7 @@ def limpiar_pagos_ordenes_admin(empresa_id=1, confirmar_texto=""):
                 in_params,
             )
 
+        resultado["foreign_key_check"] = _validar_integridad_fk(conn)
         conn.commit()
 
         resultado["mensaje"] = (
@@ -821,6 +955,7 @@ def limpiar_pagos_ordenes_admin(empresa_id=1, confirmar_texto=""):
             "backup": resultado["backup"],
             "filas_borradas": 0,
             "detalle": resultado["detalle"],
+            "foreign_key_check": resultado.get("foreign_key_check", ""),
         }
 
     finally:
@@ -854,6 +989,9 @@ def limpiar_banco_demo_admin(empresa_id=1, confirmar_texto=""):
             "bancos_conciliaciones_detalle",
             "bancos_conciliaciones",
             "bancos_asientos_propuestos",
+            "iva_movimientos_fiscales_eventos",
+            "iva_movimientos_fiscales",
+            "bancos_grupos_fiscales",
             "bancos_movimientos",
             "bancos_importaciones",
         ]
@@ -865,6 +1003,7 @@ def limpiar_banco_demo_admin(empresa_id=1, confirmar_texto=""):
             where_sql, params = _where_empresa(conn, tabla, empresa_id)
             _borrar_si_existe(cur, resultado, tabla, where_sql, params)
 
+        resultado["foreign_key_check"] = _validar_integridad_fk(conn)
         conn.commit()
 
         resultado["mensaje"] = (
@@ -881,6 +1020,7 @@ def limpiar_banco_demo_admin(empresa_id=1, confirmar_texto=""):
             "backup": resultado["backup"],
             "filas_borradas": 0,
             "detalle": resultado["detalle"],
+            "foreign_key_check": resultado.get("foreign_key_check", ""),
         }
 
     finally:
@@ -910,62 +1050,20 @@ def limpiar_demo_operativa_admin(empresa_id=1, confirmar_texto=""):
     cur = conn.cursor()
 
     try:
-        orden_tablas = [
-            "bancos_conciliaciones_detalle",
-            "bancos_conciliaciones",
-            "bancos_asientos_propuestos",
-            "bancos_movimientos",
-            "bancos_importaciones",
-
-            "caja_asientos",
-            "caja_arqueos",
-            "caja_auditoria",
-            "caja_movimientos",
-
-            "documentos_tesoreria",
-            "tesoreria_documentos",
-            "documentos_emitidos",
-
-            "cobranzas_imputaciones",
-            "cobranzas_retenciones",
-            "cobranzas_auditoria",
-
-            "pagos_imputaciones",
-            "pagos_retenciones",
-            "pagos_auditoria",
-
-            "tesoreria_operaciones_componentes",
-            "tesoreria_operaciones_vinculos",
-            "tesoreria_auditoria",
-            "tesoreria_operaciones",
-
-            "cuenta_corriente_clientes",
-            "cuenta_corriente_proveedores",
-            "libro_diario",
-
-            "cobranzas",
-            "pagos",
-
-            "ventas_comprobantes",
-            "compras_comprobantes",
-            "comprobantes_procesados",
-            "errores_carga",
-            "advertencias_carga",
-            "historial_cargas",
-        ]
-
-        for tabla in orden_tablas:
+        for tabla in TABLAS_LIMPIEZA_DEMO_OPERATIVA:
             if not _tabla_existe(conn, tabla):
                 continue
 
             where_sql, params = _where_empresa(conn, tabla, empresa_id)
             _borrar_si_existe(cur, resultado, tabla, where_sql, params)
 
+        resultado["foreign_key_check"] = _validar_integridad_fk(conn)
         conn.commit()
 
         resultado["mensaje"] = (
             f"Demo operativa limpiada correctamente. "
-            f"Filas borradas: {resultado['filas_borradas']}."
+            f"Filas borradas: {resultado['filas_borradas']}. "
+            f"Integridad referencial: {resultado['foreign_key_check']}."
         )
         return resultado
 
@@ -977,6 +1075,7 @@ def limpiar_demo_operativa_admin(empresa_id=1, confirmar_texto=""):
             "backup": resultado["backup"],
             "filas_borradas": 0,
             "detalle": resultado["detalle"],
+            "foreign_key_check": resultado.get("foreign_key_check", ""),
         }
 
     finally:

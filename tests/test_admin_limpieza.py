@@ -72,9 +72,42 @@ def test_admin_limpieza_incluye_conciliaciones_y_banco():
     assert "bancos_conciliaciones_detalle" in contenido
     assert "bancos_movimientos" in contenido
     assert "bancos_importaciones" in contenido
+    assert "bancos_grupos_fiscales" in contenido
 
 
-def test_admin_limpieza_tiene_backup_y_confirmacion_fuerte():
+def test_admin_limpieza_integral_incluye_iva_banco_fiscal_y_cierres():
+    contenido = leer_archivo("services/admin_limpieza_service.py")
+
+    assert "iva_movimientos_fiscales" in contenido
+    assert "iva_movimientos_fiscales_eventos" in contenido
+    assert "iva_cierres_periodos" in contenido
+    assert "iva_cierres_periodos_eventos" in contenido
+    assert "iva_cierres_pagos" in contenido
+    assert "iva_cierres_asientos_propuestos" in contenido
+    assert "bancos_grupos_fiscales" in contenido
+
+
+def test_admin_limpieza_integral_incluye_bandeja_y_asientos_propuestos():
+    contenido = leer_archivo("services/admin_limpieza_service.py")
+
+    assert "asientos_propuestos" in contenido
+    assert "asientos_propuestos_detalle" in contenido
+    assert "asientos_propuestos_eventos" in contenido
+    assert "asientos_bandeja_eventos" in contenido
+    assert "asientos_bandeja_lotes" in contenido
+
+
+def test_admin_limpieza_diagnostico_muestra_tablas_operativas_nuevas():
+    contenido = leer_archivo("services/admin_limpieza_service.py")
+
+    assert "TABLAS_DIAGNOSTICO_DEMO_OPERATIVO" in contenido
+    assert "TABLAS_LIMPIEZA_DEMO_OPERATIVA" in contenido
+    assert "bancos_grupos_fiscales" in contenido
+    assert "iva_movimientos_fiscales" in contenido
+    assert "asientos_bandeja_lotes" in contenido
+
+
+def test_admin_limpieza_tiene_backup_confirmacion_fuerte_y_control_fk():
     contenido = leer_archivo("services/admin_limpieza_service.py")
 
     assert "backup_base_datos" in contenido
@@ -83,6 +116,8 @@ def test_admin_limpieza_tiene_backup_y_confirmacion_fuerte():
     assert "BORRAR ORDENES" in contenido
     assert "BORRAR BANCO" in contenido
     assert "LIMPIAR DEMO" in contenido
+    assert "PRAGMA foreign_key_check" in contenido
+    assert "_validar_integridad_fk" in contenido
 
 
 def test_admin_limpieza_no_borra_configuracion_base():
@@ -96,3 +131,13 @@ def test_admin_limpieza_no_borra_configuracion_base():
     assert '"categorias_compra"' not in contenido
     assert '"proveedores_configuracion"' not in contenido
     assert '"clientes_configuracion"' not in contenido
+
+
+def test_admin_limpieza_operativa_no_reinicia_inicio_societario():
+    contenido = leer_archivo("services/admin_limpieza_service.py")
+
+    assert '"ejercicios_contables"' not in contenido
+    assert '"socios_empresa"' not in contenido
+    assert '"capital_social_empresa"' not in contenido
+    assert '"capital_suscripciones"' not in contenido
+    assert '"capital_integraciones"' not in contenido
