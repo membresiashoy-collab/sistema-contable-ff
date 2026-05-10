@@ -65,6 +65,87 @@ def _solo_digitos(valor):
     return re.sub(r"\D+", "", _texto(valor))
 
 
+def _normalizar_tipo_sujeto_ui(valor):
+    try:
+        from services.inicio_empresa_service import normalizar_tipo_sujeto
+
+        return normalizar_tipo_sujeto(valor)
+    except Exception:
+        valor_txt = _texto(valor).upper()
+
+        if "HUMANA" in valor_txt or valor_txt in {"PH", "PERSONA_HUMANA"}:
+            return "PERSONA_HUMANA"
+
+        if "OTRO" in valor_txt:
+            return "OTRO_ENTE"
+
+        return "PERSONA_JURIDICA"
+
+
+def _etiqueta_tipo_sujeto_ui(valor):
+    try:
+        from services.inicio_empresa_service import etiqueta_tipo_sujeto
+
+        return etiqueta_tipo_sujeto(valor)
+    except Exception:
+        codigo = _normalizar_tipo_sujeto_ui(valor)
+        etiquetas = {
+            "PERSONA_HUMANA": "Persona humana",
+            "PERSONA_JURIDICA": "Persona jurídica / sociedad",
+            "OTRO_ENTE": "Otro ente",
+        }
+
+        return etiquetas.get(codigo, codigo)
+
+
+def _opciones_tipo_sujeto_ui():
+    try:
+        from services.inicio_empresa_service import opciones_tipo_sujeto
+
+        opciones = []
+        for item in opciones_tipo_sujeto():
+            codigo = (
+                item.get("codigo")
+                or item.get("valor")
+                or item.get("value")
+                or item.get("tipo_sujeto")
+            )
+            etiqueta = (
+                item.get("etiqueta")
+                or item.get("nombre")
+                or item.get("label")
+                or _etiqueta_tipo_sujeto_ui(codigo)
+            )
+
+            if codigo:
+                opciones.append(
+                    {
+                        "codigo": _normalizar_tipo_sujeto_ui(codigo),
+                        "etiqueta": etiqueta,
+                    }
+                )
+
+        if opciones:
+            vistos = set()
+            unicas = []
+
+            for opcion in opciones:
+                codigo = opcion["codigo"]
+
+                if codigo not in vistos:
+                    vistos.add(codigo)
+                    unicas.append(opcion)
+
+            return unicas
+    except Exception:
+        pass
+
+    return [
+        {"codigo": "PERSONA_HUMANA", "etiqueta": "Persona humana"},
+        {"codigo": "PERSONA_JURIDICA", "etiqueta": "Persona jurídica / sociedad"},
+        {"codigo": "OTRO_ENTE", "etiqueta": "Otro ente"},
+    ]
+
 def _empresa_activa(fila):
     return _entero(fila.get("activo"), 0) == 1
 
@@ -377,9 +458,13 @@ def mostrar_crear_empresa():
     st.markdown("### Crear empresa")
 
     st.caption(
-        "El alta exige datos mínimos completos. Se guarda solo al presionar Crear empresa "
-        "y el servicio vuelve a validar antes de insertar."
+        "El alta exige datos mínimos completos. El tipo de sujeto define el flujo inicial: "
+        "persona humana, sociedad u otro ente. La documentación respaldatoria es recomendada, "
+        "pero no bloquea el alta básica."
     )
+
+    opciones_tipo = _opciones_tipo_sujeto_ui()
+    codigos_tipo = [opcion["codigo"] for opcion in opciones_tipo]
 
     col1, col2 = st.columns(2)
 
@@ -393,8 +478,34 @@ def mostrar_crear_empresa():
         razon_social = st.text_input("Razón social *", key="empresa_crear_razon_social")
 
     with col2:
+        tipo_sujeto = st.selectbox(
+            "Tipo de sujeto *",
+            codigos_tipo,
+            index=codigos_tipo.index("PERSONA_JURIDICA") if "PERSONA_JURIDICA" in codigos_tipo else 0,
+            format_func=_etiqueta_tipo_sujeto_ui,
+            key="empresa_crear_tipo_sujeto",
+            help=(
+                "Persona humana no requiere socios ni capital social inicial. "
+                "Persona jurídica / sociedad activa el inicio societario y control de capital."
+            ),
+        )
         domicilio = st.text_input("Domicilio *", key="empresa_crear_domicilio")
         actividad = st.text_input("Actividad *", key="empresa_crear_actividad")
+
+    if _normalizar_tipo_sujeto_ui(tipo_sujeto) == "PERSONA_HUMANA":
+        st.info(
+            "Para Persona humana el sistema no exigirá socios, suscripción de capital ni integración societaria."
+        )
+    elif _normalizar_tipo_sujeto_ui(tipo_sujeto) == "PERSONA_JURIDICA":
+        st.info(
+            "Para Persona jurídica / sociedad el sistema habilitará el seguimiento de inicio societario, "
+            "socios, capital suscripto e integraciones reales."
+        )
+    else:
+        st.info(
+            "Para Otro ente el sistema mostrará requisitos adaptativos y controles recomendados sin forzar "
+            "un flujo societario estándar."
+        )
 
     datos_ok = _empresa_datos_minimos_ok(nombre, cuit, razon_social, domicilio, actividad)
 
@@ -424,12 +535,14 @@ def mostrar_crear_empresa():
             razon_social=razon_social,
             domicilio=domicilio,
             actividad=actividad,
+            tipo_sujeto=tipo_sujeto,
             usuario_id=usuario_actual_id(),
         )
 
         if _mostrar_resultado_servicio(resultado, "Empresa creada correctamente."):
             _reiniciar_selector_empresa_lateral()
             st.rerun()
+
 
 
 def mostrar_editar_empresa(df_empresas):
@@ -460,10 +573,14 @@ def mostrar_editar_empresa(df_empresas):
             "La empresa seleccionada está inactiva. Podés corregir sus datos, pero para operar debe reactivarse."
         )
 
-    # IMPORTANTE:
-    # Las keys de los inputs incluyen empresa_id.
-    # Esto evita que Streamlit conserve valores de otra empresa al cambiar el selectbox.
     sufijo = int(empresa_id)
+
+    opciones_tipo = _opciones_tipo_sujeto_ui()
+    codigos_tipo = [opcion["codigo"] for opcion in opciones_tipo]
+    tipo_actual = _normalizar_tipo_sujeto_ui(fila.get("tipo_sujeto", "PERSONA_JURIDICA"))
+
+    if tipo_actual not in codigos_tipo:
+        codigos_tipo.append(tipo_actual)
 
     col1, col2 = st.columns(2)
 
@@ -485,6 +602,17 @@ def mostrar_editar_empresa(df_empresas):
         )
 
     with col2:
+        tipo_sujeto = st.selectbox(
+            "Tipo de sujeto *",
+            codigos_tipo,
+            index=codigos_tipo.index(tipo_actual) if tipo_actual in codigos_tipo else 0,
+            format_func=_etiqueta_tipo_sujeto_ui,
+            key=f"empresa_editar_tipo_sujeto_{sufijo}",
+            help=(
+                "La corrección del tipo de sujeto queda auditada. "
+                "No borra historia ni movimientos ya registrados."
+            ),
+        )
         domicilio = st.text_input(
             "Domicilio *",
             value=_texto(fila.get("domicilio")),
@@ -501,6 +629,14 @@ def mostrar_editar_empresa(df_empresas):
             key=f"empresa_editar_motivo_{sufijo}",
         )
 
+    tipo_sujeto_normalizado = _normalizar_tipo_sujeto_ui(tipo_sujeto)
+    cambio_tipo_sujeto = tipo_sujeto_normalizado != tipo_actual
+
+    if cambio_tipo_sujeto:
+        st.warning(
+            "Estás corrigiendo el tipo de sujeto. Indicá un motivo claro para que el cambio quede auditado."
+        )
+
     datos_ok = _empresa_datos_minimos_ok(nombre, cuit, razon_social, domicilio, actividad)
 
     mensaje_faltantes = _mensaje_datos_empresa_faltantes(
@@ -514,10 +650,12 @@ def mostrar_editar_empresa(df_empresas):
     if mensaje_faltantes:
         st.warning(mensaje_faltantes)
 
+    boton_deshabilitado = not datos_ok or (cambio_tipo_sujeto and not _texto(motivo))
+
     if st.button(
         "Guardar cambios",
         type="primary",
-        disabled=not datos_ok,
+        disabled=boton_deshabilitado,
         use_container_width=True,
         key=f"empresa_editar_boton_{sufijo}",
     ):
@@ -528,6 +666,7 @@ def mostrar_editar_empresa(df_empresas):
             razon_social=razon_social,
             domicilio=domicilio,
             actividad=actividad,
+            tipo_sujeto=tipo_sujeto,
             usuario_id=usuario_actual_id(),
             motivo=motivo,
         )
@@ -535,11 +674,11 @@ def mostrar_editar_empresa(df_empresas):
         if _mostrar_resultado_servicio(resultado, "Empresa actualizada correctamente."):
             _reiniciar_selector_empresa_lateral()
 
-            # Si se editó la empresa operativa actual, actualizamos nombre visible en sesión.
             if int(st.session_state.get("empresa_id") or 0) == int(empresa_id):
                 st.session_state["empresa_nombre"] = _texto(nombre)
 
             st.rerun()
+
 
 
 def mostrar_estado_empresa(df_empresas):

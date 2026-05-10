@@ -1537,8 +1537,9 @@ def mostrar_estado_empresa_operativa():
 
     st.info(
         "Esta vista controla si la empresa activa tiene la base mínima para operar: "
-        "datos fiscales, tipos de comprobantes, plan de cuentas, categorías, conceptos fiscales, "
-        "actividad, tesorería, caja y bancos. No borra datos ni modifica movimientos."
+        "datos fiscales, tipo de sujeto, inicio operativo, tipos de comprobantes, plan de cuentas, "
+        "categorías, conceptos fiscales, actividad, tesorería, caja y bancos. "
+        "No borra datos ni modifica movimientos."
     )
 
     empresa_id = empresa_actual_id()
@@ -1558,6 +1559,57 @@ def mostrar_estado_empresa_operativa():
         st.exception(e)
         return
 
+    try:
+        from services.inicio_empresa_service import (
+            documentacion_respaldo_listar,
+            etiqueta_tipo_sujeto,
+            obtener_estado_onboarding_empresa,
+            obtener_perfil_inicio_empresa,
+            obtener_requisitos_inicio_empresa,
+        )
+
+        perfil_inicio = obtener_perfil_inicio_empresa(empresa_id)
+        estado_inicio = obtener_estado_onboarding_empresa(empresa_id)
+        requisitos_inicio = obtener_requisitos_inicio_empresa(empresa_id)
+        documentacion_inicio = documentacion_respaldo_listar(empresa_id)
+    except Exception as e:
+        perfil_inicio = {}
+        estado_inicio = {}
+        requisitos_inicio = []
+        documentacion_inicio = pd.DataFrame()
+        st.warning("No se pudo cargar el detalle de inicio de empresa. El diagnóstico operativo general sigue disponible.")
+        st.caption(str(e))
+
+        def etiqueta_tipo_sujeto(valor):
+            return valor or "Sin tipo de sujeto"
+
+    tipo_sujeto = (
+        perfil_inicio.get("tipo_sujeto")
+        or perfil_inicio.get("empresa", {}).get("tipo_sujeto")
+        or resumen.get("tipo_sujeto")
+        or "PERSONA_JURIDICA"
+    )
+
+    estado_onboarding = (
+        estado_inicio.get("estado")
+        or estado_inicio.get("estado_onboarding")
+        or perfil_inicio.get("estado_onboarding")
+        or "PENDIENTE"
+    )
+
+    requisitos_pendientes = 0
+    requisitos_bloqueantes = 0
+
+    for requisito in requisitos_inicio:
+        ok = bool(requisito.get("ok"))
+        bloqueante = bool(requisito.get("bloqueante", True))
+
+        if not ok:
+            requisitos_pendientes += 1
+
+            if bloqueante:
+                requisitos_bloqueantes += 1
+
     col1, col2, col3, col4 = st.columns(4)
 
     col1.metric("Empresa", resumen.get("nombre") or "Sin nombre")
@@ -1569,6 +1621,53 @@ def mostrar_estado_empresa_operativa():
         st.success(resumen.get("mensaje", "La empresa tiene la base crítica para operar."))
     else:
         st.warning(resumen.get("mensaje", "La empresa todavía tiene faltantes críticos antes de operar."))
+
+    st.divider()
+
+    st.markdown("### Inicio de empresa")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Tipo de sujeto", etiqueta_tipo_sujeto(tipo_sujeto))
+    c2.metric("Onboarding", str(estado_onboarding).replace("_", " ").title())
+    c3.metric("Requisitos pendientes", int(requisitos_pendientes))
+    c4.metric("Bloqueantes", int(requisitos_bloqueantes))
+
+    if requisitos_inicio:
+        filas_requisitos = []
+
+        for requisito in requisitos_inicio:
+            filas_requisitos.append(
+                {
+                    "Código": requisito.get("codigo", ""),
+                    "Requisito": requisito.get("nombre", ""),
+                    "Estado": "OK" if requisito.get("ok") else "Pendiente",
+                    "Tipo": "Bloqueante" if requisito.get("bloqueante", True) else "Recomendado",
+                    "Detalle": requisito.get("detalle", ""),
+                }
+            )
+
+        st.dataframe(
+            preparar_vista(pd.DataFrame(filas_requisitos)),
+            use_container_width=True,
+        )
+    else:
+        st.info("No hay requisitos adaptativos de inicio para mostrar.")
+
+    with st.expander("Documentación respaldatoria opcional", expanded=False):
+        st.caption(
+            "La documentación respaldatoria es recomendada para auditoría y control interno, "
+            "pero no bloquea la creación ni el inicio operativo básico de la empresa."
+        )
+
+        if isinstance(documentacion_inicio, pd.DataFrame) and not documentacion_inicio.empty:
+            st.dataframe(
+                preparar_vista(documentacion_inicio),
+                use_container_width=True,
+            )
+        else:
+            st.info(
+                "No hay documentación respaldatoria registrada. Podés continuar operando y cargarla luego."
+            )
 
     st.divider()
 
@@ -1663,6 +1762,7 @@ def mostrar_estado_empresa_operativa():
             ):
                 st.session_state["confirmar_inicializar_empresa_operativa"] = False
                 st.rerun()
+
 
 
 # ======================================================

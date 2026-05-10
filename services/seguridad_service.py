@@ -702,23 +702,67 @@ def obtener_empresas_usuario(usuario_id):
     return df
 
 
+def _asegurar_inicio_empresa_seguridad():
+    try:
+        from services.inicio_empresa_service import asegurar_estructura_inicio_empresa
+
+        asegurar_estructura_inicio_empresa()
+    except Exception:
+        return None
+
+
+def _normalizar_tipo_sujeto_seguridad(valor):
+    try:
+        from services.inicio_empresa_service import normalizar_tipo_sujeto
+
+        return normalizar_tipo_sujeto(valor)
+    except Exception:
+        valor_txt = _texto(valor).upper()
+
+        if "HUMANA" in valor_txt or valor_txt in {"PH", "PERSONA_HUMANA"}:
+            return "PERSONA_HUMANA"
+
+        if "OTRO" in valor_txt:
+            return "OTRO_ENTE"
+
+        return "PERSONA_JURIDICA"
+
 def obtener_empresas(incluir_inactivas=True):
+    _asegurar_inicio_empresa_seguridad()
+
     condicion = "" if incluir_inactivas else "WHERE activo = 1"
 
-    return ejecutar_query(f"""
-        SELECT id, nombre, cuit, razon_social, domicilio, actividad, activo
+    df = ejecutar_query(f"""
+        SELECT
+            id,
+            nombre,
+            cuit,
+            razon_social,
+            domicilio,
+            actividad,
+            COALESCE(tipo_sujeto, 'PERSONA_JURIDICA') AS tipo_sujeto,
+            activo
         FROM empresas
         {condicion}
         ORDER BY activo DESC, nombre
     """, fetch=True)
 
+    if df is not None and "tipo_sujeto" not in df.columns:
+        df["tipo_sujeto"] = "PERSONA_JURIDICA"
 
-def crear_empresa(nombre, cuit="", razon_social="", domicilio="", actividad="", usuario_id=None):
+    return df
+
+
+
+def crear_empresa(nombre, cuit="", razon_social="", domicilio="", actividad="", usuario_id=None, tipo_sujeto="PERSONA_JURIDICA"):
+    _asegurar_inicio_empresa_seguridad()
+
     nombre = _texto(nombre)
     cuit_norm = normalizar_cuit(cuit)
     razon_social = _texto(razon_social)
     domicilio = _texto(domicilio)
     actividad = _texto(actividad)
+    tipo_sujeto_norm = _normalizar_tipo_sujeto_seguridad(tipo_sujeto)
 
     validacion = validar_datos_empresa(
         nombre=nombre,
@@ -734,20 +778,20 @@ def crear_empresa(nombre, cuit="", razon_social="", domicilio="", actividad="", 
 
     ejecutar_query("""
         INSERT INTO empresas
-        (nombre, cuit, razon_social, domicilio, actividad, activo)
-        VALUES (?, ?, ?, ?, ?, 1)
-    """, (nombre, cuit_norm, razon_social, domicilio, actividad))
+        (nombre, cuit, razon_social, domicilio, actividad, tipo_sujeto, activo)
+        VALUES (?, ?, ?, ?, ?, ?, 1)
+    """, (nombre, cuit_norm, razon_social, domicilio, actividad, tipo_sujeto_norm))
 
     df_id = ejecutar_query("SELECT last_insert_rowid() AS id", fetch=True)
     empresa_id = None
 
-    if not df_id.empty and "id" in df_id.columns:
+    if df_id is not None and not df_id.empty and "id" in df_id.columns:
         empresa_id = int(df_id.iloc[0]["id"])
 
     if empresa_id is None:
         df = obtener_empresas()
 
-        if not df.empty:
+        if df is not None and not df.empty:
             candidatos = df[
                 (df["nombre"].apply(_normalizar_clave) == _normalizar_clave(nombre))
                 & (df["activo"].astype(int) == 1)
@@ -769,6 +813,7 @@ def crear_empresa(nombre, cuit="", razon_social="", domicilio="", actividad="", 
         "razon_social": razon_social,
         "domicilio": domicilio,
         "actividad": actividad,
+        "tipo_sujeto": tipo_sujeto_norm,
         "activo": 1,
     }
 
@@ -790,7 +835,10 @@ def crear_empresa(nombre, cuit="", razon_social="", domicilio="", actividad="", 
     )
 
 
-def actualizar_empresa(empresa_id, nombre, cuit="", razon_social="", domicilio="", actividad="", usuario_id=None, motivo=""):
+
+def actualizar_empresa(empresa_id, nombre, cuit="", razon_social="", domicilio="", actividad="", usuario_id=None, motivo="", tipo_sujeto=None):
+    _asegurar_inicio_empresa_seguridad()
+
     empresa_id = int(empresa_id)
     anterior = obtener_empresa(empresa_id)
 
@@ -802,6 +850,23 @@ def actualizar_empresa(empresa_id, nombre, cuit="", razon_social="", domicilio="
     razon_social = _texto(razon_social)
     domicilio = _texto(domicilio)
     actividad = _texto(actividad)
+
+    tipo_sujeto_anterior = _normalizar_tipo_sujeto_seguridad(
+        anterior.get("tipo_sujeto") or anterior.get("tipo") or "PERSONA_JURIDICA"
+    )
+
+    if tipo_sujeto is None:
+        tipo_sujeto_norm = tipo_sujeto_anterior
+    else:
+        tipo_sujeto_norm = _normalizar_tipo_sujeto_seguridad(tipo_sujeto)
+
+    cambio_tipo_sujeto = tipo_sujeto_norm != tipo_sujeto_anterior
+
+    if cambio_tipo_sujeto and not _texto(motivo):
+        return _respuesta(
+            False,
+            "Para corregir el tipo de sujeto indique un motivo. El cambio queda auditado.",
+        )
 
     validacion = validar_datos_empresa(
         nombre=nombre,
@@ -822,9 +887,10 @@ def actualizar_empresa(empresa_id, nombre, cuit="", razon_social="", domicilio="
             cuit = ?,
             razon_social = ?,
             domicilio = ?,
-            actividad = ?
+            actividad = ?,
+            tipo_sujeto = ?
         WHERE id = ?
-    """, (nombre, cuit_norm, razon_social, domicilio, actividad, empresa_id))
+    """, (nombre, cuit_norm, razon_social, domicilio, actividad, tipo_sujeto_norm, empresa_id))
 
     nuevo = obtener_empresa(empresa_id) or {
         "id": empresa_id,
@@ -835,8 +901,15 @@ def actualizar_empresa(empresa_id, nombre, cuit="", razon_social="", domicilio="
         "actividad": actividad,
     }
 
+    nuevo["tipo_sujeto"] = tipo_sujeto_norm
+
     if usuario_id is not None:
         _asegurar_usuario_empresa(usuario_id, empresa_id)
+
+    motivo_auditoria = motivo or "Edición de datos de empresa desde Seguridad."
+
+    if cambio_tipo_sujeto and "tipo de sujeto" not in motivo_auditoria.lower():
+        motivo_auditoria = f"{motivo_auditoria} Cambio de tipo de sujeto."
 
     _registrar_auditoria_segura(
         usuario_id=usuario_id,
@@ -845,10 +918,16 @@ def actualizar_empresa(empresa_id, nombre, cuit="", razon_social="", domicilio="
         entidad_id=empresa_id,
         valor_anterior=anterior,
         valor_nuevo=nuevo,
-        motivo=motivo or "Edición de datos de empresa desde Seguridad.",
+        motivo=motivo_auditoria,
     )
 
-    return _respuesta(True, "Empresa actualizada correctamente.", empresa_id=empresa_id, empresa=nuevo)
+    return _respuesta(
+        True,
+        "Empresa actualizada correctamente.",
+        empresa_id=empresa_id,
+        empresa=nuevo,
+    )
+
 
 
 def actualizar_estado_empresa(empresa_id, activo, usuario_id=None, motivo=""):
