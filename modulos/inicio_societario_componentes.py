@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from database import conectar
+from modulos.socios_empresa_componentes import mostrar_socios_empresa_pro
 from services.capital_social_service import (
     anular_integracion_capital,
     configurar_capital_social_inicial,
@@ -144,24 +145,31 @@ def _tabla_existe(nombre_tabla: str) -> bool:
 
 def _listar_ejercicios_empresa(empresa_id: int) -> pd.DataFrame:
     if not _tabla_existe("ejercicios_contables"):
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["id", "nombre", "fecha_inicio", "fecha_fin", "estado"])
 
-    return _leer_sql_df(
-        """
-        SELECT
-            id,
-            nombre,
-            fecha_inicio,
-            fecha_fin,
-            estado
-        FROM ejercicios_contables
-        WHERE empresa_id = ?
-          AND UPPER(COALESCE(estado, '')) <> 'ANULADO'
-        ORDER BY fecha_inicio DESC, id DESC
-        """,
-        (int(empresa_id),),
-    )
+    conn = conectar()
+    try:
+        columnas = {fila[1] for fila in conn.execute("PRAGMA table_info(ejercicios_contables)").fetchall()}
 
+        fecha_fin_expr = "fecha_fin" if "fecha_fin" in columnas else "NULL AS fecha_fin"
+        estado_expr = "estado" if "estado" in columnas else "'ACTIVO' AS estado"
+        filtro_empresa = "empresa_id = ?" if "empresa_id" in columnas else "1 = 1"
+        filtro_estado = "AND UPPER(COALESCE(estado, '')) <> 'ANULADO'" if "estado" in columnas else ""
+        params = (int(empresa_id),) if "empresa_id" in columnas else ()
+
+        return pd.read_sql_query(
+            f"""
+            SELECT id, nombre, fecha_inicio, {fecha_fin_expr}, {estado_expr}
+            FROM ejercicios_contables
+            WHERE {filtro_empresa}
+              {filtro_estado}
+            ORDER BY fecha_inicio DESC, id DESC
+            """,
+            conn,
+            params=params,
+        )
+    finally:
+        conn.close()
 
 def _listar_integraciones_reales(empresa_id: int) -> pd.DataFrame:
     if not _tabla_existe("capital_integraciones"):
@@ -970,6 +978,7 @@ def mostrar_panel_inicio_societario(
     with tab_socios:
         socios = _mostrar_socios(empresa_id_resuelto, preparar_vista, usuario)
         _mostrar_gestion_controlada_socios(empresa_id_resuelto, preparar_vista, usuario)
+        mostrar_socios_empresa_pro(empresa_id=empresa_id_resuelto, preparar_vista=preparar_vista, usuario=usuario)
 
     with tab_capital:
         capitales = _mostrar_capital_social(empresa_id_resuelto, socios, preparar_vista, usuario)
