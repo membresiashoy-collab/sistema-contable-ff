@@ -454,6 +454,91 @@ def mostrar_empresas():
         mostrar_eliminar_empresa_vacia(df_empresas)
 
 
+
+def _normalizar_tipo_societario_ui(valor):
+    texto = _texto(valor).upper().strip()
+    if not texto:
+        return ""
+
+    reemplazos = {
+        ".": "",
+        "-": " ",
+        "_": " ",
+        "/": " ",
+        "Á": "A",
+        "É": "E",
+        "Í": "I",
+        "Ó": "O",
+        "Ú": "U",
+    }
+    for origen, destino in reemplazos.items():
+        texto = texto.replace(origen, destino)
+
+    texto_compacto = "".join(texto.split())
+    texto_normal = " ".join(texto.split())
+
+    equivalencias = {
+        "SA": "SA",
+        "S A": "SA",
+        "SOCIEDAD ANONIMA": "SA",
+        "SOCIEDADANONIMA": "SA",
+        "SAS": "SAS",
+        "S A S": "SAS",
+        "SOCIEDAD POR ACCIONES SIMPLIFICADA": "SAS",
+        "SOCIEDADPORACCIONESSIMPLIFICADA": "SAS",
+        "SRL": "SRL",
+        "S R L": "SRL",
+        "SOCIEDAD DE RESPONSABILIDAD LIMITADA": "SRL",
+        "SOCIEDADDERESPONSABILIDADLIMITADA": "SRL",
+        "ASOCIACION": "ASOCIACION",
+        "FUNDACION": "FUNDACION",
+        "COOPERATIVA": "COOPERATIVA",
+        "OTRO": "OTRO",
+        "OTRA": "OTRO",
+        "OTRA FORMA": "OTRO",
+        "OTRA FORMA JURIDICA": "OTRO",
+    }
+
+    return equivalencias.get(texto_normal) or equivalencias.get(texto_compacto) or ""
+
+
+def _etiqueta_tipo_societario_ui(valor):
+    codigo = _normalizar_tipo_societario_ui(valor)
+    etiquetas = {
+        "": "Seleccionar tipo societario...",
+        "SA": "S.A. - Sociedad Anónima",
+        "SAS": "S.A.S. - Sociedad por Acciones Simplificada",
+        "SRL": "S.R.L. - Sociedad de Responsabilidad Limitada",
+        "ASOCIACION": "Asociación",
+        "FUNDACION": "Fundación",
+        "COOPERATIVA": "Cooperativa",
+        "OTRO": "Otro",
+    }
+    return etiquetas.get(codigo, str(valor or ""))
+
+
+def _opciones_tipo_societario_ui(incluir_vacio=True):
+    opciones = [
+        {"codigo": "SA", "nombre": "S.A. - Sociedad Anónima"},
+        {"codigo": "SAS", "nombre": "S.A.S. - Sociedad por Acciones Simplificada"},
+        {"codigo": "SRL", "nombre": "S.R.L. - Sociedad de Responsabilidad Limitada"},
+        {"codigo": "ASOCIACION", "nombre": "Asociación"},
+        {"codigo": "FUNDACION", "nombre": "Fundación"},
+        {"codigo": "COOPERATIVA", "nombre": "Cooperativa"},
+        {"codigo": "OTRO", "nombre": "Otro"},
+    ]
+    if incluir_vacio:
+        return [{"codigo": "", "nombre": "Seleccionar tipo societario..."}] + opciones
+    return opciones
+
+
+def _es_persona_juridica_ui(valor):
+    return _normalizar_tipo_sujeto_ui(valor) in {
+        "PERSONA_JURIDICA",
+        "PERSONA_JURIDICA_SOCIEDAD",
+    }
+
+
 def mostrar_crear_empresa():
     st.markdown("### Crear empresa")
 
@@ -481,7 +566,7 @@ def mostrar_crear_empresa():
         tipo_sujeto = st.selectbox(
             "Tipo de sujeto *",
             codigos_tipo,
-            index=codigos_tipo.index("PERSONA_JURIDICA") if "PERSONA_JURIDICA" in codigos_tipo else 0,
+            index=codigos_tipo.index("PERSONA_JURIDICA_SOCIEDAD") if "PERSONA_JURIDICA_SOCIEDAD" in codigos_tipo else (codigos_tipo.index("PERSONA_JURIDICA") if "PERSONA_JURIDICA" in codigos_tipo else 0),
             format_func=_etiqueta_tipo_sujeto_ui,
             key="empresa_crear_tipo_sujeto",
             help=(
@@ -489,6 +574,18 @@ def mostrar_crear_empresa():
                 "Persona jurídica / sociedad activa el inicio societario y control de capital."
             ),
         )
+        tipo_societario = ""
+        if _es_persona_juridica_ui(tipo_sujeto):
+            opciones_societarias = _opciones_tipo_societario_ui(incluir_vacio=True)
+            codigos_societarios = [opcion["codigo"] for opcion in opciones_societarias]
+            tipo_societario = st.selectbox(
+                "Tipo societario / forma jurídica *",
+                codigos_societarios,
+                index=0,
+                format_func=_etiqueta_tipo_societario_ui,
+                key="empresa_crear_tipo_societario",
+                help="Dato legal básico de la empresa. Luego se usa para el inicio societario.",
+            )
         domicilio = st.text_input("Domicilio *", key="empresa_crear_domicilio")
         actividad = st.text_input("Actividad *", key="empresa_crear_actividad")
 
@@ -496,7 +593,7 @@ def mostrar_crear_empresa():
         st.info(
             "Para Persona humana el sistema no exigirá socios, suscripción de capital ni integración societaria."
         )
-    elif _normalizar_tipo_sujeto_ui(tipo_sujeto) == "PERSONA_JURIDICA":
+    elif _es_persona_juridica_ui(tipo_sujeto):
         st.info(
             "Para Persona jurídica / sociedad el sistema habilitará el seguimiento de inicio societario, "
             "socios, capital suscripto e integraciones reales."
@@ -507,7 +604,9 @@ def mostrar_crear_empresa():
             "un flujo societario estándar."
         )
 
-    datos_ok = _empresa_datos_minimos_ok(nombre, cuit, razon_social, domicilio, actividad)
+    tipo_societario_ok = (not _es_persona_juridica_ui(tipo_sujeto)) or bool(_normalizar_tipo_societario_ui(tipo_societario))
+    tipo_societario_ok = (not _es_persona_juridica_ui(tipo_sujeto)) or bool(_normalizar_tipo_societario_ui(tipo_societario))
+    datos_ok = _empresa_datos_minimos_ok(nombre, cuit, razon_social, domicilio, actividad) and tipo_societario_ok and tipo_societario_ok
 
     mensaje_faltantes = _mensaje_datos_empresa_faltantes(
         nombre=nombre,
@@ -519,6 +618,8 @@ def mostrar_crear_empresa():
 
     if mensaje_faltantes:
         st.warning(mensaje_faltantes)
+    elif not tipo_societario_ok:
+        st.warning("Falta seleccionar el tipo societario / forma jurídica.")
     else:
         st.success("Datos mínimos completos. Podés crear la empresa.")
 
@@ -536,6 +637,7 @@ def mostrar_crear_empresa():
             domicilio=domicilio,
             actividad=actividad,
             tipo_sujeto=tipo_sujeto,
+            tipo_societario=tipo_societario,
             usuario_id=usuario_actual_id(),
         )
 
@@ -578,6 +680,7 @@ def mostrar_editar_empresa(df_empresas):
     opciones_tipo = _opciones_tipo_sujeto_ui()
     codigos_tipo = [opcion["codigo"] for opcion in opciones_tipo]
     tipo_actual = _normalizar_tipo_sujeto_ui(fila.get("tipo_sujeto", "PERSONA_JURIDICA"))
+    tipo_societario_actual = _normalizar_tipo_societario_ui(fila.get("tipo_societario"))
 
     if tipo_actual not in codigos_tipo:
         codigos_tipo.append(tipo_actual)
@@ -613,6 +716,19 @@ def mostrar_editar_empresa(df_empresas):
                 "No borra historia ni movimientos ya registrados."
             ),
         )
+        tipo_societario = ""
+        if _es_persona_juridica_ui(tipo_sujeto):
+            opciones_societarias = _opciones_tipo_societario_ui(incluir_vacio=True)
+            codigos_societarios = [opcion["codigo"] for opcion in opciones_societarias]
+            indice_societario = codigos_societarios.index(tipo_societario_actual) if tipo_societario_actual in codigos_societarios else 0
+            tipo_societario = st.selectbox(
+                "Tipo societario / forma jurídica *",
+                codigos_societarios,
+                index=indice_societario,
+                format_func=_etiqueta_tipo_societario_ui,
+                key=f"empresa_editar_tipo_societario_{sufijo}",
+                help="Dato legal básico de la empresa. No modifica movimientos ni historia contable.",
+            )
         domicilio = st.text_input(
             "Domicilio *",
             value=_texto(fila.get("domicilio")),
@@ -637,7 +753,8 @@ def mostrar_editar_empresa(df_empresas):
             "Estás corrigiendo el tipo de sujeto. Indicá un motivo claro para que el cambio quede auditado."
         )
 
-    datos_ok = _empresa_datos_minimos_ok(nombre, cuit, razon_social, domicilio, actividad)
+    tipo_societario_ok = (not _es_persona_juridica_ui(tipo_sujeto)) or bool(_normalizar_tipo_societario_ui(tipo_societario))
+    datos_ok = _empresa_datos_minimos_ok(nombre, cuit, razon_social, domicilio, actividad) and tipo_societario_ok
 
     mensaje_faltantes = _mensaje_datos_empresa_faltantes(
         nombre=nombre,
@@ -649,6 +766,8 @@ def mostrar_editar_empresa(df_empresas):
 
     if mensaje_faltantes:
         st.warning(mensaje_faltantes)
+    elif not tipo_societario_ok:
+        st.warning("Falta seleccionar el tipo societario / forma jurídica.")
 
     boton_deshabilitado = not datos_ok or (cambio_tipo_sujeto and not _texto(motivo))
 
@@ -667,6 +786,7 @@ def mostrar_editar_empresa(df_empresas):
             domicilio=domicilio,
             actividad=actividad,
             tipo_sujeto=tipo_sujeto,
+            tipo_societario=tipo_societario,
             usuario_id=usuario_actual_id(),
             motivo=motivo,
         )

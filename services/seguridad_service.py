@@ -727,6 +727,61 @@ def _normalizar_tipo_sujeto_seguridad(valor):
 
         return "PERSONA_JURIDICA"
 
+
+def _normalizar_tipo_societario_seguridad(valor):
+    texto = _texto(valor).upper().strip()
+    if not texto:
+        return ""
+
+    reemplazos = {
+        ".": "",
+        "-": " ",
+        "_": " ",
+        "/": " ",
+        "Á": "A",
+        "É": "E",
+        "Í": "I",
+        "Ó": "O",
+        "Ú": "U",
+    }
+    for origen, destino in reemplazos.items():
+        texto = texto.replace(origen, destino)
+
+    texto_compacto = "".join(texto.split())
+    texto_normal = " ".join(texto.split())
+
+    equivalencias = {
+        "SA": "SA",
+        "S A": "SA",
+        "SOCIEDAD ANONIMA": "SA",
+        "SOCIEDADANONIMA": "SA",
+        "SAS": "SAS",
+        "S A S": "SAS",
+        "SOCIEDAD POR ACCIONES SIMPLIFICADA": "SAS",
+        "SOCIEDADPORACCIONESSIMPLIFICADA": "SAS",
+        "SRL": "SRL",
+        "S R L": "SRL",
+        "SOCIEDAD DE RESPONSABILIDAD LIMITADA": "SRL",
+        "SOCIEDADDERESPONSABILIDADLIMITADA": "SRL",
+        "ASOCIACION": "ASOCIACION",
+        "FUNDACION": "FUNDACION",
+        "COOPERATIVA": "COOPERATIVA",
+        "OTRO": "OTRO",
+        "OTRA": "OTRO",
+        "OTRA FORMA": "OTRO",
+        "OTRA FORMA JURIDICA": "OTRO",
+    }
+
+    return equivalencias.get(texto_normal) or equivalencias.get(texto_compacto) or ""
+
+
+def _es_persona_juridica_seguridad(valor):
+    return _normalizar_tipo_sujeto_seguridad(valor) in {
+        "PERSONA_JURIDICA",
+        "PERSONA_JURIDICA_SOCIEDAD",
+    }
+
+
 def obtener_empresas(incluir_inactivas=True):
     _asegurar_inicio_empresa_seguridad()
 
@@ -741,6 +796,7 @@ def obtener_empresas(incluir_inactivas=True):
             domicilio,
             actividad,
             COALESCE(tipo_sujeto, 'PERSONA_JURIDICA') AS tipo_sujeto,
+            COALESCE(tipo_societario, '') AS tipo_societario,
             activo
         FROM empresas
         {condicion}
@@ -749,12 +805,14 @@ def obtener_empresas(incluir_inactivas=True):
 
     if df is not None and "tipo_sujeto" not in df.columns:
         df["tipo_sujeto"] = "PERSONA_JURIDICA"
+    if df is not None and "tipo_societario" not in df.columns:
+        df["tipo_societario"] = ""
 
     return df
 
 
 
-def crear_empresa(nombre, cuit="", razon_social="", domicilio="", actividad="", usuario_id=None, tipo_sujeto="PERSONA_JURIDICA"):
+def crear_empresa(nombre, cuit="", razon_social="", domicilio="", actividad="", usuario_id=None, tipo_sujeto="PERSONA_JURIDICA", tipo_societario=""):
     _asegurar_inicio_empresa_seguridad()
 
     nombre = _texto(nombre)
@@ -763,6 +821,12 @@ def crear_empresa(nombre, cuit="", razon_social="", domicilio="", actividad="", 
     domicilio = _texto(domicilio)
     actividad = _texto(actividad)
     tipo_sujeto_norm = _normalizar_tipo_sujeto_seguridad(tipo_sujeto)
+    tipo_societario_norm = _normalizar_tipo_societario_seguridad(tipo_societario)
+
+    if not _es_persona_juridica_seguridad(tipo_sujeto_norm):
+        tipo_societario_norm = ""
+    elif not tipo_societario_norm:
+        return _respuesta(False, "Para Persona jurídica / sociedad indique el tipo societario.")
 
     validacion = validar_datos_empresa(
         nombre=nombre,
@@ -778,9 +842,9 @@ def crear_empresa(nombre, cuit="", razon_social="", domicilio="", actividad="", 
 
     ejecutar_query("""
         INSERT INTO empresas
-        (nombre, cuit, razon_social, domicilio, actividad, tipo_sujeto, activo)
-        VALUES (?, ?, ?, ?, ?, ?, 1)
-    """, (nombre, cuit_norm, razon_social, domicilio, actividad, tipo_sujeto_norm))
+        (nombre, cuit, razon_social, domicilio, actividad, tipo_sujeto, tipo_societario, activo)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+    """, (nombre, cuit_norm, razon_social, domicilio, actividad, tipo_sujeto_norm, tipo_societario_norm))
 
     df_id = ejecutar_query("SELECT last_insert_rowid() AS id", fetch=True)
     empresa_id = None
@@ -814,6 +878,7 @@ def crear_empresa(nombre, cuit="", razon_social="", domicilio="", actividad="", 
         "domicilio": domicilio,
         "actividad": actividad,
         "tipo_sujeto": tipo_sujeto_norm,
+        "tipo_societario": tipo_societario_norm,
         "activo": 1,
     }
 
@@ -836,7 +901,7 @@ def crear_empresa(nombre, cuit="", razon_social="", domicilio="", actividad="", 
 
 
 
-def actualizar_empresa(empresa_id, nombre, cuit="", razon_social="", domicilio="", actividad="", usuario_id=None, motivo="", tipo_sujeto=None):
+def actualizar_empresa(empresa_id, nombre, cuit="", razon_social="", domicilio="", actividad="", usuario_id=None, motivo="", tipo_sujeto=None, tipo_societario=None):
     _asegurar_inicio_empresa_seguridad()
 
     empresa_id = int(empresa_id)
@@ -860,7 +925,20 @@ def actualizar_empresa(empresa_id, nombre, cuit="", razon_social="", domicilio="
     else:
         tipo_sujeto_norm = _normalizar_tipo_sujeto_seguridad(tipo_sujeto)
 
+    tipo_societario_anterior = _normalizar_tipo_societario_seguridad(anterior.get("tipo_societario"))
+
+    if tipo_societario is None:
+        tipo_societario_norm = tipo_societario_anterior
+    else:
+        tipo_societario_norm = _normalizar_tipo_societario_seguridad(tipo_societario)
+
+    if not _es_persona_juridica_seguridad(tipo_sujeto_norm):
+        tipo_societario_norm = ""
+    elif tipo_societario is not None and not tipo_societario_norm:
+        return _respuesta(False, "Para Persona jurídica / sociedad indique el tipo societario.")
+
     cambio_tipo_sujeto = tipo_sujeto_norm != tipo_sujeto_anterior
+    cambio_tipo_societario = tipo_societario_norm != tipo_societario_anterior
 
     if cambio_tipo_sujeto and not _texto(motivo):
         return _respuesta(
@@ -888,9 +966,10 @@ def actualizar_empresa(empresa_id, nombre, cuit="", razon_social="", domicilio="
             razon_social = ?,
             domicilio = ?,
             actividad = ?,
-            tipo_sujeto = ?
+            tipo_sujeto = ?,
+            tipo_societario = ?
         WHERE id = ?
-    """, (nombre, cuit_norm, razon_social, domicilio, actividad, tipo_sujeto_norm, empresa_id))
+    """, (nombre, cuit_norm, razon_social, domicilio, actividad, tipo_sujeto_norm, tipo_societario_norm, empresa_id))
 
     nuevo = obtener_empresa(empresa_id) or {
         "id": empresa_id,
@@ -902,6 +981,7 @@ def actualizar_empresa(empresa_id, nombre, cuit="", razon_social="", domicilio="
     }
 
     nuevo["tipo_sujeto"] = tipo_sujeto_norm
+    nuevo["tipo_societario"] = tipo_societario_norm
 
     if usuario_id is not None:
         _asegurar_usuario_empresa(usuario_id, empresa_id)
@@ -910,6 +990,8 @@ def actualizar_empresa(empresa_id, nombre, cuit="", razon_social="", domicilio="
 
     if cambio_tipo_sujeto and "tipo de sujeto" not in motivo_auditoria.lower():
         motivo_auditoria = f"{motivo_auditoria} Cambio de tipo de sujeto."
+    if cambio_tipo_societario and "tipo societario" not in motivo_auditoria.lower():
+        motivo_auditoria = f"{motivo_auditoria} Cambio de tipo societario."
 
     _registrar_auditoria_segura(
         usuario_id=usuario_id,
