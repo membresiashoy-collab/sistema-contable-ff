@@ -309,6 +309,14 @@ def _mostrar_inicializacion_segura(
             st.rerun()
 
 
+
+def _formatear_cuit_visual(cuit) -> str:
+    digitos = "".join(caracter for caracter in str(cuit or "") if caracter.isdigit())
+    if len(digitos) == 11:
+        return f"{digitos[:2]}-{digitos[2:10]}-{digitos[10]}"
+    return str(cuit or "").strip()
+
+
 def mostrar_estado_empresa_operativa_adaptativo(
     empresa_actual_id,
     obtener_resumen_empresa_operativa,
@@ -380,7 +388,7 @@ def mostrar_estado_empresa_operativa_adaptativo(
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Empresa", resumen.get("nombre") or "Sin nombre")
-    col2.metric("CUIT", resumen.get("cuit") or "Sin CUIT")
+    col2.metric("CUIT", _formatear_cuit_visual(resumen.get("cuit")) or "Sin CUIT")
     col3.metric("Preparación", f"{resumen.get('porcentaje_preparacion', 0)}%")
     col4.metric("Faltantes críticos", int(resumen.get("faltantes_criticos", 0) or 0))
 

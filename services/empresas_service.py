@@ -611,7 +611,7 @@ def diagnosticar_caja(empresa_id):
         "recomendacion": (
             "Correcto."
             if ok
-            else "Crear o inicializar una caja para registrar operaciones en efectivo."
+            else "No hay cajas activas. Si la empresa usará efectivo, cree o inicialice una caja operativa."
         ),
     }
 
