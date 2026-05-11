@@ -5,8 +5,9 @@ from typing import Any, Dict, Optional
 import pandas as pd
 import streamlit as st
 
-from modulos.socios_matriz_contable_componentes import mostrar_matriz_contable_socios
 from modulos.socios_control_vinculos_componentes import mostrar_control_normativo_vinculos_socios
+from modulos.socios_cuentas_especificas_componentes import mostrar_socios_cuentas_especificas
+from modulos.socios_matriz_contable_componentes import mostrar_matriz_contable_socios
 from services.socios_empresa_service import (
     actualizar_ficha_integral_socio,
     catalogo_conceptos_relacion_socios,
@@ -129,6 +130,22 @@ def _mostrar_eventos_ficha(socio_id: int, empresa_id: int) -> None:
             st.dataframe(eventos, use_container_width=True, hide_index=True)
 
 
+def _mostrar_paneles_contables_socios(
+    empresa_id: int,
+    usuario: Optional[str] = None,
+) -> None:
+    st.divider()
+    st.markdown("#### Preparación contable de vínculos con socios")
+    st.caption(
+        "Estos paneles preparan matriz, cuentas específicas y controles normativos. "
+        "No registran Caja/Banco, no cargan comprobantes y no generan asientos definitivos."
+    )
+
+    mostrar_matriz_contable_socios(empresa_id=empresa_id, usuario=usuario)
+    mostrar_socios_cuentas_especificas(empresa_id=empresa_id)
+    mostrar_control_normativo_vinculos_socios(empresa_id=empresa_id, usuario=usuario)
+
+
 def _mostrar_formulario_ficha(
     ficha: Dict[str, Any],
     empresa_id: int,
@@ -138,6 +155,7 @@ def _mostrar_formulario_ficha(
     socio_id = int(ficha.get("id"))
     nombre = _texto(ficha.get("nombre")) or f"Socio #{socio_id}"
 
+    st.divider()
     st.markdown(f"##### Ficha integral: {nombre}")
 
     with st.form(f"form_ficha_integral_socio_{socio_id}"):
@@ -172,12 +190,13 @@ def _mostrar_formulario_ficha(
 
         st.markdown("###### Cuenta particular y usos futuros")
         st.caption(
-            "La cuenta particular queda preparada para clasificar préstamos, retiros, reintegros, "
-            "honorarios o facturas vinculadas en etapas futuras. No genera movimientos ni asientos."
+            "La cuenta particular queda preparada como referencia auxiliar para clasificar préstamos, "
+            "retiros, reintegros, honorarios o facturas vinculadas en etapas futuras. "
+            "La creación de cuentas contables específicas se gestiona en el panel v4 de cuentas por socio."
         )
 
         cuenta_particular_habilitada = st.checkbox(
-            "Preparar cuenta particular del socio",
+            "Preparar referencia auxiliar de cuenta particular del socio",
             value=_bool(ficha.get("cuenta_particular_habilitada")),
         )
 
@@ -203,15 +222,27 @@ def _mostrar_formulario_ficha(
 
         col5, col6, col7 = st.columns(3)
         with col5:
-            admite_prestamos = st.checkbox("Puede registrar préstamos de socio", value=_bool(ficha.get("admite_prestamos", 1)))
-            admite_retiros = st.checkbox("Puede registrar retiros de socio", value=_bool(ficha.get("admite_retiros", 1)))
+            admite_prestamos = st.checkbox(
+                "Puede registrar préstamos de socio",
+                value=_bool(ficha.get("admite_prestamos", 0)),
+            )
+            admite_retiros = st.checkbox(
+                "Puede registrar retiros de socio",
+                value=_bool(ficha.get("admite_retiros", 0)),
+            )
         with col6:
-            admite_reintegros = st.checkbox("Puede registrar reintegros", value=_bool(ficha.get("admite_reintegros", 1)))
-            admite_honorarios = st.checkbox("Puede registrar honorarios/servicios", value=_bool(ficha.get("admite_honorarios", 1)))
+            admite_reintegros = st.checkbox(
+                "Puede registrar reintegros",
+                value=_bool(ficha.get("admite_reintegros", 0)),
+            )
+            admite_honorarios = st.checkbox(
+                "Puede registrar honorarios/servicios",
+                value=_bool(ficha.get("admite_honorarios", 0)),
+            )
         with col7:
             admite_facturas_proveedor = st.checkbox(
                 "Puede vincular facturas de proveedor",
-                value=_bool(ficha.get("admite_facturas_proveedor", 1)),
+                value=_bool(ficha.get("admite_facturas_proveedor", 0)),
             )
 
         observaciones_ficha = st.text_area(
@@ -247,28 +278,29 @@ def _mostrar_formulario_ficha(
             usuario=usuario,
         )
         if resultado.get("ok"):
-            st.success(resultado.get("mensaje"))
+            st.success(resultado.get("mensaje") or "Ficha integral actualizada correctamente.")
             _refrescar(preparar_vista)
         else:
             st.error(resultado.get("mensaje", "No se pudo actualizar la ficha integral."))
 
     col_accion, col_info = st.columns([1, 2])
     with col_accion:
-        if st.button("Preparar cuenta particular", key=f"preparar_cuenta_particular_{socio_id}"):
+        if st.button("Preparar referencia auxiliar", key=f"preparar_cuenta_particular_{socio_id}"):
             resultado = preparar_cuenta_particular_socio(
                 socio_id=socio_id,
                 empresa_id=empresa_id,
                 usuario=usuario,
             )
             if resultado.get("ok"):
-                st.success(resultado.get("mensaje"))
+                st.success(resultado.get("mensaje") or "Referencia auxiliar preparada correctamente.")
                 _refrescar(preparar_vista)
             else:
-                st.error(resultado.get("mensaje", "No se pudo preparar la cuenta particular."))
+                st.error(resultado.get("mensaje", "No se pudo preparar la referencia auxiliar."))
     with col_info:
         st.caption(
-            "Esta acción solo deja preparada una referencia interna. "
-            "No crea cuentas contables en el Plan de Cuentas y no registra movimientos."
+            "Esta acción solo deja preparada una referencia interna heredada de la ficha. "
+            "No crea cuentas contables en el Plan de Cuentas y no registra movimientos. "
+            "Las cuentas contables específicas se preparan desde el panel v4."
         )
 
     _mostrar_eventos_ficha(socio_id=socio_id, empresa_id=empresa_id)
@@ -284,6 +316,10 @@ def mostrar_socios_empresa_pro(
         "Esta sección amplía la ficha del socio para futuros movimientos societarios y económicos. "
         "No registra Caja/Banco, no carga compras, no emite pagos y no genera asientos definitivos."
     )
+    st.caption(
+        "Además integra la matriz contable, cuentas específicas por socio y control normativo como paneles auxiliares, "
+        "sin convertir al socio en una cuenta contable única."
+    )
 
     _mostrar_metricas_resumen(empresa_id)
 
@@ -292,13 +328,12 @@ def mostrar_socios_empresa_pro(
     if fichas.empty:
         st.warning("Primero cargá socios/accionistas en la sección Socios.")
         _mostrar_catalogo_conceptos()
-        mostrar_matriz_contable_socios(empresa_id=empresa_id, usuario=usuario)
-        mostrar_control_normativo_vinculos_socios(empresa_id=empresa_id, usuario=usuario)
+        _mostrar_paneles_contables_socios(empresa_id=empresa_id, usuario=usuario)
         return
 
     _mostrar_tabla_fichas(fichas)
     _mostrar_catalogo_conceptos()
-    mostrar_matriz_contable_socios(empresa_id=empresa_id, usuario=usuario)
+    _mostrar_paneles_contables_socios(empresa_id=empresa_id, usuario=usuario)
 
     activos = fichas[fichas["estado"] == "ACTIVO"] if "estado" in fichas.columns else fichas
     opciones = _opciones_socios(activos)

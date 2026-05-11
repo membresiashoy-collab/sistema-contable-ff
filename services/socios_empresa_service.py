@@ -286,11 +286,11 @@ def asegurar_estructura_socios_pro() -> None:
                 rol_relacion = COALESCE(NULLIF(TRIM(rol_relacion), ''), tipo_socio),
                 condicion_fiscal = COALESCE(NULLIF(TRIM(condicion_fiscal), ''), 'NO_INFORMADA'),
                 cuenta_particular_habilitada = COALESCE(cuenta_particular_habilitada, 0),
-                admite_prestamos = COALESCE(admite_prestamos, 1),
-                admite_retiros = COALESCE(admite_retiros, 1),
-                admite_reintegros = COALESCE(admite_reintegros, 1),
-                admite_honorarios = COALESCE(admite_honorarios, 1),
-                admite_facturas_proveedor = COALESCE(admite_facturas_proveedor, 1)
+                admite_prestamos = COALESCE(admite_prestamos, 0),
+                admite_retiros = COALESCE(admite_retiros, 0),
+                admite_reintegros = COALESCE(admite_reintegros, 0),
+                admite_honorarios = COALESCE(admite_honorarios, 0),
+                admite_facturas_proveedor = COALESCE(admite_facturas_proveedor, 0)
             """
         )
 
@@ -415,11 +415,11 @@ def actualizar_ficha_integral_socio(
     cuenta_particular_codigo: str = "",
     cuenta_particular_nombre: str = "",
     cuenta_particular_significado: str = "",
-    admite_prestamos: bool = True,
-    admite_retiros: bool = True,
-    admite_reintegros: bool = True,
-    admite_honorarios: bool = True,
-    admite_facturas_proveedor: bool = True,
+    admite_prestamos: bool = False,
+    admite_retiros: bool = False,
+    admite_reintegros: bool = False,
+    admite_honorarios: bool = False,
+    admite_facturas_proveedor: bool = False,
     observaciones_ficha: str = "",
     usuario: Optional[str] = None,
 ) -> Dict[str, Any]:
