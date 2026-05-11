@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from modulos.socios_matriz_contable_componentes import mostrar_matriz_contable_socios
+from modulos.socios_control_vinculos_componentes import mostrar_control_normativo_vinculos_socios
 from services.socios_empresa_service import (
     actualizar_ficha_integral_socio,
     catalogo_conceptos_relacion_socios,
@@ -292,6 +293,7 @@ def mostrar_socios_empresa_pro(
         st.warning("Primero cargá socios/accionistas en la sección Socios.")
         _mostrar_catalogo_conceptos()
         mostrar_matriz_contable_socios(empresa_id=empresa_id, usuario=usuario)
+        mostrar_control_normativo_vinculos_socios(empresa_id=empresa_id, usuario=usuario)
         return
 
     _mostrar_tabla_fichas(fichas)
