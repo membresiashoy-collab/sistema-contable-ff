@@ -191,3 +191,68 @@ def test_restaurar_vinculo_vuelve_a_pendiente_con_evento() -> None:
         """
     ).fetchone()
     assert eventos["evento"] == "MATRIZ_RESTAURADA"
+
+def test_lista_candidatas_tolera_campos_nulos_en_plan_empresa_y_maestro() -> None:
+    conn = _conn()
+
+    conn.execute(
+        "INSERT INTO plan_cuentas_maestro "
+        "(codigo, nombre, elemento, rubro, cuenta, subcuenta, imputable, estado, saldo_normal, "
+        "uso_operativo_sistema, modulo_sugerido, orden) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "2.5.02",
+            "Deudas con socios",
+            None,
+            None,
+            None,
+            None,
+            1,
+            "ACTIVA",
+            None,
+            None,
+            None,
+            60,
+        ),
+    )
+
+    conn.execute(
+        "INSERT INTO plan_cuentas_empresa "
+        "(empresa_id, codigo, nombre, imputable, estado, uso_operativo_sistema, cuenta_maestro_id, orden) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            1,
+            "2.5.02",
+            "Deudas con socios",
+            1,
+            "ACTIVA",
+            None,
+            None,
+            60,
+        ),
+    )
+
+    conn.execute(
+        "UPDATE plan_cuentas_maestro "
+        "SET elemento = NULL, rubro = NULL, cuenta = NULL, subcuenta = NULL, "
+        "saldo_normal = NULL, uso_operativo_sistema = NULL, modulo_sugerido = NULL "
+        "WHERE codigo = '2.5.01'"
+    )
+    conn.execute(
+        "UPDATE plan_cuentas_empresa "
+        "SET uso_operativo_sistema = NULL, cuenta_maestro_id = NULL "
+        "WHERE codigo = '2.5.01'"
+    )
+    conn.commit()
+
+    candidatas = listar_candidatas_matriz_contable(
+        tipo_vinculo="PRESTAMO_SOCIO_EMPRESA",
+        empresa_id=1,
+        conn=conn,
+    )
+
+    assert not candidatas["maestro"].empty
+    assert not candidatas["empresa"].empty
+    assert "2.5.01" in set(candidatas["maestro"]["codigo"])
+    assert "2.5.01" in set(candidatas["empresa"]["codigo"])
+

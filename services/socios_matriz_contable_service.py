@@ -172,6 +172,16 @@ def _normalizar_busqueda(valor: Any) -> str:
     return re.sub(r"\s+", " ", texto).strip()
 
 
+def _unir_textos_busqueda(*valores: Any) -> str:
+    """Une campos de base de datos de forma segura para búsqueda.
+
+    Las cuentas del Plan Maestro FF y de cuentas empresa pueden traer campos NULL
+    por migraciones, cuentas modelo, cuentas específicas o datos demo. Ninguna
+    búsqueda auxiliar debe romper la pantalla de Configuración por un None.
+    """
+    return _normalizar_busqueda(" ".join(_texto(valor) for valor in valores))
+
+
 def _bool_int(valor: Any, default: int = 0) -> int:
     if valor is None or valor == "":
         return default
@@ -651,18 +661,14 @@ def _cuentas_maestras_candidatas(
     salida: list[dict[str, Any]] = []
     claves = [_normalizar_busqueda(p) for p in palabras_clave if _texto(p)]
     for fila in filas:
-        texto = _normalizar_busqueda(
-            " ".join(
-                [
-                    fila.get("codigo", ""),
-                    fila.get("nombre", ""),
-                    fila.get("elemento", ""),
-                    fila.get("rubro", ""),
-                    fila.get("cuenta", ""),
-                    fila.get("subcuenta", ""),
-                    fila.get("uso_operativo_sistema", ""),
-                ]
-            )
+        texto = _unir_textos_busqueda(
+            fila.get("codigo"),
+            fila.get("nombre"),
+            fila.get("elemento"),
+            fila.get("rubro"),
+            fila.get("cuenta"),
+            fila.get("subcuenta"),
+            fila.get("uso_operativo_sistema"),
         )
         puntaje = sum(1 for clave in claves if clave and clave in texto)
         if puntaje <= 0:
@@ -724,14 +730,10 @@ def _cuentas_empresa_candidatas(
 
     salida: list[dict[str, Any]] = []
     for fila in filas:
-        texto = _normalizar_busqueda(
-            " ".join(
-                [
-                    fila.get("codigo", ""),
-                    fila.get("nombre", ""),
-                    fila.get("uso_operativo_sistema", ""),
-                ]
-            )
+        texto = _unir_textos_busqueda(
+            fila.get("codigo"),
+            fila.get("nombre"),
+            fila.get("uso_operativo_sistema"),
         )
         puntaje = sum(1 for clave in claves if clave and clave in texto)
         if puntaje <= 0:

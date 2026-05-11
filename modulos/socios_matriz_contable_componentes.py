@@ -226,32 +226,46 @@ def mostrar_matriz_contable_socios(
     usuario: Optional[str] = None,
 ) -> None:
     st.markdown("#### Matriz contable de vínculos con socios")
-    st.info(
-        "Esta sección prepara la relación entre cada vínculo económico con socios y las cuentas del Plan Maestro FF "
-        "o del Plan de Cuentas de la empresa. No registra operaciones ni genera asientos definitivos."
-    )
 
-    _mostrar_metricas_matriz(empresa_id=empresa_id)
+    try:
+        st.info(
+            "Esta sección prepara la relación entre cada vínculo económico con socios y las cuentas del Plan Maestro FF "
+            "o del Plan de Cuentas de la empresa. No registra operaciones ni genera asientos definitivos."
+        )
 
-    matriz = listar_matriz_contable_socios(empresa_id=empresa_id, incluir_inactivas=False)
-    _mostrar_tabla_matriz(matriz)
+        _mostrar_metricas_matriz(empresa_id=empresa_id)
 
-    opciones = _opciones_vinculos(matriz)
-    if not opciones:
+        matriz = listar_matriz_contable_socios(empresa_id=empresa_id, incluir_inactivas=False)
+        _mostrar_tabla_matriz(matriz)
+
+        opciones = _opciones_vinculos(matriz)
+        if not opciones:
+            _mostrar_eventos_matriz(empresa_id=empresa_id)
+            return
+
+        tipo_vinculo = st.selectbox(
+            "Seleccionar vínculo para configurar",
+            options=[opcion[0] for opcion in opciones],
+            format_func=lambda valor: dict(opciones).get(valor, valor),
+            key="socios_matriz_contable_tipo_vinculo",
+        )
+
+        _mostrar_formulario_configuracion(
+            tipo_vinculo=tipo_vinculo,
+            empresa_id=empresa_id,
+            usuario=usuario,
+        )
+
         _mostrar_eventos_matriz(empresa_id=empresa_id)
-        return
 
-    tipo_vinculo = st.selectbox(
-        "Seleccionar vínculo para configurar",
-        options=[opcion[0] for opcion in opciones],
-        format_func=lambda valor: dict(opciones).get(valor, valor),
-        key="socios_matriz_contable_tipo_vinculo",
-    )
-
-    _mostrar_formulario_configuracion(
-        tipo_vinculo=tipo_vinculo,
-        empresa_id=empresa_id,
-        usuario=usuario,
-    )
-
-    _mostrar_eventos_matriz(empresa_id=empresa_id)
+    except Exception as exc:
+        st.warning(
+            "No se pudo cargar la matriz contable de vínculos con socios. "
+            "La ficha integral del socio y el resto de Configuración siguen disponibles."
+        )
+        st.caption(
+            "Este bloque es auxiliar y preparatorio. Si falla por datos incompletos del Plan Maestro FF "
+            "o del Plan de Cuentas de la empresa, no debe impedir operar el resto del sistema."
+        )
+        with st.expander("Detalle técnico para diagnóstico", expanded=False):
+            st.code(str(exc))
