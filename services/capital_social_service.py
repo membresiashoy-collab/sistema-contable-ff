@@ -395,6 +395,148 @@ def crear_socio_empresa(
     return _resultado(True, "Socio creado correctamente.", socio_id=socio_id)
 
 
+def dar_baja_socio_empresa(
+    empresa_id: int,
+    socio_id: int,
+    motivo: str,
+    usuario: Optional[str] = None,
+    permitir_con_vinculos: bool = False,
+    conn=None,
+) -> Dict[str, Any]:
+    migrar_capital_social()
+
+    motivo_limpio = _texto(motivo)
+    if not motivo_limpio:
+        return _resultado(False, "Para dar de baja un socio se requiere motivo.")
+
+    try:
+        empresa_id_int = int(empresa_id)
+        socio_id_int = int(socio_id)
+    except Exception:
+        return _resultado(False, "Empresa o socio inválido.")
+
+    close_conn = False
+    if conn is None:
+        conn = conectar()
+        close_conn = True
+
+    try:
+        cur = conn.cursor()
+
+        cur_socio = cur.execute(
+            """
+            SELECT *
+            FROM socios_empresa
+            WHERE empresa_id = ?
+              AND id = ?
+            LIMIT 1
+            """,
+            (empresa_id_int, socio_id_int),
+        )
+        fila = cur_socio.fetchone()
+        if not fila:
+            return _resultado(False, "No se encontró el socio informado para la empresa.")
+
+        columnas = [col[0] for col in cur_socio.description]
+        socio = dict(zip(columnas, fila))
+
+        estado_actual = _texto_upper(socio.get("estado") or "ACTIVO")
+        if estado_actual != "ACTIVO":
+            return _resultado(False, "El socio no se encuentra activo.")
+
+        suscripciones_activas = cur.execute(
+            """
+            SELECT COUNT(*) AS cantidad
+            FROM capital_suscripciones cs
+            INNER JOIN capital_social_empresa cse ON cse.id = cs.capital_id
+            WHERE cs.empresa_id = ?
+              AND cs.socio_id = ?
+              AND cs.estado = 'ACTIVO'
+              AND cse.estado <> 'ANULADO'
+            """,
+            (empresa_id_int, socio_id_int),
+        ).fetchone()[0]
+
+        integraciones_activas = cur.execute(
+            """
+            SELECT COUNT(*) AS cantidad
+            FROM capital_integraciones ci
+            WHERE ci.empresa_id = ?
+              AND ci.socio_id = ?
+              AND ci.estado <> 'ANULADO'
+            """,
+            (empresa_id_int, socio_id_int),
+        ).fetchone()[0]
+
+        if (suscripciones_activas or integraciones_activas) and not permitir_con_vinculos:
+            return _resultado(
+                False,
+                "No se puede dar de baja el socio porque tiene capital, suscripciones o integraciones activas. "
+                "Primero regularice el vínculo societario.",
+                suscripciones_activas=int(suscripciones_activas or 0),
+                integraciones_activas=int(integraciones_activas or 0),
+            )
+
+        columnas_socios = _columnas_tabla(conn, "socios_empresa")
+        set_sql = [
+            "estado = 'BAJA'",
+            "fecha_baja = CURRENT_TIMESTAMP",
+            "motivo_baja = ?",
+        ]
+        params = [motivo_limpio]
+
+        if "usuario_baja" in columnas_socios:
+            set_sql.append("usuario_baja = ?")
+            params.append(usuario)
+
+        params.extend([empresa_id_int, socio_id_int])
+
+        cur.execute(
+            f"""
+            UPDATE socios_empresa
+            SET {', '.join(set_sql)}
+            WHERE empresa_id = ?
+              AND id = ?
+              AND estado = 'ACTIVO'
+            """,
+            tuple(params),
+        )
+
+        if cur.rowcount == 0:
+            return _resultado(False, "No se pudo dar de baja el socio. Verifique el estado actual.")
+
+        nombre_socio = _texto(socio.get("nombre"), f"ID {socio_id_int}")
+        _registrar_evento(
+            capital_id=None,
+            socio_id=socio_id_int,
+            empresa_id=empresa_id_int,
+            evento="BAJA_SOCIO",
+            detalle=f"Socio dado de baja: {nombre_socio}. Motivo: {motivo_limpio}",
+            usuario=usuario,
+            conn=conn,
+        )
+
+        if close_conn:
+            conn.commit()
+
+        return _resultado(
+            True,
+            "Socio dado de baja correctamente.",
+            socio_id=socio_id_int,
+            estado="BAJA",
+            suscripciones_activas=int(suscripciones_activas or 0),
+            integraciones_activas=int(integraciones_activas or 0),
+        )
+
+    except Exception as exc:
+        if close_conn:
+            conn.rollback()
+        return _resultado(False, f"No se pudo dar de baja el socio: {exc}")
+    finally:
+        if close_conn:
+            conn.close()
+
+
 def listar_capital_social_empresa(empresa_id: int = 1, incluir_anulados: bool = False) -> pd.DataFrame:
     migrar_capital_social()
     where_anulados = "" if incluir_anulados else "AND estado <> 'ANULADO'"

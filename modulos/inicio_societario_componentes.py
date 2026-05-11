@@ -8,6 +8,7 @@ from database import conectar
 from services.capital_social_service import (
     anular_integracion_capital,
     configurar_capital_social_inicial,
+    dar_baja_socio_empresa,
     crear_socio_empresa,
     listar_capital_social_empresa,
     listar_eventos_capital,
@@ -529,6 +530,86 @@ def _mostrar_socios(empresa_id: int, preparar_vista, usuario: Optional[str]) -> 
     return socios
 
 
+def _mostrar_gestion_controlada_socios(empresa_id: int, preparar_vista, usuario: Optional[str]) -> None:
+    st.markdown("#### Gestión controlada de socios")
+
+    st.caption(
+        "La baja de socios es lógica y auditada. No borra historia societaria ni modifica capitales, "
+        "suscripciones, integraciones o asientos ya registrados."
+    )
+
+    try:
+        socios_todos = listar_socios_empresa(empresa_id=empresa_id, incluir_bajas=True)
+    except Exception as exc:
+        st.warning("No se pudo cargar la gestión controlada de socios.")
+        st.caption(str(exc))
+        return
+
+    if not _df_no_vacio(socios_todos):
+        st.info("No hay socios cargados para gestionar.")
+        return
+
+    activos = socios_todos[socios_todos["estado"].astype(str).str.upper() == "ACTIVO"].copy() if "estado" in socios_todos.columns else socios_todos.copy()
+    bajas = socios_todos[socios_todos["estado"].astype(str).str.upper() != "ACTIVO"].copy() if "estado" in socios_todos.columns else pd.DataFrame()
+
+    with st.expander("Socios dados de baja / inactivos", expanded=False):
+        if _df_no_vacio(bajas):
+            st.dataframe(_vista_socios(bajas, preparar_vista), use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay socios dados de baja.")
+
+    with st.expander("Dar de baja socio / accionista", expanded=False):
+        if not _df_no_vacio(activos):
+            st.info("No hay socios activos para dar de baja.")
+            return
+
+        opciones = []
+        for _, fila in activos.iterrows():
+            socio_id = int(fila.get("id"))
+            nombre = _texto(fila.get("nombre"), f"Socio {socio_id}")
+            cuit = _texto(fila.get("cuit"))
+            etiqueta = f"{socio_id} - {nombre}" + (f" - CUIT {cuit}" if cuit else "")
+            opciones.append((etiqueta, socio_id))
+
+        etiqueta = st.selectbox(
+            "Socio activo",
+            [opcion[0] for opcion in opciones],
+            key="inicio_societario_baja_socio_id",
+        )
+        socio_id = next(valor for texto_opcion, valor in opciones if texto_opcion == etiqueta)
+
+        st.warning(
+            "Si el socio tiene capital suscripto, integraciones o vínculos societarios activos, "
+            "el sistema bloqueará la baja simple para evitar inconsistencias."
+        )
+
+        motivo = st.text_area(
+            "Motivo obligatorio",
+            key="inicio_societario_baja_socio_motivo",
+        )
+
+        if st.button("Dar de baja socio", type="secondary", key="inicio_societario_baja_socio_btn"):
+            resultado = dar_baja_socio_empresa(
+                empresa_id=empresa_id,
+                socio_id=socio_id,
+                motivo=motivo,
+                usuario=usuario,
+                permitir_con_vinculos=False,
+            )
+            if resultado.get("ok"):
+                st.success(resultado.get("mensaje", "Socio dado de baja correctamente."))
+                _rerun()
+            else:
+                st.error(resultado.get("mensaje", "No se pudo dar de baja el socio."))
+                suscripciones = resultado.get("suscripciones_activas")
+                integraciones = resultado.get("integraciones_activas")
+                if suscripciones is not None or integraciones is not None:
+                    st.caption(
+                        f"Vínculos detectados: suscripciones activas={suscripciones or 0}; "
+                        f"integraciones activas={integraciones or 0}."
+                    )
+
+
 def _mostrar_capital_social(empresa_id: int, socios: pd.DataFrame, preparar_vista, usuario: Optional[str]) -> pd.DataFrame:
     st.markdown("#### Capital social suscripto")
 
@@ -888,6 +969,7 @@ def mostrar_panel_inicio_societario(
 
     with tab_socios:
         socios = _mostrar_socios(empresa_id_resuelto, preparar_vista, usuario)
+        _mostrar_gestion_controlada_socios(empresa_id_resuelto, preparar_vista, usuario)
 
     with tab_capital:
         capitales = _mostrar_capital_social(empresa_id_resuelto, socios, preparar_vista, usuario)

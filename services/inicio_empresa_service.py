@@ -250,55 +250,122 @@ def _asegurar_tabla_empresas_minima(conn) -> None:
 def asegurar_estructura_inicio_empresa() -> None:
     conn = conectar()
     try:
-        _asegurar_tabla_empresas_minima(conn)
-        conn.executescript(_sql_migracion_inicio_empresa())
+        cur = conn.cursor()
 
-        _agregar_columna_si_no_existe(conn, "empresas", "tipo_sujeto", "TEXT")
-        _agregar_columna_si_no_existe(conn, "empresas", "tipo_societario", "TEXT")
-        _agregar_columna_si_no_existe(conn, "empresas", "fecha_inicio_actividades", "TEXT")
-        _agregar_columna_si_no_existe(conn, "empresas", "fecha_inicio_contable", "TEXT")
-        _agregar_columna_si_no_existe(conn, "empresas", "condicion_iva", "TEXT")
-        _agregar_columna_si_no_existe(conn, "empresas", "condicion_ganancias", "TEXT")
-        _agregar_columna_si_no_existe(conn, "empresas", "condicion_iibb", "TEXT")
-        _agregar_columna_si_no_existe(conn, "empresas", "jurisdiccion_sede", "TEXT")
-        _agregar_columna_si_no_existe(conn, "empresas", "marco_contable", "TEXT")
-        _agregar_columna_si_no_existe(conn, "empresas", "estado_onboarding", "TEXT")
-        _agregar_columna_si_no_existe(conn, "empresas", "fecha_actualizacion", "TIMESTAMP")
+        columnas_empresas = {
+            "tipo_sujeto": "TEXT",
+            "tipo_societario": "TEXT",
+            "fecha_inicio_actividades": "TEXT",
+            "fecha_inicio_contable": "TEXT",
+            "condicion_iva": "TEXT",
+            "condicion_ganancias": "TEXT",
+            "condicion_iibb": "TEXT",
+            "jurisdiccion_sede": "TEXT",
+            "marco_contable": "TEXT",
+            "estado_onboarding": "TEXT",
+            "fecha_actualizacion": "TIMESTAMP",
+        }
+        for columna, definicion in columnas_empresas.items():
+            _agregar_columna_si_no_existe(conn, "empresas", columna, definicion)
 
-        conn.execute(
+        cur.execute(
             """
             UPDATE empresas
             SET tipo_sujeto = ?
-            WHERE COALESCE(TRIM(tipo_sujeto), '') = ''
+            WHERE tipo_sujeto IS NULL
+               OR TRIM(COALESCE(tipo_sujeto, '')) = ''
             """,
             (TIPO_SUJETO_NO_DEFINIDO,),
         )
-        conn.execute(
-            """
-            UPDATE empresas
-            SET estado_onboarding = ?
-            WHERE COALESCE(TRIM(estado_onboarding), '') = ''
-            """,
-            (ESTADO_ONBOARDING_PENDIENTE,),
-        )
 
-        conn.execute(
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {TABLA_DOCUMENTACION} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                empresa_id INTEGER NOT NULL,
+                tipo_documento TEXT,
+                descripcion TEXT,
+                referencia TEXT,
+                fecha_documento TEXT,
+                archivo_nombre TEXT,
+                archivo_ruta TEXT,
+                observaciones TEXT,
+                estado TEXT NOT NULL DEFAULT 'ACTIVA',
+                usuario_creacion TEXT,
+                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                usuario_anulacion TEXT,
+                fecha_anulacion TIMESTAMP,
+                motivo_anulacion TEXT
+            )
+            """
+        )
+        cur.execute(
             f"""
             CREATE INDEX IF NOT EXISTS idx_{TABLA_DOCUMENTACION}_empresa_estado
             ON {TABLA_DOCUMENTACION} (empresa_id, estado)
             """
         )
-        conn.execute(
-            f"""
-            CREATE INDEX IF NOT EXISTS idx_{TABLA_EVENTOS}_empresa_fecha
-            ON {TABLA_EVENTOS} (empresa_id, fecha_evento)
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS empresa_inicio_eventos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                empresa_id INTEGER NOT NULL,
+                tipo_evento TEXT,
+                evento TEXT,
+                accion TEXT,
+                descripcion TEXT,
+                detalle TEXT,
+                referencia TEXT,
+                origen TEXT,
+                datos_json TEXT,
+                observaciones TEXT,
+                estado TEXT NOT NULL DEFAULT 'REGISTRADO',
+                usuario TEXT,
+                usuario_creacion TEXT,
+                fecha_evento TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_empresa_inicio_eventos_empresa_fecha
+            ON empresa_inicio_eventos (empresa_id, fecha_evento)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_empresa_inicio_eventos_empresa_estado
+            ON empresa_inicio_eventos (empresa_id, estado)
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS inicio_empresa_onboarding (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                empresa_id INTEGER NOT NULL UNIQUE,
+                estado TEXT NOT NULL DEFAULT 'PENDIENTE',
+                porcentaje_preparacion REAL NOT NULL DEFAULT 0,
+                requisitos_pendientes INTEGER NOT NULL DEFAULT 0,
+                bloqueantes INTEGER NOT NULL DEFAULT 0,
+                observaciones TEXT,
+                usuario_actualizacion TEXT,
+                fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_inicio_empresa_onboarding_empresa_estado
+            ON inicio_empresa_onboarding (empresa_id, estado)
             """
         )
 
         conn.commit()
     finally:
         conn.close()
-
 
 def _fila_a_dict(cursor, fila) -> Optional[Dict[str, Any]]:
     if not fila:
@@ -720,20 +787,94 @@ def actualizar_inicio_empresa(
 
 
 def documentacion_respaldo_listar(empresa_id: int, incluir_anulada: bool = False) -> pd.DataFrame:
-    asegurar_estructura_inicio_empresa()
-    where_estado = "" if incluir_anulada else "AND estado = 'ACTIVO'"
-    return ejecutar_query(
-        f"""
-        SELECT *
-        FROM {TABLA_DOCUMENTACION}
-        WHERE empresa_id = ?
-        {where_estado}
-        ORDER BY fecha_creacion DESC, id DESC
-        """,
-        (int(empresa_id),),
-        fetch=True,
-    )
+    columnas = [
+        "id",
+        "empresa_id",
+        "tipo_documento",
+        "descripcion",
+        "referencia",
+        "fecha_documento",
+        "archivo_nombre",
+        "archivo_ruta",
+        "observaciones",
+        "estado",
+        "usuario_creacion",
+        "fecha_creacion",
+        "usuario_anulacion",
+        "fecha_anulacion",
+        "motivo_anulacion",
+    ]
 
+    def _vacio():
+        return pd.DataFrame(columns=columnas)
+
+    try:
+        empresa_id_int = int(empresa_id)
+    except Exception:
+        return _vacio()
+
+    try:
+        asegurar_estructura_inicio_empresa()
+    except Exception:
+        pass
+
+    conn = conectar()
+    try:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {TABLA_DOCUMENTACION} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                empresa_id INTEGER NOT NULL,
+                tipo_documento TEXT,
+                descripcion TEXT,
+                referencia TEXT,
+                fecha_documento TEXT,
+                archivo_nombre TEXT,
+                archivo_ruta TEXT,
+                observaciones TEXT,
+                estado TEXT NOT NULL DEFAULT 'ACTIVA',
+                usuario_creacion TEXT,
+                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                usuario_anulacion TEXT,
+                fecha_anulacion TIMESTAMP,
+                motivo_anulacion TEXT
+            )
+            """
+        )
+        conn.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS idx_{TABLA_DOCUMENTACION}_empresa_estado
+            ON {TABLA_DOCUMENTACION} (empresa_id, estado)
+            """
+        )
+        conn.commit()
+
+        filtro_estado = ""
+        if not incluir_anulada:
+            filtro_estado = "AND UPPER(COALESCE(estado, 'ACTIVA')) NOT IN ('ANULADA', 'ANULADO')"
+
+        df = pd.read_sql_query(
+            f"""
+            SELECT *
+            FROM {TABLA_DOCUMENTACION}
+            WHERE empresa_id = ?
+            {filtro_estado}
+            ORDER BY COALESCE(fecha_documento, fecha_creacion) DESC, id DESC
+            """,
+            conn,
+            params=(empresa_id_int,),
+        )
+
+        for columna in columnas:
+            if columna not in df.columns:
+                df[columna] = None
+
+        return df
+
+    except Exception:
+        return _vacio()
+    finally:
+        conn.close()
 
 def documentacion_respaldo_registrar(
     empresa_id: int,
