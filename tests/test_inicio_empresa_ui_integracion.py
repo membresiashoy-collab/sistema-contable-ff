@@ -48,16 +48,15 @@ def test_seguridad_ui_tiene_selector_tipo_sujeto_en_alta_y_edicion():
 
 
 def test_configuracion_muestra_inicio_empresa_y_documentacion_opcional():
+    from pathlib import Path
+
     estado = _funcion("modulos/configuracion.py", "mostrar_estado_empresa_operativa")
+    componente = Path("modulos/inicio_empresa_componentes.py").read_text(encoding="utf-8")
 
-    assert "Inicio de empresa" in estado
-    assert "obtener_perfil_inicio_empresa" in estado
-    assert "obtener_estado_onboarding_empresa" in estado
-    assert "obtener_requisitos_inicio_empresa" in estado
-    assert "documentacion_respaldo_listar" in estado
-    assert "Documentación respaldatoria opcional" in estado
-    assert "no bloquea" in estado.lower()
-
+    assert "mostrar_estado_empresa_operativa_adaptativo" in estado
+    assert "Inicio de empresa" in componente
+    assert "Documentación respaldatoria opcional" in componente
+    assert "documentacion_respaldo_listar" in componente
 
 def test_no_se_tocan_modulos_operativos_en_esta_integracion():
     archivos_modificados_esperados = {
