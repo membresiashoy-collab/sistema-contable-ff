@@ -10,6 +10,7 @@ from services.inicio_empresa_service import (
 )
 
 
+from modulos.inicio_societario_componentes import mostrar_panel_inicio_societario
 def _texto(valor, default=""):
     if valor is None:
         return default
@@ -138,6 +139,8 @@ def _mostrar_tarjeta_sociedad(perfil, requisitos, preparar_vista):
         "Las integraciones reales de capital deben vincularse desde Tesorería mediante el flujo "
         "ya existente. Esta pantalla no registra movimientos ni toca Banco/Caja."
     )
+
+    mostrar_panel_inicio_societario(perfil=perfil, preparar_vista=preparar_vista)
 
 
 def _mostrar_tarjeta_otro_ente(perfil, requisitos, preparar_vista):
