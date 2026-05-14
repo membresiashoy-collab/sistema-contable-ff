@@ -573,3 +573,28 @@ def exportar_centro_control_como_texto(centro_control: dict[str, Any]) -> str:
         lineas.append(f"  Parametrización: {par.get('estado')} | {par.get('mensaje', '')}")
     return "\n".join(lineas)
 
+# WRAPPER_CONEXION_CENTRO_CONTROL_V1
+# Ajuste puntual:
+# El Centro de Control debe abrir una conexión SQLite propia cuando se invoca
+# desde UI sin conn/conexion explícita, y pasarla a los servicios integrados.
+_generar_centro_control_contable_base = generar_centro_control_contable
+
+
+def generar_centro_control_contable(*args, **kwargs):
+    conexion_creada = None
+
+    if kwargs.get("conexion") is not None and kwargs.get("conn") is None:
+        kwargs["conn"] = kwargs.pop("conexion")
+
+    if kwargs.get("conn") is None:
+        from database import conectar
+
+        conexion_creada = conectar()
+        kwargs["conn"] = conexion_creada
+
+    try:
+        return _generar_centro_control_contable_base(*args, **kwargs)
+    finally:
+        if conexion_creada is not None:
+            conexion_creada.close()
+
