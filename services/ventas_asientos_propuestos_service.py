@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Iterable, Optional, Tuple
 import re
 import sqlite3
@@ -160,6 +161,40 @@ def _numero(valor: Any) -> float:
         return 0.0
 
 
+def _fecha_bandeja(valor: Any) -> str:
+    """
+    Normaliza fecha para uso interno de Bandeja.
+
+    Regla:
+    - En pantalla se muestra dd/mm/aaaa.
+    - Para crear asiento propuesto se envía YYYY-MM-DD.
+    """
+    texto = _texto(valor)
+    if not texto:
+        return ""
+
+    texto = texto.strip()
+
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", texto):
+        return texto
+
+    for formato in ("%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(texto, formato).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    try:
+        fecha = pd.to_datetime(texto, errors="coerce", dayfirst=True)
+        if pd.notna(fecha):
+            return fecha.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+
+    return texto
+
+
+
 def _fila_a_dict(cursor: sqlite3.Cursor, fila: Any) -> Optional[dict[str, Any]]:
     if fila is None:
         return None
@@ -199,8 +234,8 @@ def _cuenta_por_codigo(conn: sqlite3.Connection, codigo: Any, empresa_id: int) -
         SELECT codigo, nombre
         FROM plan_cuentas_empresa
         WHERE COALESCE(empresa_id, 1) = ?
-          AND COALESCE(estado, 'ACTIVA') = 'ACTIVA'
-          AND COALESCE(imputable, 0) = 1
+          AND UPPER(COALESCE(CAST(estado AS TEXT), 'ACTIVA')) IN ('ACTIVA', 'ACTIVO', 'A', '1', 'S', 'SI', 'TRUE')
+          AND UPPER(COALESCE(CAST(imputable AS TEXT), '1')) IN ('1', 'S', 'SI', 'TRUE')
           AND codigo = ?
         LIMIT 1
         """,
@@ -226,8 +261,8 @@ def _cuenta_por_nombre(conn: sqlite3.Connection, nombre: Any, empresa_id: int) -
         SELECT codigo, nombre
         FROM plan_cuentas_empresa
         WHERE COALESCE(empresa_id, 1) = ?
-          AND COALESCE(estado, 'ACTIVA') = 'ACTIVA'
-          AND COALESCE(imputable, 0) = 1
+          AND UPPER(COALESCE(CAST(estado AS TEXT), 'ACTIVA')) IN ('ACTIVA', 'ACTIVO', 'A', '1', 'S', 'SI', 'TRUE')
+          AND UPPER(COALESCE(CAST(imputable AS TEXT), '1')) IN ('1', 'S', 'SI', 'TRUE')
         """,
         (empresa_id,),
     )
@@ -257,8 +292,8 @@ def _cuentas_por_uso(
         SELECT codigo, nombre, uso_operativo_sistema
         FROM plan_cuentas_empresa
         WHERE COALESCE(empresa_id, 1) = ?
-          AND COALESCE(estado, 'ACTIVA') = 'ACTIVA'
-          AND COALESCE(imputable, 0) = 1
+          AND UPPER(COALESCE(CAST(estado AS TEXT), 'ACTIVA')) IN ('ACTIVA', 'ACTIVO', 'A', '1', 'S', 'SI', 'TRUE')
+          AND UPPER(COALESCE(CAST(imputable AS TEXT), '1')) IN ('1', 'S', 'SI', 'TRUE')
           AND UPPER(COALESCE(uso_operativo_sistema, '')) IN ({placeholders})
         ORDER BY codigo
         """,
@@ -329,49 +364,48 @@ def _actividad_venta(
     venta: dict[str, Any],
     empresa_id: int,
 ) -> dict[str, Any]:
+    """
+    Devuelve la agrupación interna/comercial asignada a la venta.
+
+    Regla de raíz:
+    - Una venta no puede generar asiento propuesto en Bandeja si no tiene agrupación interna asignada.
+    - No alcanza con tener tipo_venta o tratamiento_iva_venta cargados.
+    - La agrupación no define cuenta contable, pero sí es obligatoria como clasificación operativa previa.
+    """
     actividad_id = int(_numero(venta.get("actividad_venta_id")))
-    if actividad_id > 0 and _tabla_existe(conn, TABLA_ACTIVIDADES):
-        fila = _query_uno(
-            conn,
-            f"""
-            SELECT *
-            FROM {TABLA_ACTIVIDADES}
-            WHERE id = ?
-              AND COALESCE(empresa_id, 1) = ?
-              AND COALESCE(activo, 1) = 1
-            LIMIT 1
-            """,
-            (actividad_id, int(empresa_id)),
-        )
-        if fila:
-            # Las columnas cuenta_ventas_* son legado y no se devuelven como fuente contable.
-            return {
-                "id": fila.get("id"),
-                "codigo": fila.get("codigo"),
-                "nombre": fila.get("nombre"),
-                "tipo_venta": fila.get("tipo_venta"),
-                "tratamiento_iva": fila.get("tratamiento_iva"),
-                "descripcion": fila.get("descripcion"),
-            }
 
-    tipo_venta = _texto(venta.get("tipo_venta"))
-    actividad_codigo = _texto(venta.get("actividad_venta_codigo"))
-    actividad_nombre = _texto(venta.get("actividad_venta_nombre"))
-    tratamiento = _texto(venta.get("tratamiento_iva_venta"))
-
-    if not tipo_venta and not actividad_codigo and not actividad_nombre:
+    if actividad_id <= 0:
         raise ErrorContableVentas(
-            "La venta no tiene agrupación/tipo de venta asignado. Asigne una agrupación interna o tipo fiscal antes de generar el asiento propuesto."
+            "La venta no tiene agrupación interna asignada. "
+            "Asigne una agrupación comercial antes de generar el asiento propuesto en Bandeja."
         )
 
-    return {
-        "id": actividad_id,
-        "codigo": actividad_codigo or tipo_venta,
-        "nombre": actividad_nombre or tipo_venta or "Venta sin agrupación",
-        "tipo_venta": tipo_venta or "OTRA_ACTIVIDAD",
-        "tratamiento_iva": tratamiento or "A_REVISAR",
-    }
+    if not _tabla_existe(conn, TABLA_ACTIVIDADES):
+        raise ErrorContableVentas(
+            "No existe la tabla de agrupaciones internas de venta. "
+            "Configure las agrupaciones antes de generar asientos propuestos."
+        )
 
+    fila = _query_uno(
+        conn,
+        f"""
+        SELECT *
+        FROM {TABLA_ACTIVIDADES}
+        WHERE id = ?
+          AND COALESCE(empresa_id, 1) = ?
+          AND COALESCE(activo, 1) = 1
+        LIMIT 1
+        """,
+        (actividad_id, int(empresa_id)),
+    )
+
+    if not fila:
+        raise ErrorContableVentas(
+            "La agrupación interna asignada a la venta no existe o está inactiva. "
+            "Corrija la agrupación antes de generar el asiento propuesto en Bandeja."
+        )
+
+    return fila
 
 def resolver_cuenta_cliente(
     conn: sqlite3.Connection,
@@ -719,7 +753,7 @@ def generar_asiento_propuesto_venta(
 
         resultado = crear_asiento_origen(
             empresa_id=int(empresa_id),
-            fecha=_texto(venta.get("fecha")),
+            fecha=_fecha_bandeja(venta.get("fecha")),
             tipo_origen=ORIGEN_VENTA,
             descripcion=preparado["descripcion"],
             lineas=preparado["lineas"],
@@ -778,10 +812,7 @@ def listar_ventas_pendientes_asiento(
             SELECT v.*
             FROM {TABLA_VENTAS} v
             WHERE COALESCE(v.empresa_id, 1) = ?
-              AND (
-                    COALESCE(v.actividad_venta_id, 0) > 0
-                    OR COALESCE(TRIM(v.tipo_venta), '') <> ''
-                  )
+              AND COALESCE(v.actividad_venta_id, 0) > 0
               AND NOT EXISTS (
                   SELECT 1
                   FROM asientos_origen ao

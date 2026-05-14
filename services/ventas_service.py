@@ -20,23 +20,11 @@ from core.reglas_contables import interpretar_importes_venta
 
 
 def op_insert_libro_diario(asiento, fecha, cuenta, debe, haber, glosa, origen, archivo):
-    return (
-        """
-        INSERT INTO libro_diario
-        (id_asiento, fecha, cuenta, debe, haber, glosa, origen, archivo)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            asiento,
-            fecha,
-            cuenta,
-            round(float(debe), 2),
-            round(float(haber), 2),
-            glosa,
-            origen,
-            archivo,
-        ),
-    )
+    # Bloqueo definitivo de contabilización directa desde VENTAS.
+    # La importación/carga operativa registra comprobantes, IVA, cuenta corriente e historial.
+    # El Libro Diario se alimenta únicamente desde Bandeja de Asientos.
+    # Esta función queda como no-op transaccional para compatibilidad con llamadas heredadas.
+    return ("SELECT 1", ())
 
 
 def op_insert_comprobante_procesado(modulo, fecha, codigo, numero, cliente_proveedor, total, archivo):

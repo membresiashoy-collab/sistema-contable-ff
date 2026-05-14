@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Iterable, Optional, Tuple
 import re
 import sqlite3
@@ -141,6 +142,40 @@ def _numero(valor: Any) -> float:
         return 0.0
 
 
+def _fecha_bandeja(valor: Any) -> str:
+    """
+    Normaliza fecha para uso interno de Bandeja.
+
+    Regla:
+    - En pantalla se muestra dd/mm/aaaa.
+    - Para crear asiento propuesto se envía YYYY-MM-DD.
+    """
+    texto = _texto(valor)
+    if not texto:
+        return ""
+
+    texto = texto.strip()
+
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", texto):
+        return texto
+
+    for formato in ("%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(texto, formato).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    try:
+        fecha = pd.to_datetime(texto, errors="coerce", dayfirst=True)
+        if pd.notna(fecha):
+            return fecha.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+
+    return texto
+
+
+
 def _fila_a_dict(cursor: sqlite3.Cursor, fila: Any) -> Optional[dict[str, Any]]:
     if fila is None:
         return None
@@ -180,8 +215,8 @@ def _cuenta_por_id(conn: sqlite3.Connection, cuenta_id: Any) -> Optional[CuentaC
         SELECT codigo, nombre
         FROM plan_cuentas_empresa
         WHERE id = ?
-          AND COALESCE(estado, 'ACTIVA') = 'ACTIVA'
-          AND COALESCE(imputable, 0) = 1
+          AND UPPER(COALESCE(CAST(estado AS TEXT), 'ACTIVA')) IN ('ACTIVA', 'ACTIVO', 'A', '1', 'S', 'SI', 'TRUE')
+          AND UPPER(COALESCE(CAST(imputable AS TEXT), '1')) IN ('1', 'S', 'SI', 'TRUE')
         LIMIT 1
         """,
         (cuenta_id_int,),
@@ -206,8 +241,8 @@ def _cuenta_por_codigo(conn: sqlite3.Connection, codigo: Any, empresa_id: int) -
         SELECT codigo, nombre
         FROM plan_cuentas_empresa
         WHERE COALESCE(empresa_id, 1) = ?
-          AND COALESCE(estado, 'ACTIVA') = 'ACTIVA'
-          AND COALESCE(imputable, 0) = 1
+          AND UPPER(COALESCE(CAST(estado AS TEXT), 'ACTIVA')) IN ('ACTIVA', 'ACTIVO', 'A', '1', 'S', 'SI', 'TRUE')
+          AND UPPER(COALESCE(CAST(imputable AS TEXT), '1')) IN ('1', 'S', 'SI', 'TRUE')
           AND codigo = ?
         LIMIT 1
         """,
@@ -233,8 +268,8 @@ def _cuenta_por_nombre(conn: sqlite3.Connection, nombre: Any, empresa_id: int) -
         SELECT codigo, nombre
         FROM plan_cuentas_empresa
         WHERE COALESCE(empresa_id, 1) = ?
-          AND COALESCE(estado, 'ACTIVA') = 'ACTIVA'
-          AND COALESCE(imputable, 0) = 1
+          AND UPPER(COALESCE(CAST(estado AS TEXT), 'ACTIVA')) IN ('ACTIVA', 'ACTIVO', 'A', '1', 'S', 'SI', 'TRUE')
+          AND UPPER(COALESCE(CAST(imputable AS TEXT), '1')) IN ('1', 'S', 'SI', 'TRUE')
         """,
         (empresa_id,),
     )
@@ -266,8 +301,8 @@ def _cuenta_por_nombre_flexible(
         SELECT codigo, nombre
         FROM plan_cuentas_empresa
         WHERE COALESCE(empresa_id, 1) = ?
-          AND COALESCE(estado, 'ACTIVA') = 'ACTIVA'
-          AND COALESCE(imputable, 0) = 1
+          AND UPPER(COALESCE(CAST(estado AS TEXT), 'ACTIVA')) IN ('ACTIVA', 'ACTIVO', 'A', '1', 'S', 'SI', 'TRUE')
+          AND UPPER(COALESCE(CAST(imputable AS TEXT), '1')) IN ('1', 'S', 'SI', 'TRUE')
         ORDER BY codigo
         """,
         (empresa_id,),
@@ -306,8 +341,8 @@ def _cuentas_por_uso(
         SELECT codigo, nombre, uso_operativo_sistema
         FROM plan_cuentas_empresa
         WHERE COALESCE(empresa_id, 1) = ?
-          AND COALESCE(estado, 'ACTIVA') = 'ACTIVA'
-          AND COALESCE(imputable, 0) = 1
+          AND UPPER(COALESCE(CAST(estado AS TEXT), 'ACTIVA')) IN ('ACTIVA', 'ACTIVO', 'A', '1', 'S', 'SI', 'TRUE')
+          AND UPPER(COALESCE(CAST(imputable AS TEXT), '1')) IN ('1', 'S', 'SI', 'TRUE')
           AND UPPER(COALESCE(uso_operativo_sistema, '')) IN ({placeholders})
         ORDER BY codigo
         """,
@@ -458,8 +493,8 @@ def _fallback_cuenta_revision(
         SELECT codigo, nombre
         FROM plan_cuentas_empresa
         WHERE COALESCE(empresa_id, 1) = ?
-          AND COALESCE(estado, 'ACTIVA') = 'ACTIVA'
-          AND COALESCE(imputable, 0) = 1
+          AND UPPER(COALESCE(CAST(estado AS TEXT), 'ACTIVA')) IN ('ACTIVA', 'ACTIVO', 'A', '1', 'S', 'SI', 'TRUE')
+          AND UPPER(COALESCE(CAST(imputable AS TEXT), '1')) IN ('1', 'S', 'SI', 'TRUE')
         ORDER BY codigo
         """,
         (empresa_id,),
@@ -875,7 +910,7 @@ def generar_asiento_propuesto_compra(
 
         resultado = crear_asiento_origen(
             empresa_id=int(empresa_id),
-            fecha=_texto(compra.get("fecha")),
+            fecha=_fecha_bandeja(compra.get("fecha")),
             tipo_origen=ORIGEN_COMPRA,
             descripcion=preparado["descripcion"],
             lineas=preparado["lineas"],

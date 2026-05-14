@@ -839,13 +839,18 @@ def asignar_actividad_a_ventas_pendientes(
                 "mensaje": "No hay ventas pendientes de agrupación para el alcance seleccionado.",
             }
 
-        return asignar_actividad_a_ventas(
+        resultado = asignar_actividad_a_ventas(
             empresa_id=int(empresa_id),
             venta_ids=[int(v) for v in pendientes["id"].tolist()],
             actividad_id=int(actividad_id),
             usuario=usuario,
             conn=conexion,
         )
+
+        if cerrar:
+            conexion.commit()
+
+        return resultado
     finally:
         if cerrar:
             conexion.close()
