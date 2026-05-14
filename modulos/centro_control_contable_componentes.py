@@ -244,25 +244,86 @@ def _extraer_modulos(centro: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def _extraer_resumen(centro: Dict[str, Any], modulos: List[Dict[str, Any]]) -> Dict[str, Any]:
     resumen = centro.get("resumen") or centro.get("resumen_general") or centro.get("totales")
-    if isinstance(resumen, dict):
-        base = dict(resumen)
+    base = dict(resumen) if isinstance(resumen, dict) else {}
+
+    def _as_int(valor: Any) -> int:
+        try:
+            return int(float(valor or 0))
+        except Exception:
+            return 0
+
+    total_modulos = _as_int(
+        base.get("modulos")
+        or base.get("total_modulos")
+        or len(modulos)
+    )
+
+    estados_modulos = []
+    for modulo in modulos:
+        estado_modulo = (
+            modulo.get("estado")
+            or modulo.get("estado_general")
+            or modulo.get("semaforo")
+            or modulo.get("estado_parametrizacion")
+            or modulo.get("estado_diagnostico")
+        )
+        if estado_modulo is not None:
+            estados_modulos.append(_normalizar_estado(estado_modulo))
+
+    ok = max(
+        _as_int(base.get("ok")),
+        _as_int(base.get("correctos")),
+        sum(1 for e in estados_modulos if e == "OK"),
+    )
+
+    criticos = max(
+        _as_int(base.get("criticos")),
+        _as_int(base.get("errores")),
+        sum(1 for e in estados_modulos if e == "CRITICO"),
+    )
+
+    requieren_revision = max(
+        _as_int(base.get("requieren_revision")),
+        _as_int(base.get("advertencias")),
+        _as_int(base.get("pendientes")),
+        _as_int(base.get("sin_datos")),
+        _as_int(base.get("requieren_parametrizacion")),
+        _as_int(base.get("requieren_decision")),
+        _as_int(base.get("requieren_decision_usuario")),
+        sum(1 for e in estados_modulos if e in {"REQUIERE_REVISION", "INCOMPLETO", "SIN_ESTADO"}),
+    )
+
+    if total_modulos and ok == 0 and criticos == 0 and requieren_revision == 0:
+        requieren_revision = total_modulos
+
+    estado_original = _normalizar_estado(
+        centro.get("estado")
+        or centro.get("estado_general")
+        or centro.get("semaforo")
+        or base.get("estado")
+        or base.get("estado_general")
+        or base.get("semaforo")
+    )
+
+    if criticos > 0:
+        estado_general = "CRITICO"
+    elif requieren_revision > 0:
+        estado_general = "REQUIERE_REVISION"
+    elif total_modulos > 0 and ok >= total_modulos:
+        estado_general = "OK"
+    elif total_modulos > 0:
+        estado_general = "REQUIERE_REVISION"
     else:
-        base = {}
+        estado_general = estado_original
 
-    if modulos:
-        estados = [_normalizar_estado(m.get("estado") or m.get("estado_general") or m.get("semaforo")) for m in modulos]
-        base.setdefault("modulos", len(modulos))
-        base.setdefault("ok", sum(1 for e in estados if e == "OK"))
-        base.setdefault("requieren_revision", sum(1 for e in estados if e in {"REQUIERE_REVISION", "INCOMPLETO"}))
-        base.setdefault("criticos", sum(1 for e in estados if e == "CRITICO"))
-
-    for clave in ("estado", "estado_general", "semaforo"):
-        if clave in centro and "estado_general" not in base:
-            base["estado_general"] = centro.get(clave)
+    base["modulos"] = total_modulos
+    base["ok"] = ok
+    base["correctos"] = ok
+    base["requieren_revision"] = requieren_revision
+    base["criticos"] = criticos
+    base["estado_general"] = estado_general
 
     return base
-
-
 def _extraer_alertas(centro: Dict[str, Any]) -> List[Dict[str, Any]]:
     alertas: List[Dict[str, Any]] = []
 
@@ -345,12 +406,10 @@ def _mostrar_estado_general(resumen: Dict[str, Any]) -> None:
         st.success("Estado general: correcto.")
     elif estado == "CRITICO":
         st.error("Estado general: requiere atención crítica.")
-    elif estado in {"REQUIERE_REVISION", "INCOMPLETO"}:
-        st.warning("Estado general: requiere revisión profesional.")
+    elif estado in {"REQUIERE_REVISION", "INCOMPLETO", "SIN_ESTADO"}:
+        st.warning("Estado general: requiere parametrización inicial / revisión profesional.")
     else:
         st.info(f"Estado general: {estado}")
-
-
 def mostrar_centro_control_contable_ui(
     empresa_id: Optional[int] = None,
     usuario: Optional[str] = None,
@@ -396,7 +455,23 @@ def mostrar_centro_control_contable_ui(
 
     with tab_resumen:
         st.markdown("### Resumen integral")
-        _mostrar_tabla([resumen], "No hay resumen disponible.")
+        estado_resumen = _normalizar_estado(resumen.get("estado_general"))
+        estado_legible = {
+            "OK": "Correcto",
+            "CRITICO": "Crítico",
+            "REQUIERE_REVISION": "Requiere parametrización / revisión",
+            "INCOMPLETO": "Incompleto",
+            "SIN_ESTADO": "Requiere parametrización / revisión",
+        }.get(estado_resumen, estado_resumen)
+
+        resumen_vista = {
+            "Estado": estado_legible,
+            "Módulos": resumen.get("modulos", 0),
+            "Correctos": resumen.get("ok", 0),
+            "A revisar": resumen.get("requieren_revision", 0),
+            "Críticos": resumen.get("criticos", 0),
+        }
+        _mostrar_tabla([resumen_vista], "No hay resumen disponible.")
 
         recomendaciones = centro.get("recomendaciones") or centro.get("acciones_recomendadas")
         st.markdown("### Recomendaciones")
