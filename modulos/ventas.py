@@ -9,6 +9,7 @@ from core.fechas import ordenar_dataframe_por_fecha, fecha_para_ordenar, formate
 from core.exportadores import exportar_excel
 from core.ui import preparar_vista
 from core.numeros import moneda
+from modulos.ventas_actividades_componentes import mostrar_actividades_ventas_ui
 
 
 # ======================================================
@@ -153,6 +154,9 @@ def mostrar_ventas():
 # TAB 1 - CARGA CSV
 # ======================================================
 
+
+    # Actividades internas de venta: base para clasificar ventas importadas/manuales antes de Bandeja.
+    mostrar_actividades_ventas_ui()
 def cargar_csv_ventas():
     st.info(
         "Carga CSV ARCA/AFIP, genera asientos contables, guarda Libro IVA Ventas "
