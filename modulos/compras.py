@@ -1097,6 +1097,9 @@ def mostrar_compras():
     with tab1:
         cargar_csv_compras_arca()
 
+        from modulos.compras_asientos_componentes import mostrar_generacion_asientos_compras_importadas
+        mostrar_generacion_asientos_compras_importadas()
+
     with tab2:
         cargar_compra_manual()
 
