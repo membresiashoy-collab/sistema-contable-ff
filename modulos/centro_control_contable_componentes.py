@@ -327,28 +327,70 @@ def _extraer_resumen(centro: Dict[str, Any], modulos: List[Dict[str, Any]]) -> D
 def _extraer_alertas(centro: Dict[str, Any]) -> List[Dict[str, Any]]:
     alertas: List[Dict[str, Any]] = []
 
-    def agregar(origen: str, valor: Any) -> None:
-        for item in _como_lista(valor):
-            if isinstance(item, dict):
-                fila = {"origen": origen}
-                fila.update(item)
-                alertas.append(fila)
-            elif item not in (None, ""):
-                alertas.append({"origen": origen, "detalle": item})
-
-    for clave in ("alertas", "advertencias", "criticos", "errores", "pendientes"):
-        if clave in centro:
-            agregar(clave, centro.get(clave))
-
     for modulo in _extraer_modulos(centro):
-        nombre = modulo.get("modulo") or modulo.get("nombre") or modulo.get("codigo") or "Modulo"
-        for clave in ("alertas", "advertencias", "criticos", "errores", "pendientes"):
-            if clave in modulo:
-                agregar(str(nombre), modulo.get(clave))
+        codigo = modulo.get("codigo") or modulo.get("modulo") or modulo.get("nombre") or ""
+        nombre = modulo.get("nombre") or modulo.get("modulo") or codigo or "Módulo"
+        estado = _texto(modulo.get("estado") or modulo.get("estado_general") or modulo.get("semaforo"))
+
+        diagnostico = modulo.get("diagnostico")
+        parametrizacion = modulo.get("parametrizacion")
+
+        def _leer_bloque(valor: Any) -> Dict[str, Any]:
+            if isinstance(valor, dict):
+                return valor
+            if isinstance(valor, str):
+                try:
+                    import json
+                    return json.loads(valor)
+                except Exception:
+                    return {"mensaje": valor}
+            return {}
+
+        diag = _leer_bloque(diagnostico)
+        param = _leer_bloque(parametrizacion)
+
+        diag_estado = _texto(diag.get("estado"))
+        param_estado = _texto(param.get("estado"))
+
+        diag_adv = int(diag.get("advertencias") or 0)
+        diag_crit = int(diag.get("criticos") or 0)
+        diag_items = int(diag.get("items") or 0)
+
+        param_adv = int(param.get("advertencias") or 0)
+        param_crit = int(param.get("criticos") or 0)
+        param_items = int(param.get("items") or 0)
+
+        if diag_crit or param_crit:
+            severidad = "Crítico"
+        elif "REQUIERE" in estado or "REQUIERE" in diag_estado or "REQUIERE" in param_estado:
+            severidad = "Requiere parametrización"
+        elif diag_adv or param_adv:
+            severidad = "Observación"
+        else:
+            severidad = ""
+
+        if not severidad:
+            continue
+
+        accion = "Revisar parametrización asistida del módulo."
+        if param_items:
+            accion = f"Revisar {param_items} parametrizaciones sugeridas."
+        elif diag_adv or param_adv:
+            accion = "Revisar advertencias y validar configuración contable."
+        elif diag_crit or param_crit:
+            accion = "Resolver error crítico antes de operar."
+
+        alertas.append({
+            "Módulo": nombre,
+            "Estado": estado or param_estado or diag_estado,
+            "Severidad": severidad,
+            "Advertencias diagnóstico": diag_adv,
+            "Advertencias parametrización": param_adv,
+            "Items sugeridos": param_items or diag_items,
+            "Acción sugerida": accion,
+        })
 
     return alertas
-
-
 def _extraer_parametrizaciones(centro: Dict[str, Any]) -> List[Dict[str, Any]]:
     parametrizaciones: List[Dict[str, Any]] = []
 
