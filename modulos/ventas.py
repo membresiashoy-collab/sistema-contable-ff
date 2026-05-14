@@ -10,6 +10,7 @@ from core.exportadores import exportar_excel
 from core.ui import preparar_vista
 from core.numeros import moneda
 from modulos.ventas_actividades_componentes import mostrar_actividades_ventas_ui
+from modulos.ventas_asientos_componentes import mostrar_generacion_asientos_ventas_importadas
 
 
 # ======================================================
@@ -157,6 +158,9 @@ def mostrar_ventas():
 
     # Actividades internas de venta: base para clasificar ventas importadas/manuales antes de Bandeja.
     mostrar_actividades_ventas_ui()
+
+    # Generación controlada de asientos propuestos de ventas con actividad asignada.
+    mostrar_generacion_asientos_ventas_importadas()
 def cargar_csv_ventas():
     st.info(
         "Carga CSV ARCA/AFIP, genera asientos contables, guarda Libro IVA Ventas "
