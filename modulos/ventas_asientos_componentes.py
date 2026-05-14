@@ -58,6 +58,18 @@ def _columnas_visibles_pendientes(df: pd.DataFrame) -> list[str]:
     return [col for col in preferidas if col in df.columns]
 
 
+def _preparar_vista_pendientes(df: pd.DataFrame) -> pd.DataFrame:
+    columnas = _columnas_visibles_pendientes(df)
+    vista = df[columnas].copy() if columnas else df.copy()
+    return vista.rename(
+        columns={
+            "actividad_venta_nombre": "agrupacion_interna",
+            "tipo_venta": "tipo_fiscal_contable",
+            "tratamiento_iva_venta": "tratamiento_iva",
+        }
+    )
+
+
 def _vista_resultados(resultados: list[dict[str, Any]]) -> pd.DataFrame:
     if not resultados:
         return pd.DataFrame(
@@ -92,11 +104,12 @@ def mostrar_generacion_asientos_ventas_importadas(
     usuario_final = _usuario_actual(usuario)
 
     st.divider()
-    st.subheader("🧾 Asientos propuestos de ventas importadas")
+    st.subheader("🧾 Asientos propuestos de ventas importadas/manuales")
 
     st.caption(
-        "Esta acción toma ventas ARCA/manuales con actividad asignada, resuelve cuentas desde "
-        "Plan Empresa / Plan Maestro FF y genera propuestas en Bandeja. No escribe directo en Libro Diario."
+        "Esta acción toma ventas con agrupación interna y tipo fiscal/contable asignados, "
+        "resuelve cuentas desde Plan Empresa / Plan Maestro FF y genera propuestas en Bandeja. "
+        "La agrupación comercial no define la cuenta contable. No escribe directo en Libro Diario."
     )
 
     try:
@@ -113,16 +126,15 @@ def mostrar_generacion_asientos_ventas_importadas(
     col3.metric("Diario directo", "No")
 
     if cantidad == 0:
-        st.success("No hay ventas con actividad asignada pendientes de asiento propuesto.")
-        st.info("Si hay ventas cargadas sin actividad, asigne primero una actividad de venta.")
+        st.success("No hay ventas con tipo fiscal/contable pendiente de asiento propuesto.")
+        st.info("Si hay ventas cargadas sin agrupación, asigná primero una agrupación interna de venta.")
         return
 
-    columnas = _columnas_visibles_pendientes(pendientes)
-    st.dataframe(pendientes[columnas] if columnas else pendientes, use_container_width=True, hide_index=True)
+    st.dataframe(_preparar_vista_pendientes(pendientes), use_container_width=True, hide_index=True)
 
     st.warning(
-        "Revise que la actividad de venta y el tratamiento de IVA sean correctos antes de generar propuestas. "
-        "Si una venta fue mal clasificada, corrija la actividad antes de enviarla a Bandeja."
+        "Revisá que la agrupación, el tipo fiscal/contable y el tratamiento de IVA sean correctos. "
+        "Si una venta fue mal clasificada, corregila antes de enviarla a Bandeja."
     )
 
     confirmar = st.checkbox(
@@ -131,7 +143,7 @@ def mostrar_generacion_asientos_ventas_importadas(
     )
 
     if not confirmar:
-        st.info("Marque la confirmación para habilitar la generación.")
+        st.info("Marcá la confirmación para habilitar la generación.")
         return
 
     if st.button(
@@ -140,7 +152,7 @@ def mostrar_generacion_asientos_ventas_importadas(
         use_container_width=True,
         key=f"generar_asientos_ventas_importadas_{empresa_id_final}",
     ):
-        with st.spinner("Generando asientos propuestos de ventas importadas..."):
+        with st.spinner("Generando asientos propuestos de ventas importadas/manuales..."):
             resultado = generar_asientos_propuestos_ventas_importadas(
                 empresa_id=empresa_id_final,
                 usuario=usuario_final,
@@ -166,8 +178,7 @@ def mostrar_generacion_asientos_ventas_importadas(
         if resultado.get("errores", 0):
             st.info(
                 "Las ventas con error no se contabilizaron ni se enviaron a Libro Diario. "
-                "Corrija actividad/cuentas del Plan Empresa y vuelva a generar."
+                "Corregí tipo fiscal, tratamiento IVA o cuentas del Plan Empresa y volvé a generar."
             )
         else:
-            st.info("Revise las propuestas generadas en Contabilidad → Bandeja de asientos.")
-
+            st.info("Revisá las propuestas generadas en Contabilidad → Bandeja de asientos.")

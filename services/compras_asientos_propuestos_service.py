@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Iterable, Optional, Tuple
 import re
 import sqlite3
 
@@ -41,6 +41,20 @@ USOS_FISCALES_COMPRA = {
         "IMPUESTOS_TASAS_CONTRIBUCIONES",
     ),
 }
+
+CATEGORIAS_REVISION = {
+    "OTROS GASTOS A REVISAR",
+    "BIENES USADOS REGIMENES ESPECIALES",
+    "BIENES USADOS / REGIMENES ESPECIALES",
+}
+
+NOMBRES_FALLBACK_REVISION = (
+    "OTROS GASTOS A REVISAR",
+    "GASTOS A REVISAR",
+    "GASTOS VARIOS",
+    "GASTOS GENERALES",
+    "OTROS GASTOS",
+)
 
 
 @dataclass(frozen=True)
@@ -234,6 +248,48 @@ def _cuenta_por_nombre(conn: sqlite3.Connection, nombre: Any, empresa_id: int) -
     return None
 
 
+def _cuenta_por_nombre_flexible(
+    conn: sqlite3.Connection,
+    nombres: Iterable[str],
+    empresa_id: int,
+) -> Optional[CuentaContable]:
+    if not _tabla_existe(conn, "plan_cuentas_empresa"):
+        return None
+
+    nombres_n = [_normalizar(nombre) for nombre in nombres if _normalizar(nombre)]
+    if not nombres_n:
+        return None
+
+    filas = _query_todos(
+        conn,
+        """
+        SELECT codigo, nombre
+        FROM plan_cuentas_empresa
+        WHERE COALESCE(empresa_id, 1) = ?
+          AND COALESCE(estado, 'ACTIVA') = 'ACTIVA'
+          AND COALESCE(imputable, 0) = 1
+        ORDER BY codigo
+        """,
+        (empresa_id,),
+    )
+
+    candidatas: list[CuentaContable] = []
+    for fila in filas:
+        nombre_cuenta_n = _normalizar(fila.get("nombre"))
+        for nombre_n in nombres_n:
+            if nombre_cuenta_n == nombre_n or nombre_n in nombre_cuenta_n or nombre_cuenta_n in nombre_n:
+                candidatas.append(
+                    CuentaContable(
+                        codigo=_texto(fila["codigo"]),
+                        nombre=_texto(fila["nombre"]),
+                        origen_resolucion="plan_cuentas_empresa.nombre_flexible",
+                    )
+                )
+                break
+
+    return _elegir_mejor_cuenta(" ".join(nombres_n), candidatas)
+
+
 def _cuentas_por_uso(
     conn: sqlite3.Connection,
     empresa_id: int,
@@ -296,6 +352,9 @@ def _score_cuenta(categoria: str, cuenta: CuentaContable) -> int:
         if token in cuenta_n:
             score += 10
 
+    if any(token in cuenta_n for token in ("BANCO", "CAJA", "IVA", "PROVEEDOR", "CLIENTE")):
+        score -= 50
+
     penalizaciones = {
         "MERCADERIA": ["BANCO", "CAJA", "IVA", "PROVEEDOR"],
         "ALQUILER": ["BANCO", "CAJA", "IVA", "PROVEEDOR"],
@@ -346,9 +405,23 @@ def _categoria_config(conn: sqlite3.Connection, empresa_id: int, categoria: str)
 def _categoria_legacy(conn: sqlite3.Connection, empresa_id: int, categoria: str) -> Optional[dict[str, Any]]:
     if not categoria or not _tabla_existe(conn, "categorias_compra"):
         return None
+    columnas = _columnas(conn, "categorias_compra")
+    filtro_empresa = "AND COALESCE(empresa_id, 1) = ?" if "empresa_id" in columnas else ""
+    params: list[Any] = []
+    if "empresa_id" in columnas:
+        params.append(empresa_id)
+    params.append(categoria)
+
     return _query_uno(
         conn,
-        """
+        f"""
+        SELECT *
+        FROM categorias_compra
+        WHERE UPPER(TRIM(categoria)) = UPPER(TRIM(?))
+          AND COALESCE(activo, 1) = 1
+          {filtro_empresa}
+        LIMIT 1
+        """ if "empresa_id" not in columnas else f"""
         SELECT *
         FROM categorias_compra
         WHERE COALESCE(empresa_id, 1) = ?
@@ -356,8 +429,59 @@ def _categoria_legacy(conn: sqlite3.Connection, empresa_id: int, categoria: str)
           AND COALESCE(activo, 1) = 1
         LIMIT 1
         """,
-        (empresa_id, categoria),
+        tuple(params),
     )
+
+
+def _es_categoria_revision(categoria: str) -> bool:
+    categoria_n = _normalizar(categoria)
+    return categoria_n in {_normalizar(c) for c in CATEGORIAS_REVISION} or (
+        "REVISAR" in categoria_n and ("GASTO" in categoria_n or "BIEN" in categoria_n)
+    )
+
+
+def _fallback_cuenta_revision(
+    conn: sqlite3.Connection,
+    empresa_id: int,
+    categoria: str,
+) -> Optional[CuentaContable]:
+    cuenta = _cuenta_por_nombre_flexible(conn, (categoria, *NOMBRES_FALLBACK_REVISION), empresa_id)
+    if cuenta:
+        return CuentaContable(cuenta.codigo, cuenta.nombre, "fallback_revision_nombre")
+
+    if not _tabla_existe(conn, "plan_cuentas_empresa"):
+        return None
+
+    filas = _query_todos(
+        conn,
+        """
+        SELECT codigo, nombre
+        FROM plan_cuentas_empresa
+        WHERE COALESCE(empresa_id, 1) = ?
+          AND COALESCE(estado, 'ACTIVA') = 'ACTIVA'
+          AND COALESCE(imputable, 0) = 1
+        ORDER BY codigo
+        """,
+        (empresa_id,),
+    )
+
+    candidatas: list[CuentaContable] = []
+    for fila in filas:
+        codigo = _texto(fila.get("codigo"))
+        nombre_n = _normalizar(fila.get("nombre"))
+        es_gasto_por_codigo = codigo.startswith("5") or codigo.startswith("6")
+        es_gasto_por_nombre = any(token in nombre_n for token in ("GASTO", "EGRESO", "COSTO"))
+        excluir = any(token in nombre_n for token in ("BANCO", "CAJA", "IVA", "PROVEEDOR", "CLIENTE"))
+        if (es_gasto_por_codigo or es_gasto_por_nombre) and not excluir:
+            candidatas.append(
+                CuentaContable(
+                    codigo=codigo,
+                    nombre=_texto(fila.get("nombre")),
+                    origen_resolucion="fallback_revision_gasto_imputable",
+                )
+            )
+
+    return _elegir_mejor_cuenta(categoria or "OTROS GASTOS A REVISAR", candidatas)
 
 
 def resolver_cuenta_principal_compra(
@@ -400,6 +524,19 @@ def resolver_cuenta_principal_compra(
         cuenta = _limpiar_cuenta(_cuenta_por_nombre(conn, nombre, empresa_id))
         if cuenta:
             return cuenta
+
+    cuenta_flexible = _cuenta_por_nombre_flexible(
+        conn,
+        (categoria, compra.get("cuenta_principal_nombre") or "", legacy.get("cuenta_nombre") if legacy else ""),
+        empresa_id,
+    )
+    if cuenta_flexible:
+        return CuentaContable(cuenta_flexible.codigo, cuenta_flexible.nombre, "fallback_nombre_categoria")
+
+    if _es_categoria_revision(categoria):
+        cuenta_revision = _fallback_cuenta_revision(conn, empresa_id, categoria)
+        if cuenta_revision:
+            return cuenta_revision
 
     raise ErrorContableCompras(
         f"No se pudo resolver una cuenta imputable activa del Plan Empresa para la categoría de compra '{categoria}'."
@@ -549,17 +686,26 @@ def _leer_compra(conn: sqlite3.Connection, compra_id: int, empresa_id: int) -> d
     if not _tabla_existe(conn, TABLA_COMPRAS):
         raise ErrorContableCompras("No existe la tabla compras_comprobantes.")
 
-    fila = _query_uno(
-        conn,
-        f"""
-        SELECT *
-        FROM {TABLA_COMPRAS}
-        WHERE id = ?
-          AND COALESCE(empresa_id, 1) = ?
-        LIMIT 1
-        """,
-        (int(compra_id), int(empresa_id)),
-    )
+    columnas = _columnas(conn, TABLA_COMPRAS)
+    if "empresa_id" in columnas:
+        sql = f"""
+            SELECT *
+            FROM {TABLA_COMPRAS}
+            WHERE id = ?
+              AND COALESCE(empresa_id, 1) = ?
+            LIMIT 1
+        """
+        params = (int(compra_id), int(empresa_id))
+    else:
+        sql = f"""
+            SELECT *
+            FROM {TABLA_COMPRAS}
+            WHERE id = ?
+            LIMIT 1
+        """
+        params = (int(compra_id),)
+
+    fila = _query_uno(conn, sql, params)
     if not fila:
         raise ErrorContableCompras(f"No existe la compra id={compra_id} para empresa_id={empresa_id}.")
     return fila
@@ -608,6 +754,13 @@ def preparar_lineas_asiento_compra(
         glosa_base = f"Compra {comprobante} {proveedor}".strip()
 
         lineas: list[dict[str, Any]] = []
+        advertencias: list[str] = []
+
+        if cuenta_principal.origen_resolucion.startswith("fallback"):
+            advertencias.append(
+                "La cuenta principal de la compra fue resuelta por fallback controlado del Plan Empresa. "
+                f"Categoría: {categoria}. Cuenta usada: {cuenta_principal.codigo} - {cuenta_principal.nombre}."
+            )
 
         principal_importe = round(
             neto
@@ -659,7 +812,6 @@ def preparar_lineas_asiento_compra(
 
         total_comprobante = _numero(compra.get("total"))
         diferencia_total = round(abs(abs(saldo_a_proveedor) - abs(total_comprobante)), 2)
-        advertencias: list[str] = []
         if abs(total_comprobante) >= 0.01 and diferencia_total > 0.05:
             advertencias.append(
                 f"El total del comprobante ({total_comprobante}) difiere del total contable calculado ({saldo_a_proveedor})."
@@ -687,6 +839,11 @@ def preparar_lineas_asiento_compra(
             "total_debe": total_debe,
             "total_haber": total_haber,
             "diferencia": diferencia,
+            "cuenta_principal_resuelta": {
+                "codigo": cuenta_principal.codigo,
+                "nombre": cuenta_principal.nombre,
+                "origen_resolucion": cuenta_principal.origen_resolucion,
+            },
             "advertencias": advertencias,
         }
     finally:
@@ -770,22 +927,37 @@ def listar_compras_pendientes_asiento(
         if not _tabla_existe(conexion, TABLA_COMPRAS):
             return pd.DataFrame()
 
+        columnas = _columnas(conexion, TABLA_COMPRAS)
+        if "empresa_id" in columnas:
+            empresa_where = "COALESCE(c.empresa_id, 1) = ? AND"
+            referencia_sql = "('COMPRA:' || COALESCE(c.empresa_id, 1) || ':' || c.id)"
+            params: list[Any] = [int(empresa_id), ORIGEN_COMPRA]
+            empresa_join = "COALESCE(ao.empresa_id, 1) = COALESCE(c.empresa_id, 1)"
+        else:
+            empresa_where = ""
+            referencia_sql = "('COMPRA:' || ? || ':' || c.id)"
+            params = [ORIGEN_COMPRA, int(empresa_id)]
+            empresa_join = "COALESCE(ao.empresa_id, 1) = ?"
+
         sql = f"""
             SELECT c.*
             FROM {TABLA_COMPRAS} c
-            WHERE COALESCE(c.empresa_id, 1) = ?
-              AND COALESCE(TRIM(c.categoria_compra), '') <> ''
+            WHERE {empresa_where}
+              COALESCE(TRIM(c.categoria_compra), '') <> ''
               AND NOT EXISTS (
                   SELECT 1
                   FROM asientos_origen ao
-                  WHERE COALESCE(ao.empresa_id, 1) = COALESCE(c.empresa_id, 1)
+                  WHERE {empresa_join}
                     AND ao.tipo_origen = ?
-                    AND ao.referencia = ('COMPRA:' || COALESCE(c.empresa_id, 1) || ':' || c.id)
+                    AND ao.referencia = {referencia_sql}
                     AND COALESCE(ao.estado, '') <> 'ANULADO'
               )
             ORDER BY c.fecha, c.id
         """
-        return pd.read_sql_query(sql, conexion, params=(int(empresa_id), ORIGEN_COMPRA))
+        if "empresa_id" not in columnas:
+            params = [int(empresa_id), ORIGEN_COMPRA, int(empresa_id)]
+
+        return pd.read_sql_query(sql, conexion, params=tuple(params))
     finally:
         if cerrar:
             conexion.close()

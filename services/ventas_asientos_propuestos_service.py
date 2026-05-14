@@ -77,6 +77,16 @@ USOS_POR_TIPO_VENTA = {
     ),
 }
 
+CRITERIO_POR_TIPO_VENTA = {
+    "VENTA_MERCADERIAS": "VENTAS MERCADERIAS BIENES",
+    "VENTA_SERVICIOS": "VENTAS SERVICIOS",
+    "EXPORTACION_BIENES": "EXPORTACION BIENES",
+    "EXPORTACION_SERVICIOS": "EXPORTACION SERVICIOS",
+    "VENTA_EXENTA": "VENTAS EXENTAS",
+    "VENTA_NO_GRAVADA": "VENTAS NO GRAVADAS",
+    "OTRA_ACTIVIDAD": "INGRESOS OPERATIVOS VENTAS",
+}
+
 
 @dataclass(frozen=True)
 class CuentaContable:
@@ -286,8 +296,14 @@ def _score_cuenta(criterio: str, cuenta: CuentaContable) -> int:
         t in cuenta_n for t in ("MERCADERIA", "PRODUCTO", "BIEN")
     ):
         score += 30
+    if any(t in criterio_n for t in ("EXENTA", "EXENTO")) and any(t in cuenta_n for t in ("EXENTA", "EXENTO")):
+        score += 30
+    if any(t in criterio_n for t in ("EXPORTACION", "EXPORTACIONES")) and any(
+        t in cuenta_n for t in ("EXPORTACION", "EXPORTACIONES")
+    ):
+        score += 30
     if any(t in cuenta_n for t in ("CLIENTE", "DEUDOR", "IVA", "CAJA", "BANCO", "PROVEEDOR")):
-        score -= 40
+        score -= 50
 
     return score
 
@@ -328,7 +344,15 @@ def _actividad_venta(
             (actividad_id, int(empresa_id)),
         )
         if fila:
-            return fila
+            # Las columnas cuenta_ventas_* son legado y no se devuelven como fuente contable.
+            return {
+                "id": fila.get("id"),
+                "codigo": fila.get("codigo"),
+                "nombre": fila.get("nombre"),
+                "tipo_venta": fila.get("tipo_venta"),
+                "tratamiento_iva": fila.get("tratamiento_iva"),
+                "descripcion": fila.get("descripcion"),
+            }
 
     tipo_venta = _texto(venta.get("tipo_venta"))
     actividad_codigo = _texto(venta.get("actividad_venta_codigo"))
@@ -337,17 +361,15 @@ def _actividad_venta(
 
     if not tipo_venta and not actividad_codigo and not actividad_nombre:
         raise ErrorContableVentas(
-            "La venta no tiene actividad asignada. Asigne una actividad antes de generar el asiento propuesto."
+            "La venta no tiene agrupación/tipo de venta asignado. Asigne una agrupación interna o tipo fiscal antes de generar el asiento propuesto."
         )
 
     return {
         "id": actividad_id,
         "codigo": actividad_codigo or tipo_venta,
-        "nombre": actividad_nombre or tipo_venta or "Actividad de venta",
+        "nombre": actividad_nombre or tipo_venta or "Venta sin agrupación",
         "tipo_venta": tipo_venta or "OTRA_ACTIVIDAD",
         "tratamiento_iva": tratamiento or "A_REVISAR",
-        "cuenta_ventas_codigo": venta.get("cuenta_ventas_codigo"),
-        "cuenta_ventas_nombre": venta.get("cuenta_ventas_nombre"),
     }
 
 
@@ -397,38 +419,35 @@ def resolver_cuenta_ventas(
     empresa_id: int,
 ) -> CuentaContable:
     actividad = _actividad_venta(conn, venta, empresa_id)
-
-    for codigo in (
-        actividad.get("cuenta_ventas_codigo"),
-        venta.get("cuenta_ventas_codigo"),
-        venta.get("cuenta_ingreso_codigo"),
-    ):
-        cuenta = _limpiar_cuenta(_cuenta_por_codigo(conn, codigo, empresa_id))
-        if cuenta:
-            return cuenta
-
     tipo_venta = _texto(actividad.get("tipo_venta")) or _texto(venta.get("tipo_venta")) or "OTRA_ACTIVIDAD"
+
     usos = USOS_POR_TIPO_VENTA.get(tipo_venta, USOS_POR_TIPO_VENTA["OTRA_ACTIVIDAD"])
-    cuenta = _elegir_mejor_cuenta(_texto(actividad.get("nombre")) or tipo_venta, _cuentas_por_uso(conn, empresa_id, usos))
+    criterio = CRITERIO_POR_TIPO_VENTA.get(tipo_venta, "INGRESOS OPERATIVOS VENTAS")
+
+    cuenta = _elegir_mejor_cuenta(criterio, _cuentas_por_uso(conn, empresa_id, usos))
     if cuenta:
         return cuenta
 
-    for nombre in (
-        actividad.get("cuenta_ventas_nombre"),
-        venta.get("cuenta_ventas_nombre"),
-        venta.get("cuenta_ingreso_nombre"),
-        "Ventas de Mercaderías",
-        "Ventas de Servicios",
-        "Ventas",
-        "Ingresos por Ventas",
-    ):
+    # Fallback por nombre solo fiscal/contable. No usa el nombre comercial de la agrupación.
+    nombres_fallback = {
+        "VENTA_MERCADERIAS": ("Ventas de Mercaderías", "Ventas de Mercaderias", "Ventas de Bienes", "Ventas"),
+        "VENTA_SERVICIOS": ("Ventas de Servicios", "Servicios Prestados", "Ingresos por Servicios", "Ventas"),
+        "EXPORTACION_BIENES": ("Exportaciones", "Ventas de Exportación", "Ingresos por Exportación"),
+        "EXPORTACION_SERVICIOS": ("Exportaciones", "Ventas de Exportación", "Ingresos por Exportación"),
+        "VENTA_EXENTA": ("Ventas Exentas", "Ingresos Exentos", "Ventas"),
+        "VENTA_NO_GRAVADA": ("Ventas No Gravadas", "Ingresos No Gravados", "Ventas"),
+        "OTRA_ACTIVIDAD": ("Ingresos Operativos", "Ingresos por Ventas", "Ventas"),
+    }
+
+    for nombre in nombres_fallback.get(tipo_venta, nombres_fallback["OTRA_ACTIVIDAD"]):
         cuenta = _limpiar_cuenta(_cuenta_por_nombre(conn, nombre, empresa_id))
         if cuenta:
             return cuenta
 
     raise ErrorContableVentas(
         "No se pudo resolver la cuenta de ventas/ingresos en el Plan Empresa. "
-        "Configure la actividad de venta con cuenta contable o una cuenta con uso operativo compatible."
+        "Configure una cuenta activa/imputable con uso operativo compatible con el tipo fiscal de venta; "
+        "la agrupación comercial no define la cuenta contable."
     )
 
 
@@ -600,13 +619,14 @@ def preparar_lineas_asiento_venta(
         tipo = _texto(venta.get("tipo"))
         comprobante = f"{tipo} {_texto(venta.get('punto_venta'))}-{_texto(venta.get('numero'))}".strip()
         cliente = _texto(venta.get("cliente")) or _texto(venta.get("cuit"))
-        actividad_nombre = _texto(actividad.get("nombre")) or _texto(venta.get("actividad_venta_nombre")) or "Actividad de venta"
+        agrupacion_nombre = _texto(actividad.get("nombre")) or _texto(venta.get("actividad_venta_nombre")) or "Sin agrupación"
+        tipo_venta = _texto(actividad.get("tipo_venta")) or _texto(venta.get("tipo_venta")) or "OTRA_ACTIVIDAD"
         glosa_base = f"Venta {comprobante} {cliente}".strip()
 
         advertencias: list[str] = []
         if tratamiento_iva in TRATAMIENTOS_SIN_IVA_DEBITO and iva_abs >= 0.01:
             advertencias.append(
-                "La venta tiene IVA informado pero la actividad indica tratamiento sin débito fiscal; "
+                "La venta tiene IVA informado pero el tratamiento indica sin débito fiscal; "
                 "el importe se incluye en la cuenta de ingresos para mantener el asiento balanceado."
             )
 
@@ -630,7 +650,7 @@ def preparar_lineas_asiento_venta(
             lineas,
             cuenta_ventas,
             signo * ingreso_abs,
-            f"{glosa_base} - {actividad_nombre}",
+            f"{glosa_base} - {tipo_venta} / {agrupacion_nombre}",
             naturaleza_deudora=False,
         )
 
@@ -660,7 +680,14 @@ def preparar_lineas_asiento_venta(
             "diferencia": diferencia,
             "es_nota_credito": signo < 0,
             "actividad_venta": actividad,
+            "agrupacion_venta": actividad,
+            "tipo_venta": tipo_venta,
             "tratamiento_iva": tratamiento_iva,
+            "cuenta_ventas_resuelta": {
+                "codigo": cuenta_ventas.codigo,
+                "nombre": cuenta_ventas.nombre,
+                "origen_resolucion": cuenta_ventas.origen_resolucion,
+            },
             "advertencias": advertencias,
         }
     finally:
@@ -700,7 +727,8 @@ def generar_asiento_propuesto_venta(
             referencia=preparado["referencia"],
             observaciones=(
                 f"Origen real: {TABLA_VENTAS}.id={venta_id}. "
-                "Generado desde comprobante de venta importado con actividad asignada."
+                "Generado desde comprobante de venta importado/manual con agrupación interna y tipo fiscal asignados. "
+                "La agrupación comercial no define la cuenta contable."
             ),
             usuario=usuario,
             generar_propuesta=True,
@@ -841,4 +869,3 @@ __all__ = [
     "resolver_cuenta_ventas",
     "simular_asiento_venta",
 ]
-

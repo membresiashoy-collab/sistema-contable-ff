@@ -140,6 +140,8 @@ def mostrar_ventas():
 
     with tab1:
         cargar_csv_ventas()
+        mostrar_actividades_ventas_ui()
+        mostrar_generacion_asientos_ventas_importadas()
 
     with tab2:
         mostrar_libro_iva_ventas()
@@ -155,12 +157,6 @@ def mostrar_ventas():
 # TAB 1 - CARGA CSV
 # ======================================================
 
-
-    # Actividades internas de venta: base para clasificar ventas importadas/manuales antes de Bandeja.
-    mostrar_actividades_ventas_ui()
-
-    # Generación controlada de asientos propuestos de ventas con actividad asignada.
-    mostrar_generacion_asientos_ventas_importadas()
 def cargar_csv_ventas():
     st.info(
         "Carga CSV ARCA/AFIP, genera asientos contables, guarda Libro IVA Ventas "

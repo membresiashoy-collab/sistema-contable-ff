@@ -31,40 +31,42 @@ TRATAMIENTOS_IVA = {
     "A_REVISAR": "A revisar",
 }
 
+# Agrupaciones mínimas de arranque. No son cuentas contables y no obligan a usar
+# cuenta por actividad; solo permiten que la empresa tenga opciones iniciales.
 ACTIVIDADES_BASE = [
     {
         "codigo": "VENTA_MERCADERIAS",
         "nombre": "Venta de mercaderías / bienes",
         "tipo_venta": "VENTA_MERCADERIAS",
         "tratamiento_iva": "GRAVADO",
-        "descripcion": "Actividad base para venta de bienes o mercaderías.",
+        "descripcion": "Agrupación base para venta de bienes o mercaderías.",
     },
     {
         "codigo": "VENTA_SERVICIOS",
         "nombre": "Prestación de servicios",
         "tipo_venta": "VENTA_SERVICIOS",
         "tratamiento_iva": "GRAVADO",
-        "descripcion": "Actividad base para servicios prestados.",
+        "descripcion": "Agrupación base para servicios prestados.",
     },
     {
         "codigo": "VENTA_EXENTA",
         "nombre": "Venta exenta",
         "tipo_venta": "VENTA_EXENTA",
         "tratamiento_iva": "EXENTO",
-        "descripcion": "Actividad base para ventas exentas.",
+        "descripcion": "Agrupación base para ventas exentas.",
     },
     {
         "codigo": "VENTA_NO_GRAVADA",
         "nombre": "Venta no gravada",
         "tipo_venta": "VENTA_NO_GRAVADA",
         "tratamiento_iva": "NO_GRAVADO",
-        "descripcion": "Actividad base para ventas no gravadas.",
+        "descripcion": "Agrupación base para ventas no gravadas.",
     },
 ]
 
 
 class ErrorVentasActividades(Exception):
-    """Error controlado de actividades de venta."""
+    """Error controlado de agrupaciones internas de venta."""
 
 
 def _conexion(conn: Optional[sqlite3.Connection] = None) -> Tuple[sqlite3.Connection, bool]:
@@ -90,6 +92,25 @@ def _texto(valor: Any) -> str:
     if valor is None:
         return ""
     return str(valor).strip()
+
+
+def _numero(valor: Any) -> float:
+    if valor is None:
+        return 0.0
+    if isinstance(valor, (int, float)):
+        return float(valor)
+    texto = str(valor).strip()
+    if not texto:
+        return 0.0
+    texto = texto.replace("$", "").replace(" ", "")
+    if "," in texto and "." in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+    elif "," in texto:
+        texto = texto.replace(",", ".")
+    try:
+        return float(texto)
+    except Exception:
+        return 0.0
 
 
 def _normalizar_codigo(valor: Any) -> str:
@@ -161,10 +182,10 @@ def asegurar_estructura_ventas_actividades(conn: Optional[sqlite3.Connection] = 
             """
         )
 
-        columnas_agregadas: list[str] = []
         if not _tabla_existe(conexion, TABLA_VENTAS):
             raise ErrorVentasActividades("No existe la tabla ventas_comprobantes.")
 
+        columnas_agregadas: list[str] = []
         columnas_ventas = _columnas(conexion, TABLA_VENTAS)
         columnas_requeridas = {
             "actividad_venta_id": "INTEGER",
@@ -174,11 +195,27 @@ def asegurar_estructura_ventas_actividades(conn: Optional[sqlite3.Connection] = 
             "tratamiento_iva_venta": "TEXT",
             "usuario_clasificacion_venta": "TEXT",
             "fecha_clasificacion_venta": "TEXT",
+            # Alias nuevos para que quede claro conceptualmente que la actividad
+            # es una agrupación interna/reportable. Se mantienen los campos
+            # anteriores por compatibilidad con tests y módulos existentes.
+            "agrupacion_venta_id": "INTEGER",
+            "agrupacion_venta_codigo": "TEXT",
+            "agrupacion_venta_nombre": "TEXT",
         }
         for columna, tipo_sql in columnas_requeridas.items():
             if columna not in columnas_ventas:
                 conexion.execute(f"ALTER TABLE {TABLA_VENTAS} ADD COLUMN {columna} {tipo_sql}")
                 columnas_agregadas.append(columna)
+
+        conexion.execute(
+            f"""
+            UPDATE {TABLA_ACTIVIDADES}
+            SET cuenta_ventas_codigo = '',
+                cuenta_ventas_nombre = ''
+            WHERE COALESCE(TRIM(cuenta_ventas_codigo), '') <> ''
+               OR COALESCE(TRIM(cuenta_ventas_nombre), '') <> ''
+            """
+        )
 
         if cerrar:
             conexion.commit()
@@ -216,8 +253,9 @@ def sembrar_actividades_base(
                 f"""
                 INSERT INTO {TABLA_ACTIVIDADES}
                     (empresa_id, codigo, nombre, tipo_venta, tratamiento_iva,
-                     descripcion, activo, usuario_creacion)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+                     cuenta_ventas_codigo, cuenta_ventas_nombre, descripcion,
+                     activo, usuario_creacion)
+                VALUES (?, ?, ?, ?, ?, '', '', ?, 1, ?)
                 """,
                 (
                     int(empresa_id),
@@ -258,9 +296,9 @@ def crear_actividad_venta(
     tratamiento_final = _validar_tratamiento_iva(tratamiento_iva)
 
     if not codigo_final:
-        raise ErrorVentasActividades("El código de actividad es obligatorio.")
+        raise ErrorVentasActividades("El código de agrupación es obligatorio.")
     if not nombre_final:
-        raise ErrorVentasActividades("El nombre de actividad es obligatorio.")
+        raise ErrorVentasActividades("El nombre de agrupación es obligatorio.")
 
     conexion, cerrar = _conexion(conn)
     try:
@@ -280,8 +318,8 @@ def crear_actividad_venta(
                 nombre_final,
                 tipo_final,
                 tratamiento_final,
-                _texto(cuenta_ventas_codigo),
-                _texto(cuenta_ventas_nombre),
+                "",
+                "",
                 _texto(descripcion),
                 _texto(usuario) or "sistema",
             ),
@@ -295,6 +333,7 @@ def crear_actividad_venta(
         return {
             "ok": True,
             "actividad_id": int(actividad_id),
+            "agrupacion_id": int(actividad_id),
             "codigo": codigo_final,
             "nombre": nombre_final,
             "tipo_venta": tipo_final,
@@ -302,7 +341,7 @@ def crear_actividad_venta(
         }
     except sqlite3.IntegrityError:
         raise ErrorVentasActividades(
-            f"Ya existe una actividad de venta con código '{codigo_final}' para esta empresa."
+            f"Ya existe una agrupación de venta con código '{codigo_final}' para esta empresa."
         )
     finally:
         if cerrar:
@@ -358,7 +397,7 @@ def obtener_actividad_venta(
             (int(actividad_id), int(empresa_id)),
         )
         if not fila:
-            raise ErrorVentasActividades("No existe la actividad de venta seleccionada.")
+            raise ErrorVentasActividades("No existe la agrupación de venta seleccionada.")
         return fila
     finally:
         if cerrar:
@@ -427,7 +466,14 @@ def obtener_resumen_actividades_ventas(
     conexion, cerrar = _conexion(conn)
     try:
         if not _tabla_existe(conexion, TABLA_VENTAS):
-            return {"ok": False, "total": 0, "con_actividad": 0, "sin_actividad": 0, "por_actividad": {}}
+            return {
+                "ok": False,
+                "total": 0,
+                "con_actividad": 0,
+                "sin_actividad": 0,
+                "por_actividad": {},
+                "detalle_por_actividad": {},
+            }
 
         asegurar_estructura_ventas_actividades(conexion)
 
@@ -448,7 +494,10 @@ def obtener_resumen_actividades_ventas(
         filas = conexion.execute(
             f"""
             SELECT COALESCE(NULLIF(TRIM(actividad_venta_nombre), ''), 'SIN_ACTIVIDAD') AS actividad,
-                   COUNT(*) AS cantidad
+                   COUNT(*) AS cantidad,
+                   COALESCE(SUM(neto), 0) AS neto,
+                   COALESCE(SUM(iva), 0) AS iva,
+                   COALESCE(SUM(total), 0) AS total
             FROM {TABLA_VENTAS}
             WHERE COALESCE(empresa_id, 1) = ?
             GROUP BY COALESCE(NULLIF(TRIM(actividad_venta_nombre), ''), 'SIN_ACTIVIDAD')
@@ -457,12 +506,24 @@ def obtener_resumen_actividades_ventas(
             (int(empresa_id),),
         ).fetchall()
 
+        por_actividad = {fila[0]: int(fila[1]) for fila in filas}
+        detalle_por_actividad = {
+            fila[0]: {
+                "cantidad": int(fila[1]),
+                "neto": round(_numero(fila[2]), 2),
+                "iva": round(_numero(fila[3]), 2),
+                "total": round(_numero(fila[4]), 2),
+            }
+            for fila in filas
+        }
+
         return {
             "ok": True,
             "total": int(total),
             "con_actividad": int(con_actividad),
             "sin_actividad": int(total - con_actividad),
-            "por_actividad": {fila[0]: int(fila[1]) for fila in filas},
+            "por_actividad": por_actividad,
+            "detalle_por_actividad": detalle_por_actividad,
         }
     finally:
         if cerrar:
@@ -472,7 +533,7 @@ def obtener_resumen_actividades_ventas(
 def _validar_ids_ventas(conn: sqlite3.Connection, empresa_id: int, venta_ids: Iterable[int]) -> list[int]:
     ids = sorted({int(v) for v in venta_ids if int(v) > 0})
     if not ids:
-        raise ErrorVentasActividades("No se indicaron ventas para asignar actividad.")
+        raise ErrorVentasActividades("No se indicaron ventas para asignar agrupación.")
 
     placeholders = ", ".join("?" for _ in ids)
     filas = conn.execute(
@@ -512,6 +573,17 @@ def asignar_actividad_a_ventas(
         ahora = datetime.now().isoformat(timespec="seconds")
         placeholders = ", ".join("?" for _ in ids)
 
+        columnas_ventas = _columnas(conexion, TABLA_VENTAS)
+        set_aliases = ""
+        params_aliases: list[Any] = []
+        if {"agrupacion_venta_id", "agrupacion_venta_codigo", "agrupacion_venta_nombre"}.issubset(columnas_ventas):
+            set_aliases = ",\n                agrupacion_venta_id = ?,\n                agrupacion_venta_codigo = ?,\n                agrupacion_venta_nombre = ?"
+            params_aliases = [
+                int(actividad["id"]),
+                _texto(actividad["codigo"]),
+                _texto(actividad["nombre"]),
+            ]
+
         conexion.execute(
             f"""
             UPDATE {TABLA_VENTAS}
@@ -522,6 +594,7 @@ def asignar_actividad_a_ventas(
                 tratamiento_iva_venta = ?,
                 usuario_clasificacion_venta = ?,
                 fecha_clasificacion_venta = ?
+                {set_aliases}
             WHERE COALESCE(empresa_id, 1) = ?
               AND id IN ({placeholders})
             """,
@@ -533,6 +606,7 @@ def asignar_actividad_a_ventas(
                 _texto(actividad["tratamiento_iva"]),
                 _texto(usuario) or "sistema",
                 ahora,
+                *params_aliases,
                 int(empresa_id),
                 *ids,
             ),
@@ -545,8 +619,11 @@ def asignar_actividad_a_ventas(
             "ok": True,
             "ventas_actualizadas": len(ids),
             "actividad_id": int(actividad["id"]),
+            "agrupacion_id": int(actividad["id"]),
             "actividad_codigo": _texto(actividad["codigo"]),
             "actividad_nombre": _texto(actividad["nombre"]),
+            "agrupacion_codigo": _texto(actividad["codigo"]),
+            "agrupacion_nombre": _texto(actividad["nombre"]),
             "ids": ids,
         }
     finally:
@@ -574,10 +651,13 @@ def asignar_actividad_a_ventas_pendientes(
                 "ok": True,
                 "ventas_actualizadas": 0,
                 "actividad_id": int(actividad["id"]),
+                "agrupacion_id": int(actividad["id"]),
                 "actividad_codigo": _texto(actividad["codigo"]),
                 "actividad_nombre": _texto(actividad["nombre"]),
+                "agrupacion_codigo": _texto(actividad["codigo"]),
+                "agrupacion_nombre": _texto(actividad["nombre"]),
                 "ids": [],
-                "mensaje": "No hay ventas pendientes de actividad para el alcance seleccionado.",
+                "mensaje": "No hay ventas pendientes de agrupación para el alcance seleccionado.",
             }
 
         return asignar_actividad_a_ventas(
@@ -604,7 +684,87 @@ __all__ = [
     "listar_ventas_sin_actividad",
     "listar_archivos_ventas_importadas",
     "obtener_resumen_actividades_ventas",
+    "obtener_resumen_ventas_por_agrupacion",
     "asignar_actividad_a_ventas",
     "asignar_actividad_a_ventas_pendientes",
 ]
+
+
+def obtener_resumen_ventas_por_agrupacion(
+    empresa_id: int = 1,
+    conn: Optional[sqlite3.Connection] = None,
+) -> pd.DataFrame:
+    """
+    Devuelve un resumen reportable de ventas por agrupación interna/comercial.
+
+    Regla funcional:
+    - La agrupación la define el usuario por empresa.
+    - Sirve para análisis y reportes de ventas/IVA.
+    - No define cuenta contable ni condiciona el asiento.
+    """
+    conexion, cerrar = _conexion(conn)
+    try:
+        asegurar_estructura_ventas_actividades(conexion)
+
+        if not _tabla_existe(conexion, TABLA_VENTAS):
+            return pd.DataFrame(
+                columns=[
+                    "agrupacion_codigo",
+                    "agrupacion_nombre",
+                    "actividad_venta_codigo",
+                    "actividad_venta_nombre",
+                    "cantidad",
+                    "cantidad_comprobantes",
+                    "neto",
+                    "iva",
+                    "total",
+                ]
+            )
+
+        columnas = _columnas(conexion, TABLA_VENTAS)
+
+        campo_codigo = "actividad_venta_codigo" if "actividad_venta_codigo" in columnas else "''"
+        campo_nombre = "actividad_venta_nombre" if "actividad_venta_nombre" in columnas else "''"
+
+        sql = f"""
+            SELECT
+                COALESCE(NULLIF(TRIM({campo_codigo}), ''), 'SIN_AGRUPACION') AS agrupacion_codigo,
+                COALESCE(NULLIF(TRIM({campo_nombre}), ''), 'Sin agrupación') AS agrupacion_nombre,
+                COUNT(*) AS cantidad,
+                ROUND(COALESCE(SUM(CAST(COALESCE(neto, 0) AS REAL)), 0), 2) AS neto,
+                ROUND(COALESCE(SUM(CAST(COALESCE(iva, 0) AS REAL)), 0), 2) AS iva,
+                ROUND(COALESCE(SUM(CAST(COALESCE(total, 0) AS REAL)), 0), 2) AS total
+            FROM {TABLA_VENTAS}
+            WHERE COALESCE(empresa_id, 1) = ?
+            GROUP BY
+                COALESCE(NULLIF(TRIM({campo_codigo}), ''), 'SIN_AGRUPACION'),
+                COALESCE(NULLIF(TRIM({campo_nombre}), ''), 'Sin agrupación')
+            ORDER BY agrupacion_nombre
+        """
+
+        df = pd.read_sql_query(sql, conexion, params=(int(empresa_id),))
+
+        if df.empty:
+            return df
+
+        df["cantidad_comprobantes"] = df["cantidad"]
+        df["actividad_venta_codigo"] = df["agrupacion_codigo"]
+        df["actividad_venta_nombre"] = df["agrupacion_nombre"]
+
+        columnas_finales = [
+            "agrupacion_codigo",
+            "agrupacion_nombre",
+            "actividad_venta_codigo",
+            "actividad_venta_nombre",
+            "cantidad",
+            "cantidad_comprobantes",
+            "neto",
+            "iva",
+            "total",
+        ]
+
+        return df[columnas_finales]
+    finally:
+        if cerrar:
+            conexion.close()
 
